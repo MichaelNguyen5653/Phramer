@@ -182,6 +182,15 @@ void configureApp(bool gui, QTranslator& translator, QTranslator& qtTranslator)
 #else
         QApplication::setStyle(new StyleOverride);
 #endif
+        // Application-wide, so every window, dialog and task-switcher entry
+        // inherits it instead of each one setting its own.
+        //
+        // This must run after the QApplication exists. appIcon() decodes
+        // PNGs, and constructing a QPixmap with no QGuiApplication is fatal
+        // in Qt - it aborts with 0xC0000409 before main() gets any further.
+        // It lives here rather than in main() so that it is reapplied after
+        // reinitializeAsQApplication() replaces the application object.
+        QApplication::setWindowIcon(GlobalValues::appIcon());
     }
 
     auto app = QCoreApplication::instance();
@@ -252,10 +261,6 @@ int main(int argc, char* argv[])
 
     // Must run before anything constructs a ConfigHandler
     migrateLegacyConfig();
-
-    // Application-wide, so every window, dialog and task-switcher entry
-    // inherits it instead of each one having to set its own
-    QApplication::setWindowIcon(GlobalValues::appIcon());
 
     // no arguments, just launch Phramer
     if (argc == 1) {

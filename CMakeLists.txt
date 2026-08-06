@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 # cmake_policy(SET CMP0076 OLD)
 
-set(FLAMESHOT_VERSION 14.1.3)
+set(FLAMESHOT_VERSION 14.1.4)
 
 # A release build passes the version derived from the git tag, so the tag
 # stays the single source of truth. Keep the plain set() above on one line
