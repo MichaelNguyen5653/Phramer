@@ -10,9 +10,7 @@
 </div>
 
 Phramer is a Windows screenshot and annotation tool, forked from
-[Flameshot](https://github.com/flameshot-org/flameshot). It was previously
-released as Flameshot v2; installs of that version update to Phramer
-automatically.
+[Flameshot](https://github.com/flameshot-org/flameshot).
 
 ## Features
 

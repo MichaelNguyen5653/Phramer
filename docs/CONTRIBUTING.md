@@ -2,14 +2,8 @@
 
 Contributions are welcome! Here's how you can help:
 
-- [Translating](#translations)
 - [Contributing code](#code)
 - [Reporting issues](#issues)
-- [Donating](#donations)
-
-## Translations
-
-See [translation instructions](https://github.com/flameshot-org/translation-instruction).
 
 ## Code
 
@@ -20,6 +14,8 @@ For small fixes or incremental improvements simply fork the repo and follow the 
     - Implement your feature.
     - Check your code works as expected.
     - Run the code formatter: `clang-format -i $(git ls-files "*.cpp" "*.h")`
+      Use **clang-format 11**; CI pins that version and newer ones format
+      differently.
 
 3. Commit your changes to a new branch (not `master`, one change per branch) and push it:
     - Commit messages should:
@@ -34,14 +30,13 @@ For small fixes or incremental improvements simply fork the repo and follow the 
 ## Issues
 
 1. Do a quick search on GitHub to check if the issue has already been reported.
-2. [Open an issue](https://github.com/flameshot-org/flameshot/issues/new) and describe the issue you are having - you could include:
+2. [Open an issue](https://github.com/MichaelNguyen5653/Phramer/issues/new/choose) and describe the issue you are having - you could include:
      - Screenshots
      - Ways to reproduce the issue.
-     - Your Flameshot version.
-     - Your platform (e.g. Windows 10 or Ubuntu 15.04 x64)
+     - Your Phramer version.
+     - Your Windows version, and your monitor setup including display scaling.
 
 After reporting you should aim to answer questions or clarifications as this helps pinpoint the cause of the issue.
 
-## Donations
-
-Please refer to [the donation page on website]() for details, but as a brief recap, Flameshot does **not** accept financial donations, but we encourage you to put code bounty on the platform of your choice on the issues you like to be addressed.
+Security vulnerabilities should not be reported as issues. See
+[SECURITY.md](../SECURITY.md) for how to report those privately.
