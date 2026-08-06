@@ -5,7 +5,7 @@
       <br />
       Phramer
     </h1>
-    <h4>Powerful yet simple to use screenshot software.</h4>
+    <h4>Lightweight yet powerfull screenshot software.</h4>
   </p>
 </div>
 
