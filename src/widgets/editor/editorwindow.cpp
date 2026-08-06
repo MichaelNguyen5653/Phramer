@@ -54,13 +54,17 @@ namespace {
 const QVector<CaptureTool::Type>& editorToolTypes()
 {
     static const QVector<CaptureTool::Type> types = {
-        CaptureTool::TYPE_PENCIL,   CaptureTool::TYPE_DRAWER,
+        CaptureTool::TYPE_PENCIL,
+        CaptureTool::TYPE_DRAWER,
         CaptureTool::TYPE_ARROW,
         // One button for every closed shape; the separate rectangle, circle
         // and hollow-square tools are reachable through its picker
-        CaptureTool::TYPE_SHAPE,    CaptureTool::TYPE_MARKER,
-        CaptureTool::TYPE_TEXT,     CaptureTool::TYPE_PIXELATE,
-        CaptureTool::TYPE_INVERT,   CaptureTool::TYPE_CIRCLECOUNT,
+        CaptureTool::TYPE_SHAPE,
+        CaptureTool::TYPE_MARKER,
+        CaptureTool::TYPE_TEXT,
+        CaptureTool::TYPE_PIXELATE,
+        CaptureTool::TYPE_INVERT,
+        CaptureTool::TYPE_CIRCLECOUNT,
     };
     return types;
 }
@@ -541,7 +545,8 @@ void EditorWindow::saveAll()
 
     QString start = ConfigHandler().savePath();
     if (start.isEmpty() || !QDir(start).exists()) {
-        start = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        start =
+          QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
     }
     const QString parent = QFileDialog::getExistingDirectory(
       this,
@@ -581,13 +586,12 @@ void EditorWindow::saveAll()
     }
 
     if (failures > 0) {
-        QMessageBox::warning(
-          this,
-          tr("Save All"),
-          tr("%1 of %2 images could not be saved to %3.")
-            .arg(failures)
-            .arg(m_canvases.size())
-            .arg(QDir::toNativeSeparators(folder)));
+        QMessageBox::warning(this,
+                             tr("Save All"),
+                             tr("%1 of %2 images could not be saved to %3.")
+                               .arg(failures)
+                               .arg(m_canvases.size())
+                               .arg(QDir::toNativeSeparators(folder)));
     } else {
         AbstractLogger::info().attachNotificationPath(folder)
           << tr("%1 images saved to %2")
@@ -601,8 +605,8 @@ QString EditorWindow::createSessionFolder(const QString& parent)
     QDir base(parent);
     // Sortable and unambiguous: two sessions saved a minute apart never
     // collide, and the folders list in the order they were captured
-    const QString stamp =
-      QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH-mm-ss"));
+    const QString stamp = QDateTime::currentDateTime().toString(
+      QStringLiteral("yyyy-MM-dd HH-mm-ss"));
     QString name = tr("Phramer %1").arg(stamp);
 
     // Same-second collisions are possible, and mkdir on an existing folder

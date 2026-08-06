@@ -30,11 +30,8 @@ void CallFlameshot(const std::wstring args, bool wait)
     // note: binary path placed within quotes in case of spaces in path
     int cmdSize = 32 + sizeof(directory) + sizeof(args);
     wchar_t* cmd = (wchar_t*)malloc(sizeof(wchar_t) * cmdSize);
-    swprintf(cmd,
-             cmdSize,
-             L"\"%s\\phramer.exe\" %s",
-             directory.c_str(),
-             args.c_str());
+    swprintf(
+      cmd, cmdSize, L"\"%s\\phramer.exe\" %s", directory.c_str(), args.c_str());
     // call subprocess
     FILE* stream = _wpopen(cmd, L"r");
     free(cmd);

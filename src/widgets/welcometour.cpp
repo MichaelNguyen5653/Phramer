@@ -85,17 +85,16 @@ void WelcomeTour::buildSlides()
       QStringLiteral(":img/preview/Welcome_message_editor_feature.png"),
       {}));
 
-    m_slides.append(
-      makeSlide(tr("One window, every capture"),
-                tr("The editor holds a whole session of images at once."),
-                QStringLiteral(
-                  ":img/preview/Welcome_message_editor_walkthrough.png"),
-                { tr("The full suite of annotation tools, plus Copy, Save "
-                     "and Save All to export a whole session at once"),
-                  tr("Enhanced OCR — extract text from any image in the "
-                     "session, with layout preserved"),
-                  tr("Persistent preview — a filmstrip of every capture, so "
-                     "you can jump between them and keep editing") }));
+    m_slides.append(makeSlide(
+      tr("One window, every capture"),
+      tr("The editor holds a whole session of images at once."),
+      QStringLiteral(":img/preview/Welcome_message_editor_walkthrough.png"),
+      { tr("The full suite of annotation tools, plus Copy, Save "
+           "and Save All to export a whole session at once"),
+        tr("Enhanced OCR — extract text from any image in the "
+           "session, with layout preserved"),
+        tr("Persistent preview — a filmstrip of every capture, so "
+           "you can jump between them and keep editing") }));
 
     m_slides.append(
       makeSlide(tr("Also in this release"),

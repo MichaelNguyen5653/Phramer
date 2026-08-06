@@ -21,7 +21,7 @@ on:
 
 
 env:
-  PRODUCT: flameshot
+  PRODUCT: phramer
 
 jobs:
   windows-pack:
@@ -74,7 +74,7 @@ jobs:
         run: |
           Remove-Item "$env:LOCALAPPDATA\Microsoft\WindowsApps\python*.exe" -Force -ErrorAction SilentlyContinue
 
-      - name: Set env & Print flameshot version
+      - name: Set env & Print phramer version
         shell: bash
         run: |
           last_committed_tag=$(git tag -l --sort=-v:refname | head -1)
@@ -160,7 +160,7 @@ jobs:
         if:  matrix.type == 'portable'
         shell: pwsh
         run: |
-          Move-Item -Path $env:GITHUB_WORKSPACE/build/Package/flameshot-*-${{ matrix.config.pak_arch }}.zip -Destination $env:GITHUB_WORKSPACE/build/Package/portable/flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip
+          Move-Item -Path $env:GITHUB_WORKSPACE/build/Package/phramer-*-${{ matrix.config.pak_arch }}.zip -Destination $env:GITHUB_WORKSPACE/build/Package/portable/phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip
 
       - name: SHA256Sum of Windows installer
         if:  matrix.type == 'installer'
@@ -173,8 +173,8 @@ jobs:
         if:  matrix.type == 'portable'
         shell: bash
         run: |
-          sha256sum $GITHUB_WORKSPACE/build/Package/portable/flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip
-          sha256sum $GITHUB_WORKSPACE/build/Package/portable/flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip > $GITHUB_WORKSPACE/build/Package/portable/flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip.sha256sum
+          sha256sum $GITHUB_WORKSPACE/build/Package/portable/phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip
+          sha256sum $GITHUB_WORKSPACE/build/Package/portable/phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip > $GITHUB_WORKSPACE/build/Package/portable/phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip.sha256sum
 
       - name: Artifact Upload
         if:  matrix.type == 'installer'
@@ -192,6 +192,6 @@ jobs:
         with:
           name: ${{ env.PRODUCT }}-${{ env.VER_INFO }}-artifact-win-${{ matrix.config.arch }}-${{ matrix.type }}
           path: |
-            ${{ github.workspace }}/build/Package/portable/flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip
-            ${{ github.workspace }}/build/Package/portable/flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip.sha256sum
+            ${{ github.workspace }}/build/Package/portable/phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip
+            ${{ github.workspace }}/build/Package/portable/phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip.sha256sum
           overwrite: true

@@ -824,10 +824,9 @@ void CaptureWidget::paintEvent(QPaintEvent* paintEvent)
     drawInactiveRegion(&painter);
 
     if (!isActiveWindow()) {
-        drawErrorMessage(
-          tr("Phramer has lost focus. Keyboard shortcuts won't "
-             "work until you click somewhere."),
-          &painter);
+        drawErrorMessage(tr("Phramer has lost focus. Keyboard shortcuts won't "
+                            "work until you click somewhere."),
+                         &painter);
     } else if (m_configError) {
         drawErrorMessage(ConfigHandler().errorMessage(), &painter);
     } else if (m_configErrorResolved) {

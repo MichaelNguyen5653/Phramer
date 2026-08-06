@@ -264,8 +264,7 @@ void FlameshotDaemon::sendTrayNotification(const QString& text,
                                            const int timeout)
 {
     if (m_trayIcon) {
-        m_trayIcon->showMessage(
-          title, text, GlobalValues::appIcon(), timeout);
+        m_trayIcon->showMessage(title, text, GlobalValues::appIcon(), timeout);
     }
 }
 
@@ -463,8 +462,7 @@ void FlameshotDaemon::downloadUpdateInstaller()
 
               const QString msiPath =
                 QStandardPaths::writableLocation(QStandardPaths::TempLocation) +
-                QStringLiteral("/Phramer-%1-win64.msi")
-                  .arg(m_appLatestVersion);
+                QStringLiteral("/Phramer-%1-win64.msi").arg(m_appLatestVersion);
               QFile msiFile(msiPath);
               if (!msiFile.open(QIODevice::WriteOnly) ||
                   msiFile.write(installer) != installer.size()) {
@@ -690,8 +688,7 @@ void FlameshotDaemon::handleReplyCheckUpdates(QNetworkReply* reply)
 #endif
             }
         } else if (m_showManualCheckAppUpdateStatus) {
-            sendTrayNotification(tr("You have the latest version"),
-                                 "Phramer");
+            sendTrayNotification(tr("You have the latest version"), "Phramer");
         }
     } else {
         qWarning() << "Failed to get information about the latest version. "

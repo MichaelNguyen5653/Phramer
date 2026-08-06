@@ -193,19 +193,27 @@ int CaptureToolButton::getPriorityByButton(CaptureTool::Type b)
 }
 
 QList<CaptureTool::Type> CaptureToolButton::iterableButtonTypes = {
-    CaptureTool::TYPE_PENCIL,        CaptureTool::TYPE_DRAWER,
-    CaptureTool::TYPE_ARROW,         CaptureTool::TYPE_SHAPE,
+    CaptureTool::TYPE_PENCIL,
+    CaptureTool::TYPE_DRAWER,
+    CaptureTool::TYPE_ARROW,
+    CaptureTool::TYPE_SHAPE,
     // Superseded by TYPE_SHAPE, which offers every one of their variants.
     // They stay iterable so their shortcuts keep working and so they can be
     // switched back on from Interface settings; only the default toolbar
     // drops them, in ButtonList::fallback.
     CaptureTool::TYPE_SELECTION,
-    CaptureTool::TYPE_RECTANGLE,     CaptureTool::TYPE_CIRCLE,
-    CaptureTool::TYPE_MARKER,        CaptureTool::TYPE_TEXT,
-    CaptureTool::TYPE_CIRCLECOUNT,   CaptureTool::TYPE_PIXELATE,
-    CaptureTool::TYPE_INVERT,        CaptureTool::TYPE_MOVESELECTION,
-    CaptureTool::TYPE_UNDO,          CaptureTool::TYPE_REDO,
-    CaptureTool::TYPE_COPY,          CaptureTool::TYPE_SAVE,
+    CaptureTool::TYPE_RECTANGLE,
+    CaptureTool::TYPE_CIRCLE,
+    CaptureTool::TYPE_MARKER,
+    CaptureTool::TYPE_TEXT,
+    CaptureTool::TYPE_CIRCLECOUNT,
+    CaptureTool::TYPE_PIXELATE,
+    CaptureTool::TYPE_INVERT,
+    CaptureTool::TYPE_MOVESELECTION,
+    CaptureTool::TYPE_UNDO,
+    CaptureTool::TYPE_REDO,
+    CaptureTool::TYPE_COPY,
+    CaptureTool::TYPE_SAVE,
     CaptureTool::TYPE_EXIT,
 #ifdef ENABLE_IMGUR
     CaptureTool::TYPE_IMAGEUPLOADER,
@@ -216,7 +224,9 @@ QList<CaptureTool::Type> CaptureToolButton::iterableButtonTypes = {
 #if defined(Q_OS_WIN)
     CaptureTool::TYPE_OCR,
 #endif
-    CaptureTool::TYPE_PIN,           CaptureTool::TYPE_SIZEINCREASE,
-    CaptureTool::TYPE_SIZEDECREASE,  CaptureTool::TYPE_ACCEPT,
+    CaptureTool::TYPE_PIN,
+    CaptureTool::TYPE_SIZEINCREASE,
+    CaptureTool::TYPE_SIZEDECREASE,
+    CaptureTool::TYPE_ACCEPT,
     CaptureTool::TYPE_OPEN_IN_EDITOR,
 };

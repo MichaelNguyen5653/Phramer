@@ -394,8 +394,7 @@ bool ShortcutsWidget::isMsScreenclipRegistered()
       "HKEY_LOCAL_MACHINE\\SOFTWARE\\RegisteredApplications",
       QSettings::NativeFormat);
     value = RegisteredApplications.value("Phramer", "").toString();
-    if (value.toLower() !=
-        QString("SOFTWARE\\Phramer\\Capabilities").toLower())
+    if (value.toLower() != QString("SOFTWARE\\Phramer\\Capabilities").toLower())
         return false;
 
     QSettings FlameshotShellCmd(

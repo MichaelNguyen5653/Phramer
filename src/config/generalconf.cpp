@@ -541,8 +541,8 @@ void GeneralConf::initAllowMultipleGuiInstances()
 {
     m_allowMultipleGuiInstances = new QCheckBox(
       tr("Allow multiple phramer GUI instances simultaneously"), this);
-    m_allowMultipleGuiInstances->setToolTip(tr(
-      "This allows you to take screenshots of Phramer itself for example"));
+    m_allowMultipleGuiInstances->setToolTip(
+      tr("This allows you to take screenshots of Phramer itself for example"));
     m_scrollAreaLayout->addWidget(m_allowMultipleGuiInstances);
     connect(m_allowMultipleGuiInstances,
             &QCheckBox::clicked,
@@ -579,8 +579,8 @@ void GeneralConf::initAutoCloseIdleDaemon()
 void GeneralConf::initAutostart()
 {
     m_autostart = new QCheckBox(tr("Launch in background at startup"), this);
-    m_autostart->setToolTip(tr(
-      "Launch Phramer daemon (background process) when computer is booted"));
+    m_autostart->setToolTip(
+      tr("Launch Phramer daemon (background process) when computer is booted"));
     m_scrollAreaLayout->addWidget(m_autostart);
 
     connect(

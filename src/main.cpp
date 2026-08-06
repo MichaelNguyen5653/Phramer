@@ -35,6 +35,7 @@
 #include <QNetworkProxyFactory>
 #include <QProcess>
 #include <QSharedMemory>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QTranslator>
 
@@ -138,12 +139,10 @@ void configureTranslation(QTranslator& translator, QTranslator& qtTranslator)
     if (!foundTranslation) {
         if (ConfigHandler().uiLanguage() == QStringLiteral("auto")) {
             QLocale l;
-            qWarning() << QStringLiteral(
-                            "No Phramer translation found for %1")
+            qWarning() << QStringLiteral("No Phramer translation found for %1")
                             .arg(l.uiLanguages().join(", "));
         } else {
-            qWarning() << QStringLiteral(
-                            "No Phramer translation found for %1")
+            qWarning() << QStringLiteral("No Phramer translation found for %1")
                             .arg(ConfigHandler().uiLanguage());
         }
     }

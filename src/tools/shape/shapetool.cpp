@@ -28,12 +28,18 @@ struct VariantButton
 };
 
 const VariantButton KindButtons[] = {
-    { static_cast<int>(ShapeTool::Kind::Square), "square-outline.svg", "Square" },
-    { static_cast<int>(ShapeTool::Kind::Circle), "circle-outline.svg", "Circle" },
+    { static_cast<int>(ShapeTool::Kind::Square),
+      "square-outline.svg",
+      "Square" },
+    { static_cast<int>(ShapeTool::Kind::Circle),
+      "circle-outline.svg",
+      "Circle" },
 };
 
 const VariantButton StyleButtons[] = {
-    { static_cast<int>(ShapeTool::Style::Hollow), "square-outline.svg", "Hollow" },
+    { static_cast<int>(ShapeTool::Style::Hollow),
+      "square-outline.svg",
+      "Hollow" },
     { static_cast<int>(ShapeTool::Style::Filled), "square.svg", "Filled" },
     { static_cast<int>(ShapeTool::Style::Highlight),
       "square-highlight.svg",
@@ -272,12 +278,12 @@ void ShapeTool::process(QPainter& painter, const QPixmap& pixmap)
             // Stroke the plain shape, never the inflated path: the outline is
             // the whole annotation here, so its position must be exactly
             // where the user dragged
-            painter.setPen(QPen(color(),
-                                size(),
-                                Qt::SolidLine,
-                                Qt::SquareCap,
-                                m_kind == Kind::Square ? Qt::MiterJoin
-                                                       : Qt::RoundJoin));
+            painter.setPen(
+              QPen(color(),
+                   size(),
+                   Qt::SolidLine,
+                   Qt::SquareCap,
+                   m_kind == Kind::Square ? Qt::MiterJoin : Qt::RoundJoin));
             painter.setBrush(Qt::NoBrush);
             if (m_kind == Kind::Square) {
                 painter.drawRect(area);

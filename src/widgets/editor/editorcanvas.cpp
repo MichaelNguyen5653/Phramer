@@ -545,7 +545,8 @@ void EditorCanvas::restoreCircleCountState()
     int largest = 0;
     for (int i = 0; i < m_objects.size(); ++i) {
         auto object = m_objects.at(i);
-        if (object.isNull() || object->type() != CaptureTool::TYPE_CIRCLECOUNT) {
+        if (object.isNull() ||
+            object->type() != CaptureTool::TYPE_CIRCLECOUNT) {
             continue;
         }
         largest = qMax(largest, object->count());
