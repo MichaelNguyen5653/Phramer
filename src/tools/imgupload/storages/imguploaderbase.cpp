@@ -36,7 +36,7 @@ ImgUploaderBase::ImgUploaderBase(const QPixmap& capture, QWidget* parent)
   , m_pixmap(capture)
 {
     setWindowTitle(tr("Upload image"));
-    setWindowIcon(QIcon(GlobalValues::iconPath()));
+    setWindowIcon(GlobalValues::appIcon());
 
     QRect position = frameGeometry();
     QScreen* screen = QGuiApplication::screenAt(QCursor::pos());

@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
+#include <QSpinBox>
 #include <cmath>
 
 namespace {
@@ -74,6 +75,18 @@ QWidget* RectangleTool::configurationWidget()
     layout->addWidget(label);
     layout->addWidget(modeSelector);
 
+    auto* borderLabel = new QLabel(tr("Border:"), widget);
+    auto* borderSpin = new QSpinBox(widget);
+    borderSpin->setRange(0, HighlightStyle::MaxOutlineWidth);
+    borderSpin->setValue(ConfigHandler().highlightOutlineWidth());
+    borderSpin->setToolTip(tr("Outline drawn around a highlight so it stays "
+                              "visible on dark captures. 0 removes it."));
+    connect(borderSpin, &QSpinBox::valueChanged, this, [](int value) {
+        ConfigHandler().setHighlightOutlineWidth(value);
+    });
+    layout->addWidget(borderLabel);
+    layout->addWidget(borderSpin);
+
     return widget;
 }
 
@@ -97,6 +110,7 @@ void RectangleTool::copyParams(const RectangleTool* from, RectangleTool* to)
 {
     AbstractTwoPointTool::copyParams(from, to);
     to->m_fillMode = from->m_fillMode;
+    to->m_outlineWidth = from->m_outlineWidth;
 }
 
 QPainterPath RectangleTool::roundedPath() const
@@ -113,20 +127,47 @@ QPainterPath RectangleTool::roundedPath() const
     return path;
 }
 
+QPainterPath RectangleTool::highlightPath() const
+{
+    if (size() != 0) {
+        return roundedPath();
+    }
+    // At size 0 the solid mode draws a plain rect, so the highlight has to
+    // cover exactly the same area
+    QPainterPath path;
+    path.addRect(QRect(points().first, points().second).normalized());
+    return path;
+}
+
 void RectangleTool::process(QPainter& painter, const QPixmap& pixmap)
 {
     Q_UNUSED(pixmap)
 
     if (m_fillMode == FillMode::Highlighter) {
-        // Filled only, never stroked: an outline would be composited over
-        // the fill it sits on and darken the border, which a marker stroke
-        // of a single colour never does
-        HighlightStyle::PainterState highlight(painter);
-        if (size() == 0) {
-            painter.fillRect(
-              QRect(points().first, points().second).normalized(), color());
-        } else {
-            painter.fillPath(roundedPath(), color());
+        const QPainterPath path = highlightPath();
+        {
+            // The fill is never stroked inside this scope: an outline drawn
+            // under multiply would composite over the fill it sits on and
+            // darken the border, which a marker stroke never does.
+            HighlightStyle::PainterState highlight(painter);
+            painter.fillPath(path, color());
+        }
+
+        // See HighlightStyle: multiply cannot lighten, so the fill alone is
+        // invisible on a dark capture. Drawn outside the highlight scope so
+        // it composites normally and does not darken its own border.
+        if (m_outlineWidth > 0) {
+            const QPen originalPen = painter.pen();
+            const QBrush originalBrush = painter.brush();
+            painter.setPen(QPen(color(),
+                                m_outlineWidth,
+                                Qt::SolidLine,
+                                Qt::SquareCap,
+                                Qt::RoundJoin));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPath(path);
+            painter.setPen(originalPen);
+            painter.setBrush(originalBrush);
         }
         return;
     }
@@ -147,6 +188,9 @@ void RectangleTool::process(QPainter& painter, const QPixmap& pixmap)
 
 void RectangleTool::drawStart(const CaptureContext& context)
 {
+    // Snapshotted here, not read while painting: a placed highlight keeps the
+    // border it was drawn with even if the setting changes afterwards
+    m_outlineWidth = ConfigHandler().highlightOutlineWidth();
     AbstractTwoPointTool::drawStart(context);
     onSizeChanged(context.toolSize);
 }

@@ -52,6 +52,7 @@ constexpr const char* visibleInDockProperty = "_visibleInDock";
 #include "utils/screenshotsaver.h"
 #include "widgets/capture/capturewidget.h"
 #include "widgets/capturelauncher.h"
+#include "widgets/editor/editorwindow.h"
 #include "widgets/infowindow.h"
 
 #ifdef ENABLE_IMGUR
@@ -131,6 +132,15 @@ CaptureWidget* Flameshot::gui(const CaptureRequest& req)
         request.initialSelection().isNull() &&
         ConfigHandler().saveLastRegion()) {
         request.setInitialSelection(getLastRegion());
+    }
+
+    // "Automatically open captures in Editor": the region is still selected
+    // on the overlay, but the action bar is skipped entirely. ACCEPT_ON_SELECT
+    // is what closes the overlay the moment the selection is settled.
+    if (request.captureMode() == CaptureRequest::GRAPHICAL_MODE &&
+        ConfigHandler().autoOpenInEditor()) {
+        request.addTask(CaptureRequest::OPEN_IN_EDITOR);
+        request.addTask(CaptureRequest::ACCEPT_ON_SELECT);
     }
 
 #if defined(Q_OS_MACOS)
@@ -488,6 +498,10 @@ void Flameshot::exportCapture(const QPixmap& capture,
 
     if (tasks & CR::COPY) {
         FlameshotDaemon::copyToClipboard(capture);
+    }
+
+    if (tasks & CR::OPEN_IN_EDITOR) {
+        EditorWindow::addCapture(capture);
     }
 
     if (tasks & CR::PIN) {

@@ -24,6 +24,10 @@ struct CaptureContext
     QString savePath;
     // Offset of the capture widget based on the system's screen (top-left)
     QPoint widgetOffset;
+    // The same corner in physical screen pixels. widgetOffset is in Qt's
+    // logical coordinates, which cannot be converted to physical screen
+    // space when monitors differ in DPI, so native APIs need this instead.
+    QPoint widgetScreenOffset;
     // Mouse position inside the widget
     QPoint mousePos;
     // Size of the active tool

@@ -16,9 +16,12 @@ target_sources(
           screengrabber.cpp
           monitorpreview.cpp
           confighandler.cpp
+          fuzzymatch.h
+          fuzzymatch.cpp
           systemnotification.cpp
           valuehandler.cpp
           screenshotsaver.cpp
+          screencoordinates.cpp
           globalvalues.cpp
           desktopfileparse.cpp
           desktopinfo.cpp

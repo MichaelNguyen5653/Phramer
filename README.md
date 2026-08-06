@@ -1,24 +1,31 @@
 <div align="center">
   <p>
     <h1>
-      <img src="data/img/app/org.flameshot.Flameshot.svg" alt="Flameshot" />
+      <img src="data/img/app/appicon-256.png" alt="Phramer" width="128" />
       <br />
-      Flameshot v2
+      Phramer
     </h1>
     <h4>Powerful yet simple to use screenshot software.</h4>
   </p>
 </div>
 
-This is a fork of [Flameshot](https://github.com/flameshot-org/flameshot).
+Phramer is a Windows screenshot and annotation tool, forked from
+[Flameshot](https://github.com/flameshot-org/flameshot). It was previously
+released as Flameshot v2; installs of that version update to Phramer
+automatically.
 
-## What's new in v2
+## Features
 
+- **Editor** — collect captures into one window, annotate each independently,
+  then copy, save, or export the whole session to a folder.
 - **OCR** — extract text from a selection, with automatic upscaling for small
   text so it reads accurately.
 - **Snip across screens** — one activation, then drag a selection on any
   monitor without picking one first.
+- **Shape tools** — hollow and filled squares and circles, plus highlight
+  shapes with adjustable border thickness.
 
-**Windows only for v2 at the moment.**
+**Windows only.**
 
 ## Preview
 
@@ -26,16 +33,17 @@ This is a fork of [Flameshot](https://github.com/flameshot-org/flameshot).
 
 ## Installation
 
-You need to be invited to this GitHub repository to download the app.
-
 1. Go to the **Releases** page of this repository.
 2. Download the **`.msi`** file from the latest release.
 3. Run it. Windows may warn that the publisher is unknown — choose
    **More info → Run anyway**.
 
+The installer is unsigned and installs for all users, so Windows asks for
+administrator approval. Later updates are offered in the app itself.
+
 ## Usage
 
-Flameshot runs in the system tray. Start a capture from the tray icon or press
+Phramer runs in the system tray. Start a capture from the tray icon or press
 <kbd>Win</kbd> + <kbd>Shift</kbd> + <kbd>X</kbd>, then drag to select an area.
 
 ## Keyboard shortcuts
@@ -78,4 +86,4 @@ These shortcuts are available while capturing:
 
 ## Coming soon
 
-- Editor
+- More to come.

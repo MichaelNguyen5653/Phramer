@@ -1,18 +1,23 @@
 <RCC>
     <qresource prefix="/">
-        <file>img/app/org.flameshot.Flameshot.svg</file>
-        <file>img/app/flameshot.svg</file>
-        <file>img/app/org.flameshot.Flameshot.png</file>
-        <file>img/app/flameshot.png</file>
-        <file>img/app/flameshot.mask.png</file>
-        <file>img/app/flameshot.mask.svg</file>
-        <file>img/app/flameshot.monochrome.png</file>
-        <file>img/app/flameshot.monochrome.svg</file>
+        <file>img/app/appicon-16.png</file>
+        <file>img/app/appicon-24.png</file>
+        <file>img/app/appicon-32.png</file>
+        <file>img/app/appicon-48.png</file>
+        <file>img/app/appicon-64.png</file>
+        <file>img/app/appicon-128.png</file>
+        <file>img/app/appicon-256.png</file>
+        <file>img/app/appicon-512.png</file>
+        <file>img/preview/Welcome_message_editor_feature.png</file>
+        <file>img/preview/Welcome_message_editor_walkthrough.png</file>
         <file>img/app/keyboard.svg</file>
         <file>img/material/black/accept.svg</file>
         <file>img/material/black/arrow-bottom-left.svg</file>
         <file>img/material/black/centeralign.svg</file>
         <file>img/material/black/circle-outline.svg</file>
+        <file>img/material/black/circle.svg</file>
+        <file>img/material/black/circle-highlight.svg</file>
+        <file>img/material/black/square-highlight.svg</file>
         <file>img/material/black/close.svg</file>
         <file>img/material/black/cloud-upload.svg</file>
         <file>img/material/black/colorize.svg</file>
@@ -35,6 +40,7 @@
         <file>img/material/black/mouse.svg</file>
         <file>img/material/black/name_edition.svg</file>
         <file>img/material/black/ocr.svg</file>
+        <file>img/material/black/open-in-editor.svg</file>
         <file>img/material/black/open_with.svg</file>
         <file>img/material/black/pencil.svg</file>
         <file>img/material/black/pin.svg</file>
@@ -56,6 +62,9 @@
         <file>img/material/white/arrow-bottom-left.svg</file>
         <file>img/material/white/centeralign.svg</file>
         <file>img/material/white/circle-outline.svg</file>
+        <file>img/material/white/circle.svg</file>
+        <file>img/material/white/circle-highlight.svg</file>
+        <file>img/material/white/square-highlight.svg</file>
         <file>img/material/white/circlecount-outline.svg</file>
         <file>img/material/white/close.svg</file>
         <file>img/material/white/cloud-upload.svg</file>
@@ -81,6 +90,7 @@
         <file>img/material/white/mouse.svg</file>
         <file>img/material/white/name_edition.svg</file>
         <file>img/material/white/ocr.svg</file>
+        <file>img/material/white/open-in-editor.svg</file>
         <file>img/material/white/open_with.svg</file>
         <file>img/material/white/pencil.svg</file>
         <file>img/material/white/pin.svg</file>

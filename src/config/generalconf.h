@@ -4,10 +4,12 @@
 #pragma once
 
 #include <QScrollArea>
+#include <QVector>
 #include <QWidget>
 
 class QVBoxLayout;
 class QCheckBox;
+class QLayout;
 class QPushButton;
 class QLabel;
 class QLineEdit;
@@ -61,6 +63,7 @@ private slots:
     void setJpegQuality(int v);
     void setReverseArrow(bool checked);
     void setInsecurePixelate(bool checked);
+    void applySearchFilter(const QString& query);
 #if !defined(Q_OS_MACOS)
     void captureRegionModeChanged(int index);
 #endif
@@ -76,6 +79,10 @@ private:
 
     void initAllowMultipleGuiInstances();
     void initAntialiasingPinZoom();
+    void initAutoOpenInEditor();
+    void initSearchBox();
+    // Snapshot of every filterable row, taken once the page is fully built
+    void buildSearchIndex();
     void initAutoCloseIdleDaemon();
     void initAutostart();
 #if !defined(DISABLE_UPDATE_CHECKER)
@@ -123,8 +130,19 @@ private:
 
     void _updateComponents(bool allowEmptySavePath);
 
+    // One filterable entry: either a widget on the page or a row of widgets
+    // sharing a layout. Only one of the two is ever set.
+    struct SearchRow
+    {
+        QString text;
+        QWidget* widget;
+        QLayout* layout;
+    };
+
     // class members
     QVBoxLayout* m_layout;
+    QLineEdit* m_searchBox;
+    QVector<SearchRow> m_searchRows;
     QVBoxLayout* m_scrollAreaLayout;
     QScrollArea* m_scrollArea;
     QCheckBox* m_sysNotifications;
@@ -136,6 +154,7 @@ private:
     QCheckBox* m_checkForUpdates;
 #endif
     QCheckBox* m_allowMultipleGuiInstances;
+    QCheckBox* m_autoOpenInEditor;
     QCheckBox* m_autoCloseIdleDaemon;
     QCheckBox* m_autostart;
     QCheckBox* m_showStartupLaunchMessage;

@@ -77,6 +77,10 @@ endif ()
 
 add_executable(Flameshot::flameshot ALIAS flameshot)
 
+# The target keeps its historical name so every target_sources() call below
+# and in the subdirectories stays valid; the shipped binary is phramer.exe.
+set_target_properties(flameshot PROPERTIES OUTPUT_NAME "${APP_BINARY_NAME}")
+
 if(FLAMESHOT_ICON)
   target_compile_definitions(flameshot PUBLIC FLAMESHOT_ICON="${FLAMESHOT_ICON}")
 endif()
@@ -87,7 +91,7 @@ if (WIN32)
         flameshot-cli
         PRIVATE
         windows-cli.cpp)
-    set_target_properties(flameshot-cli PROPERTIES OUTPUT_NAME "flameshot-cli")
+    set_target_properties(flameshot-cli PROPERTIES OUTPUT_NAME "${APP_BINARY_NAME}-cli")
     target_link_options(flameshot-cli PRIVATE /SUBSYSTEM:CONSOLE)
     set_property(TARGET flameshot PROPERTY WIN32_EXECUTABLE true)
     # Getting error D8016 - /utf-8 automatically set by current cmake/msvc ?
@@ -170,7 +174,7 @@ target_sources(
         flameshot
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../data/graphics.qrc
-        ${CMAKE_CURRENT_SOURCE_DIR}/../data/flameshot.rc # windows binary icon resource file
+        ${CMAKE_CURRENT_SOURCE_DIR}/../data/phramer.rc # windows binary icon resource file
         ${QM_FILES}
         main.cpp)
 
@@ -218,11 +222,11 @@ endif()
 if (APPLE)
     set_target_properties(flameshot PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_BUNDLE_NAME "Flameshot"
+        MACOSX_BUNDLE_BUNDLE_NAME "Phramer"
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
-        MACOSX_BUNDLE_IDENTIFIER "org.flameshot.Flameshot"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "org.flameshot.Flameshot" 
+        MACOSX_BUNDLE_IDENTIFIER "com.phramer.Phramer"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.phramer.Phramer" 
     ) 
     set_property(TARGET flameshot PROPERTY
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in

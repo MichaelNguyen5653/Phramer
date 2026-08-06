@@ -11,6 +11,7 @@
 
 class SetShortcutDialog;
 class QCheckBox;
+class QLineEdit;
 class QTableWidget;
 class QVBoxLayout;
 
@@ -22,6 +23,7 @@ public:
 
 private:
     void initInfoTable();
+    void initSearchBox();
 #if (defined(Q_OS_MACOS))
     const QString& nativeOSHotKeyText(const QString& text);
 #endif
@@ -29,6 +31,7 @@ private:
 private slots:
     void populateInfoTable();
     void onShortcutCellClicked(int, int);
+    void applySearchFilter(const QString& query);
 
 private:
 #if (defined(Q_OS_MACOS))
@@ -36,6 +39,7 @@ private:
 #endif
     ConfigHandler m_config;
     QTableWidget* m_table;
+    QLineEdit* m_searchBox;
     QVBoxLayout* m_layout;
     QList<QStringList> m_shortcuts;
 

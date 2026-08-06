@@ -337,7 +337,7 @@ bool saveToFilesystemGUI(const QPixmap& capture)
 
             QMessageBox saveErrBox(
               QMessageBox::Warning, QObject::tr("Save Error"), msg);
-            saveErrBox.setWindowIcon(QIcon(GlobalValues::iconPath()));
+            saveErrBox.setWindowIcon(GlobalValues::appIcon());
             saveErrBox.exec();
         }
     }

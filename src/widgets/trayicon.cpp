@@ -27,7 +27,7 @@ TrayIcon::TrayIcon(QObject* parent)
     initMenu();
     initScreenMenu();
 
-    setToolTip(QStringLiteral("Flameshot"));
+    setToolTip(QStringLiteral("Phramer"));
 #if defined(Q_OS_MACOS)
     // Because of the following issues on MacOS "Catalina":
     // https://bugreports.qt.io/browse/QTBUG-86393
@@ -40,7 +40,7 @@ TrayIcon::TrayIcon(QObject* parent)
     setContextMenu(m_menu);
 #endif
     QIcon icon =
-      QIcon::fromTheme("flameshot-tray", QIcon(GlobalValues::trayIconPath()));
+      QIcon::fromTheme("phramer-tray", QIcon(GlobalValues::trayIconPath()));
 
 #if defined(Q_OS_MACOS)
     if (currentMacOsVersion >= QOperatingSystemVersion::MacOSBigSur) {
@@ -85,7 +85,7 @@ TrayIcon::TrayIcon(QObject* parent)
 
     if (ConfigHandler().showStartupLaunchMessage()) {
         showMessage(
-          "Flameshot",
+          "Phramer",
           QObject::tr(
             "Hello, I'm here! Click icon in the tray to take a screenshot or "
             "click with a right button to see more options."),
@@ -128,14 +128,14 @@ void TrayIcon::showUpdateBadge(const QString& version)
     painter.drawEllipse(dot);
     painter.end();
     setIcon(QIcon(pix));
-    setToolTip(QStringLiteral("Flameshot v2 — ") +
+    setToolTip(QStringLiteral("Phramer — ") +
                tr("update available (%1)").arg(version));
 }
 
 void TrayIcon::clearUpdateBadge()
 {
     setIcon(m_baseIcon);
-    setToolTip(QStringLiteral("Flameshot"));
+    setToolTip(QStringLiteral("Phramer"));
     m_appUpdates->setText(tr("Check for updates"));
 }
 #endif

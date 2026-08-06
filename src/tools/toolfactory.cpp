@@ -7,6 +7,7 @@
 #include "tools/circle/circletool.h"
 #include "tools/circlecount/circlecounttool.h"
 #include "tools/copy/copytool.h"
+#include "tools/editor/openineditortool.h"
 #include "tools/exit/exittool.h"
 #ifdef ENABLE_IMGUR
 #include "tools/imgupload/imguploadertool.h"
@@ -26,6 +27,7 @@
 #include "tools/redo/redotool.h"
 #include "tools/save/savetool.h"
 #include "tools/selection/selectiontool.h"
+#include "tools/shape/shapetool.h"
 #include "tools/sizedecrease/sizedecreasetool.h"
 #include "tools/sizeincrease/sizeincreasetool.h"
 #include "tools/text/texttool.h"
@@ -54,6 +56,8 @@ CaptureTool* ToolFactory::CreateTool(CaptureTool::Type t, QObject* parent)
         if_TYPE_return_TOOL(TYPE_COPY, CopyTool);
         if_TYPE_return_TOOL(TYPE_SAVE, SaveTool);
         if_TYPE_return_TOOL(TYPE_EXIT, ExitTool);
+        if_TYPE_return_TOOL(TYPE_OPEN_IN_EDITOR, OpenInEditorTool);
+        if_TYPE_return_TOOL(TYPE_SHAPE, ShapeTool);
 #ifdef ENABLE_IMGUR
         if_TYPE_return_TOOL(TYPE_IMAGEUPLOADER, ImgUploaderTool);
 #endif

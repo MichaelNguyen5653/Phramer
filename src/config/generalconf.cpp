@@ -3,6 +3,7 @@
 
 #include "generalconf.h"
 #include "utils/confighandler.h"
+#include "utils/fuzzymatch.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -14,6 +15,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSizePolicy>
 #include <QSpinBox>
@@ -29,13 +31,24 @@ GeneralConf::GeneralConf(QWidget* parent)
     m_layout = new QVBoxLayout(this);
     m_layout->setAlignment(Qt::AlignTop);
 
+    // Above the scroll area so it stays put while the results scroll
+    initSearchBox();
+
     // Scroll area adapts the size of the content on small screens.
     // It must be initialized before the checkboxes.
     initScrollArea();
 
+    // The first five are pinned to the top of the page by request; the rest
+    // follow in the order they have always been in.
     initAutostart();
-    initAutoCloseIdleDaemon();
+    initAutoOpenInEditor();
     initShowTrayIcon();
+#if !defined(Q_OS_MACOS)
+    initCaptureRegionMode();
+#endif
+    initShowHelp();
+
+    initAutoCloseIdleDaemon();
     initShowDesktopNotification();
     initShowAbortNotification();
 #if !defined(DISABLE_UPDATE_CHECKER)
@@ -45,7 +58,6 @@ GeneralConf::GeneralConf(QWidget* parent)
     initShowQuitPrompt();
     initAllowMultipleGuiInstances();
     initSaveLastRegion();
-    initShowHelp();
     initShowSidePanelButton();
     initUseJpgForClipboard();
     initCopyOnDoubleClick();
@@ -54,9 +66,6 @@ GeneralConf::GeneralConf(QWidget* parent)
     initAntialiasingPinZoom();
     initUndoLimit();
     initInsecurePixelate();
-#if !defined(Q_OS_MACOS)
-    initCaptureRegionMode();
-#endif
 #if defined(Q_OS_WIN)
     initShowWelcomeMessage();
 #endif
@@ -84,6 +93,8 @@ GeneralConf::GeneralConf(QWidget* parent)
     initReverseArrow();
     // this has to be at the end
     initConfigButtons();
+    // Every row must exist before the index can be built from the layouts
+    buildSearchIndex();
     updateComponents();
 }
 
@@ -112,6 +123,7 @@ void GeneralConf::_updateComponents(bool allowEmptySavePath)
     m_checkForUpdates->setChecked(config.checkForUpdates());
 #endif
     m_allowMultipleGuiInstances->setChecked(config.allowMultipleGuiInstances());
+    m_autoOpenInEditor->setChecked(config.autoOpenInEditor());
     m_showMagnifier->setChecked(config.showMagnifier());
     m_squareMagnifier->setChecked(config.squareMagnifier());
     m_saveLastRegion->setChecked(config.saveLastRegion());
@@ -257,6 +269,120 @@ void GeneralConf::resetConfiguration()
           QStandardPaths::writableLocation(QStandardPaths::PicturesLocation));
         ConfigHandler().setDefaultSettings();
         _updateComponents(true);
+    }
+}
+
+namespace {
+
+// Everything a user might reasonably type to find this row: its own label
+// plus the labels and tooltips of anything nested inside it
+QString searchableText(QWidget* widget)
+{
+    if (!widget) {
+        return {};
+    }
+    QStringList parts;
+    const auto collect = [&parts](QWidget* w) {
+        if (auto* button = qobject_cast<QAbstractButton*>(w)) {
+            parts << button->text();
+        } else if (auto* label = qobject_cast<QLabel*>(w)) {
+            parts << label->text();
+        } else if (auto* box = qobject_cast<QGroupBox*>(w)) {
+            parts << box->title();
+        }
+        if (!w->toolTip().isEmpty()) {
+            parts << w->toolTip();
+        }
+    };
+    collect(widget);
+    for (QWidget* child : widget->findChildren<QWidget*>()) {
+        collect(child);
+    }
+    return parts.join(QLatin1Char(' '));
+}
+
+QString searchableText(QLayout* layout)
+{
+    if (!layout) {
+        return {};
+    }
+    QStringList parts;
+    for (int i = 0; i < layout->count(); ++i) {
+        QLayoutItem* item = layout->itemAt(i);
+        if (QWidget* widget = item->widget()) {
+            parts << searchableText(widget);
+        } else if (QLayout* nested = item->layout()) {
+            parts << searchableText(nested);
+        }
+    }
+    return parts.join(QLatin1Char(' '));
+}
+
+void setRowVisible(QLayout* layout, bool visible)
+{
+    for (int i = 0; i < layout->count(); ++i) {
+        QLayoutItem* item = layout->itemAt(i);
+        if (QWidget* widget = item->widget()) {
+            widget->setVisible(visible);
+        } else if (QLayout* nested = item->layout()) {
+            setRowVisible(nested, visible);
+        }
+    }
+}
+
+} // namespace
+
+void GeneralConf::initSearchBox()
+{
+    m_searchBox = new QLineEdit(this);
+    m_searchBox->setPlaceholderText(tr("Search settings"));
+    m_searchBox->setClearButtonEnabled(true);
+    m_searchBox->setToolTip(
+      tr("Filter the settings below. Partial words and typos are tolerated; "
+         "clear the box to show everything again."));
+    m_layout->addWidget(m_searchBox);
+
+    connect(m_searchBox,
+            &QLineEdit::textChanged,
+            this,
+            &GeneralConf::applySearchFilter);
+}
+
+void GeneralConf::buildSearchIndex()
+{
+    m_searchRows.clear();
+
+    for (int i = 0; i < m_scrollAreaLayout->count(); ++i) {
+        QLayoutItem* item = m_scrollAreaLayout->itemAt(i);
+        if (QWidget* widget = item->widget()) {
+            m_searchRows.append({ searchableText(widget), widget, nullptr });
+        } else if (QLayout* layout = item->layout()) {
+            m_searchRows.append({ searchableText(layout), nullptr, layout });
+        }
+    }
+
+    // The group boxes (save path, undo limit, geometry display, ...) live
+    // directly on the page rather than inside the scroll area
+    for (int i = 0; i < m_layout->count(); ++i) {
+        QWidget* widget = m_layout->itemAt(i)->widget();
+        if (!widget || widget == m_scrollArea || widget == m_searchBox) {
+            continue;
+        }
+        m_searchRows.append({ searchableText(widget), widget, nullptr });
+    }
+}
+
+void GeneralConf::applySearchFilter(const QString& query)
+{
+    const QString trimmed = query.trimmed();
+    for (const SearchRow& row : m_searchRows) {
+        const bool visible =
+          trimmed.isEmpty() || FuzzyMatch::matches(trimmed, row.text);
+        if (row.widget) {
+            row.widget->setVisible(visible);
+        } else if (row.layout) {
+            setRowVisible(row.layout, visible);
+        }
     }
 }
 
@@ -414,14 +540,27 @@ void GeneralConf::initCheckForUpdates()
 void GeneralConf::initAllowMultipleGuiInstances()
 {
     m_allowMultipleGuiInstances = new QCheckBox(
-      tr("Allow multiple flameshot GUI instances simultaneously"), this);
+      tr("Allow multiple phramer GUI instances simultaneously"), this);
     m_allowMultipleGuiInstances->setToolTip(tr(
-      "This allows you to take screenshots of Flameshot itself for example"));
+      "This allows you to take screenshots of Phramer itself for example"));
     m_scrollAreaLayout->addWidget(m_allowMultipleGuiInstances);
     connect(m_allowMultipleGuiInstances,
             &QCheckBox::clicked,
             this,
             &GeneralConf::allowMultipleGuiInstancesChanged);
+}
+
+void GeneralConf::initAutoOpenInEditor()
+{
+    m_autoOpenInEditor =
+      new QCheckBox(tr("Automatically open captures in Editor"), this);
+    m_autoOpenInEditor->setToolTip(
+      tr("Send every capture straight to the editor once the region is "
+         "selected, instead of showing the action bar around the selection"));
+    m_scrollAreaLayout->addWidget(m_autoOpenInEditor);
+    connect(m_autoOpenInEditor, &QCheckBox::clicked, [](bool checked) {
+        ConfigHandler().setAutoOpenInEditor(checked);
+    });
 }
 
 void GeneralConf::initAutoCloseIdleDaemon()
@@ -441,7 +580,7 @@ void GeneralConf::initAutostart()
 {
     m_autostart = new QCheckBox(tr("Launch in background at startup"), this);
     m_autostart->setToolTip(tr(
-      "Launch Flameshot daemon (background process) when computer is booted"));
+      "Launch Phramer daemon (background process) when computer is booted"));
     m_scrollAreaLayout->addWidget(m_autostart);
 
     connect(

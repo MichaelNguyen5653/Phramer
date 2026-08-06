@@ -52,4 +52,6 @@ private:
 
     void initButton();
     void updateIcon();
+    // Pops the tool's variant picker, for tools that have one
+    void showOptionsMenu();
 };

@@ -36,7 +36,7 @@ QString OcrTool::description() const
 
 QWidget* OcrTool::widget()
 {
-    return new OcrResultsWindow(m_capture);
+    return new OcrResultsWindow(m_capture, m_captureScreenRect);
 }
 
 CaptureTool* OcrTool::copy(QObject* parent)
@@ -46,7 +46,22 @@ CaptureTool* OcrTool::copy(QObject* parent)
 
 void OcrTool::pressed(CaptureContext& context)
 {
-    m_capture = context.selectedScreenshotArea();
+    // Recognize the untouched screenshot, not selectedScreenshotArea(): that
+    // returns the edited pixmap, so any arrow, blur or text already drawn
+    // over the selection would be handed to the recognizer as if it were
+    // part of the page
+    m_capture = context.selection.isNull()
+                  ? context.origScreenshot
+                  : context.origScreenshot.copy(context.selection);
+
+    // selection is in device pixels relative to the overlay, and the
+    // overlay's own origin is only knowable in physical screen space from
+    // its native handle — see utils/screencoordinates.h
+    const QRect selection =
+      context.selection.isNull()
+        ? QRect(QPoint(0, 0), context.origScreenshot.size())
+        : context.selection;
+    m_captureScreenRect = selection.translated(context.widgetScreenOffset);
     // Unlike most action tools this does not close the editor: the results
     // window lives on its own and the user may keep annotating
     emit requestAction(REQ_ADD_EXTERNAL_WIDGETS);

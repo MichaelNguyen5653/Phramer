@@ -15,7 +15,7 @@ ImgUploadDialog::ImgUploadDialog(QDialog* parent)
 {
     setAttribute(Qt::WA_DeleteOnClose);
     setMinimumSize(400, 120);
-    setWindowIcon(QIcon(GlobalValues::iconPath()));
+    setWindowIcon(GlobalValues::appIcon());
     setWindowTitle(tr("Upload Confirmation"));
 
     layout = new QVBoxLayout(this);

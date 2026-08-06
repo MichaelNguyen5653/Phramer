@@ -27,6 +27,7 @@ public:
         PIN = 16,
         UPLOAD = 32,
         ACCEPT_ON_SELECT = 64,
+        OPEN_IN_EDITOR = 128,
     };
 
     CaptureRequest(CaptureMode mode,

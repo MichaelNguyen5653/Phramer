@@ -31,6 +31,7 @@ target_sources(
           launcher/launcheritemdelegate.cpp
           launcher/openwithprogram.cpp
           launcher/terminallauncher.cpp)
+target_sources(flameshot PRIVATE editor/openineditortool.h editor/openineditortool.cpp)
 target_sources(flameshot PRIVATE line/linetool.h line/linetool.cpp)
 target_sources(flameshot PRIVATE marker/markertool.h marker/markertool.cpp)
 target_sources(flameshot PRIVATE move/movetool.h move/movetool.cpp)
@@ -47,6 +48,7 @@ target_sources(flameshot PRIVATE save/savetool.h save/savetool.cpp)
 target_sources(flameshot PRIVATE accept/accepttool.h accept/accepttool.cpp)
 target_sources(flameshot PRIVATE invert/inverttool.h invert/inverttool.cpp)
 target_sources(flameshot PRIVATE selection/selectiontool.h selection/selectiontool.cpp)
+target_sources(flameshot PRIVATE shape/shapetool.h shape/shapetool.cpp)
 target_sources(
   flameshot
   PRIVATE text/textconfig.h
@@ -62,7 +64,9 @@ target_sources(
           ocr/ocrengine.cpp
           ocr/nullocrengine.h
           ocr/ocrpreprocess.h
-          ocr/ocrpreprocess.cpp)
+          ocr/ocrpreprocess.cpp
+          ocr/ocrlayout.h
+          ocr/ocrlayout.cpp)
 if (WIN32)
   target_sources(
     flameshot
@@ -71,9 +75,13 @@ if (WIN32)
             ocr/ocrtool.h
             ocr/ocrtool.cpp
             ocr/ocrresultswindow.h
-            ocr/ocrresultswindow.cpp)
-  # C++/WinRT runtime functions for Windows.Media.Ocr
-  target_link_libraries(flameshot windowsapp)
+            ocr/ocrresultswindow.cpp
+            ocr/uiatextreader.h
+            ocr/uiatextreader.cpp)
+  # C++/WinRT runtime functions for Windows.Media.Ocr; uiautomationcore for
+  # reading text back out of other applications, and dwmapi to tell a
+  # cloaked window from a visible one while hit-testing
+  target_link_libraries(flameshot windowsapp uiautomationcore dwmapi)
 endif()
 
 target_sources(

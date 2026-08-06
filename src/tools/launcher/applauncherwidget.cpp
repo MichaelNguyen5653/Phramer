@@ -49,7 +49,7 @@ AppLauncherWidget::AppLauncherWidget(const QPixmap& p, QWidget* parent)
   , m_pixmap(p)
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowIcon(QIcon(GlobalValues::iconPath()));
+    setWindowIcon(GlobalValues::appIcon());
     setWindowTitle(tr("Open With"));
 
     m_keepOpen = ConfigHandler().keepOpenAppLauncher();

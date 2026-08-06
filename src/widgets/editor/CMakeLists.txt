@@ -1,0 +1,10 @@
+target_sources(
+        flameshot
+        PRIVATE
+        editorcanvas.h
+        editorcanvas.cpp
+        editorfilmstrip.h
+        editorfilmstrip.cpp
+        editorwindow.h
+        editorwindow.cpp
+)

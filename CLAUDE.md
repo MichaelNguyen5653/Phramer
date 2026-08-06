@@ -1,8 +1,15 @@
-# Flameshot v2
+# Phramer
 
 A Windows-only fork of [Flameshot](https://github.com/flameshot-org/flameshot),
 a screenshot capture and annotation tool. Repository:
-`MichaelNguyen5653/Flameshot-v2` (public).
+`MichaelNguyen5653/Phramer` (public).
+
+Released as Flameshot v2 through 14.1.2, rebranded to Phramer in 14.1.3.
+**Internal identifiers were deliberately left alone** — the CMake target,
+the `Flameshot`/`FlameshotDaemon` classes, the source file names and the
+`FLAMESHOT_VERSION` variable all still say flameshot. Only what a user can
+see was renamed. Do not "finish" the rename in code; it buys nothing and
+touches every file.
 
 Most of this tree is upstream code. Treat it as such: fix what a task
 requires and leave the rest alone. The fork's own work is listed under
@@ -30,7 +37,7 @@ Two process roles, decided in `main.cpp` by argument count:
   checker, and hosts pinned screenshots. This is the only mode that matters
   on Windows.
 - **`argc > 1` → CLI.** Parses a subcommand and forwards it to the running
-  daemon over KDSingleApplication IPC. `flameshot-cli.exe` is a separate
+  daemon over KDSingleApplication IPC. `phramer-cli.exe` is a separate
   console-subsystem binary that exists only so stdout works.
 
 A capture is one pass through this chain:
@@ -102,7 +109,7 @@ grabs each `QScreen` separately at native resolution and composites them
 into one physical-pixel canvas, then crops to the chosen monitor.
 
 **`ConfigHandler`** — every setting goes through it. Backed by `QSettings`
-(INI). Portable builds keep `flameshot.ini` beside the exe; installed builds
+(INI). Portable builds keep `phramer.ini` beside the exe; installed builds
 use `%APPDATA%`.
 
 ## The Tool Interface
@@ -283,8 +290,8 @@ cmake .. -G "Visual Studio 18 2026" -A x64 -DCMAKE_PREFIX_PATH="C:\Qt\6.9.3\msvc
 cmake --build . --config RelWithDebInfo
 ```
 
-To test, copy the built exe over `build\install\bin\flameshot.exe` — that
-folder already holds a correct Qt runtime. A running `flameshot.exe` locks
+To test, copy the built exe over `build\install\bin\phramer.exe` — that
+folder already holds a correct Qt runtime. A running `phramer.exe` locks
 the file, so stop the process first.
 
 `-DFLAMESHOT_DEBUG_CAPTURE=ON` makes the capture overlay a normal window
@@ -312,10 +319,32 @@ assets. The in-app updater consumes exactly those, so:
   without it.
 - **`CPACK_WIX_UPGRADE_GUID` must never change again.** It is what makes
   `msiexec /i` upgrade in place. It was changed once, deliberately, to stop
-  this fork replacing upstream installs.
+  this fork replacing upstream installs. It is also what let the Phramer
+  rename ship as an ordinary in-place upgrade rather than an uninstall.
+- **Never restart the version series.** The WiX `MajorUpgrade` element
+  refuses a downgrade, so a "1.0.0" after 14.1.2 fails to install on every
+  existing machine. 14.x continues regardless of what the branding says.
 
 The installer is unsigned, so users get a SmartScreen warning; installation
 needs administrator approval because the MSI is per-machine.
+
+### The 14.1.3 migration
+
+Builds through 14.1.2 have `https://api.github.com/repos/MichaelNguyen5653/
+Flameshot-v2/releases/latest` compiled in and will never look anywhere else,
+so 14.1.3 was published **twice**: normally here, and mirrored onto a release
+on the old Flameshot-v2 repo for those clients to find. Nothing after 14.1.3
+needs the old repo.
+
+The mirrored release is tagged `14.1.3` with **no `v` prefix**, on purpose.
+`Windows-release.yml` triggers on `v*`, and a `v14.1.3` tag there would have
+rebuilt the old pre-rename source and overwritten the assets. The updater
+strips a leading `v` before parsing, so the bare tag reads the same to it.
+
+One known rough edge in that hop: the old build relaunches
+`applicationFilePath()` after installing, and the upgrade has already deleted
+that path, so the app does not reopen on its own. Users start Phramer once
+from the Start Menu.
 
 `Linux-pack`, `MacOS-pack`, `build_cmake` and `deploy-dev-docs` are
 `workflow_dispatch` only. `Windows-pack` and `test-clang-format` run on every

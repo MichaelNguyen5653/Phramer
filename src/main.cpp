@@ -27,6 +27,8 @@
 #include <QDBusMessage>
 #endif
 
+#include "utils/globalvalues.h"
+
 #include <QApplication>
 #include <QDir>
 #include <QLibraryInfo>
@@ -95,7 +97,7 @@ int requestCaptureAndWait(const CaptureRequest& req)
 
 QSharedMemory* guiMutexLock()
 {
-    QString key = "org.flameshot.Flameshot-" APP_VERSION;
+    QString key = "com.phramer.Phramer-" APP_VERSION;
     auto* shm = new QSharedMemory(key);
 #ifdef Q_OS_UNIX
     // Destroy shared memory if the last instance crashed on Unix
@@ -137,11 +139,11 @@ void configureTranslation(QTranslator& translator, QTranslator& qtTranslator)
         if (ConfigHandler().uiLanguage() == QStringLiteral("auto")) {
             QLocale l;
             qWarning() << QStringLiteral(
-                            "No Flameshot translation found for %1")
+                            "No Phramer translation found for %1")
                             .arg(l.uiLanguages().join(", "));
         } else {
             qWarning() << QStringLiteral(
-                            "No Flameshot translation found for %1")
+                            "No Phramer translation found for %1")
                             .arg(ConfigHandler().uiLanguage());
         }
     }
@@ -200,6 +202,42 @@ void reinitializeAsQApplication(int& argc,
     configureApp(true, translator, qtTranslator);
 }
 
+/**
+ * @brief Carries a pre-rename configuration file over to the new location.
+ *
+ * The application and organization names are what decide where QSettings
+ * puts the config, so renaming to Phramer moved it. Without this, updating
+ * an existing install would look like a factory reset: every setting, save
+ * path and custom shortcut silently replaced by defaults. Copied rather than
+ * moved, so a user who goes back to the old build still has theirs.
+ */
+static void migrateLegacyConfig()
+{
+#ifdef USE_PORTABLE_CONFIG
+    const QString dir = QCoreApplication::applicationDirPath();
+    const QString current = dir + QStringLiteral("/phramer.ini");
+    const QString legacy = dir + QStringLiteral("/flameshot.ini");
+#else
+    const QString base =
+      QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    // AppConfigLocation already ends in the current org/app, so step out to
+    // reach where the old name wrote
+    const QDir root(base + QStringLiteral("/../.."));
+    const QString current =
+      root.absoluteFilePath(QStringLiteral("phramer/phramer.ini"));
+    const QString legacy =
+      root.absoluteFilePath(QStringLiteral("flameshot/flameshot.ini"));
+#endif
+
+    if (QFile::exists(current) || !QFile::exists(legacy)) {
+        return;
+    }
+    QDir().mkpath(QFileInfo(current).absolutePath());
+    if (QFile::copy(legacy, current)) {
+        qInfo("Migrated settings from %s", qUtf8Printable(legacy));
+    }
+}
+
 int main(int argc, char* argv[])
 {
 
@@ -209,11 +247,18 @@ int main(int argc, char* argv[])
     qRegisterMetaType<QList<int>>();
 
     QCoreApplication::setApplicationVersion(APP_VERSION);
-    QCoreApplication::setApplicationName(QStringLiteral("flameshot"));
-    QCoreApplication::setOrganizationName(QStringLiteral("flameshot"));
+    QCoreApplication::setApplicationName(QStringLiteral("phramer"));
+    QCoreApplication::setOrganizationName(QStringLiteral("phramer"));
     QNetworkProxyFactory::setUseSystemConfiguration(true);
 
-    // no arguments, just launch Flameshot
+    // Must run before anything constructs a ConfigHandler
+    migrateLegacyConfig();
+
+    // Application-wide, so every window, dialog and task-switcher entry
+    // inherits it instead of each one having to set its own
+    QApplication::setWindowIcon(GlobalValues::appIcon());
+
+    // no arguments, just launch Phramer
     if (argc == 1) {
         QApplication app(argc, argv);
         configureTranslation(translator, qtTranslator);
@@ -228,7 +273,7 @@ int main(int argc, char* argv[])
             auto signalDaemon = SignalDaemon();
 #endif
             auto kdsa =
-              KDSingleApplication(QStringLiteral("org.flameshot.Flameshot"));
+              KDSingleApplication(QStringLiteral("com.phramer.Phramer"));
 
             if (!kdsa.isPrimaryInstance() &&
                 !ConfigHandler().allowMultipleGuiInstances()) {
@@ -259,7 +304,7 @@ int main(int argc, char* argv[])
                   << QObject::tr("Unable to connect via DBus");
             }
             dbus.registerObject(QStringLiteral("/"), c);
-            dbus.registerService(QStringLiteral("org.flameshot.Flameshot"));
+            dbus.registerService(QStringLiteral("com.phramer.Phramer"));
 #endif
             exitCode = qApp->exec();
         }
@@ -281,7 +326,7 @@ int main(int argc, char* argv[])
     // Add description
     parser.setDescription(
       QObject::tr("Powerful yet simple to use screenshot software."));
-    parser.setGeneralErrorMessage(QObject::tr("See") + " flameshot --help.");
+    parser.setGeneralErrorMessage(QObject::tr("See") + " phramer --help.");
     // Arguments
     CommandArgument fullArgument(
       QStringLiteral("full"),
@@ -292,7 +337,7 @@ int main(int argc, char* argv[])
       QStringLiteral("gui"),
       QObject::tr("Start a manual capture in GUI mode."));
     CommandArgument configArgument(QStringLiteral("config"),
-                                   QObject::tr("Configure") + " flameshot.");
+                                   QObject::tr("Configure") + " phramer.");
     CommandArgument screenArgument(
       QStringLiteral("screen"),
       QObject::tr("Capture a screenshot of the specified monitor."));
@@ -601,7 +646,7 @@ int main(int argc, char* argv[])
                 AbstractLogger::error()
                   << "The 'screen' command does not support "
                      "'--region screen<N>'.\n"
-                     "See flameshot --help.\n";
+                     "See phramer --help.\n";
                 exit(1);
             }
             req.setInitialSelection(Region().value(region).toRect());

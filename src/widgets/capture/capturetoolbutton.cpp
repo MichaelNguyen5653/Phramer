@@ -9,6 +9,7 @@
 
 #include <QApplication>
 #include <QIcon>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPropertyAnimation>
 #include <QToolTip>
@@ -98,10 +99,31 @@ void CaptureToolButton::mousePressEvent(QMouseEvent* e)
     if (e->button() == Qt::LeftButton) {
         emit pressedButtonLeftClick(this);
         emit pressed();
+        // Selecting the tool first means the picker only ever changes the
+        // variant of something already active, so a pick is one click rather
+        // than two. CaptureWidget::setState knows not to toggle this button
+        // back off, since a second click here means "show me the picker".
+        showOptionsMenu();
     } else if (e->button() == Qt::RightButton) {
         emit pressedButtonRightClick(this);
         emit pressed();
     }
+}
+
+void CaptureToolButton::showOptionsMenu()
+{
+    if (!m_tool || !m_tool->hasOptionsMenu()) {
+        return;
+    }
+    QMenu* menu = m_tool->optionsMenu(this);
+    if (!menu) {
+        return;
+    }
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    // The tool reads the picker at drag time, so only this button's cached
+    // icon needs refreshing once the menu is done
+    connect(menu, &QMenu::aboutToHide, this, [this]() { updateIcon(); });
+    menu->popup(mapToGlobal(QPoint(0, height())));
 }
 
 void CaptureToolButton::animatedShow()
@@ -133,7 +155,10 @@ QColor CaptureToolButton::m_mainColor;
 static std::map<CaptureTool::Type, int> buttonTypeOrder
 {
     { CaptureTool::TYPE_PENCIL, 0 }, { CaptureTool::TYPE_DRAWER, 1 },
-      { CaptureTool::TYPE_ARROW, 2 }, { CaptureTool::TYPE_SELECTION, 3 },
+      { CaptureTool::TYPE_ARROW, 2 },
+      // TYPE_SHAPE shares a slot with the tool it replaces: only one of the
+      // two is on the toolbar at a time, so the tie is never resolved
+      { CaptureTool::TYPE_SHAPE, 3 }, { CaptureTool::TYPE_SELECTION, 3 },
       { CaptureTool::TYPE_RECTANGLE, 4 }, { CaptureTool::TYPE_CIRCLE, 5 },
       { CaptureTool::TYPE_MARKER, 6 }, { CaptureTool::TYPE_TEXT, 7 },
       { CaptureTool::TYPE_PIXELATE, 8 }, { CaptureTool::TYPE_INVERT, 9 },
@@ -157,6 +182,7 @@ static std::map<CaptureTool::Type, int> buttonTypeOrder
 #if defined(Q_OS_WIN)
       { CaptureTool::TYPE_OCR, 24 },
 #endif
+      { CaptureTool::TYPE_OPEN_IN_EDITOR, 25 },
 };
 
 int CaptureToolButton::getPriorityByButton(CaptureTool::Type b)
@@ -168,7 +194,12 @@ int CaptureToolButton::getPriorityByButton(CaptureTool::Type b)
 
 QList<CaptureTool::Type> CaptureToolButton::iterableButtonTypes = {
     CaptureTool::TYPE_PENCIL,        CaptureTool::TYPE_DRAWER,
-    CaptureTool::TYPE_ARROW,         CaptureTool::TYPE_SELECTION,
+    CaptureTool::TYPE_ARROW,         CaptureTool::TYPE_SHAPE,
+    // Superseded by TYPE_SHAPE, which offers every one of their variants.
+    // They stay iterable so their shortcuts keep working and so they can be
+    // switched back on from Interface settings; only the default toolbar
+    // drops them, in ButtonList::fallback.
+    CaptureTool::TYPE_SELECTION,
     CaptureTool::TYPE_RECTANGLE,     CaptureTool::TYPE_CIRCLE,
     CaptureTool::TYPE_MARKER,        CaptureTool::TYPE_TEXT,
     CaptureTool::TYPE_CIRCLECOUNT,   CaptureTool::TYPE_PIXELATE,
@@ -187,4 +218,5 @@ QList<CaptureTool::Type> CaptureToolButton::iterableButtonTypes = {
 #endif
     CaptureTool::TYPE_PIN,           CaptureTool::TYPE_SIZEINCREASE,
     CaptureTool::TYPE_SIZEDECREASE,  CaptureTool::TYPE_ACCEPT,
+    CaptureTool::TYPE_OPEN_IN_EDITOR,
 };

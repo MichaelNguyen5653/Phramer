@@ -32,7 +32,7 @@ void CallFlameshot(const std::wstring args, bool wait)
     wchar_t* cmd = (wchar_t*)malloc(sizeof(wchar_t) * cmdSize);
     swprintf(cmd,
              cmdSize,
-             L"\"%s\\flameshot.exe\" %s",
+             L"\"%s\\phramer.exe\" %s",
              directory.c_str(),
              args.c_str());
     // call subprocess
@@ -58,7 +58,7 @@ int wmain(int argc, wchar_t* argv[])
 {
     // if no args, do not wait for stdout
     if (argc == 1) {
-        std::cout << "Starting flameshot in daemon mode" << std::endl;
+        std::cout << "Starting phramer in daemon mode" << std::endl;
         CallFlameshot(L"", false);
     } else {
         std::wstring argString = joinArgs(argc, argv);

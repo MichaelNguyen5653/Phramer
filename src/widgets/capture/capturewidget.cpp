@@ -16,6 +16,7 @@
 #include "core/qguiappcurrentscreen.h"
 #include "tools/copy/copytool.h"
 #include "utils/abstractlogger.h"
+#include "utils/screencoordinates.h"
 #include "utils/screengrabber.h"
 #include "utils/screenshotsaver.h"
 #include "widgets/capture/colorpicker.h"
@@ -392,6 +393,7 @@ void CaptureWidget::initButtons()
 #endif
             buttonList->removeOne(CaptureTool::TYPE_OPEN_APP);
             buttonList->removeOne(CaptureTool::TYPE_PIN);
+            buttonList->removeOne(CaptureTool::TYPE_OPEN_IN_EDITOR);
         }
     }
     QVector<CaptureToolButton*> vectorButtons;
@@ -823,13 +825,13 @@ void CaptureWidget::paintEvent(QPaintEvent* paintEvent)
 
     if (!isActiveWindow()) {
         drawErrorMessage(
-          tr("Flameshot has lost focus. Keyboard shortcuts won't "
+          tr("Phramer has lost focus. Keyboard shortcuts won't "
              "work until you click somewhere."),
           &painter);
     } else if (m_configError) {
         drawErrorMessage(ConfigHandler().errorMessage(), &painter);
     } else if (m_configErrorResolved) {
-        drawErrorMessage(tr("Configuration error resolved. Launch `flameshot "
+        drawErrorMessage(tr("Configuration error resolved. Launch `phramer "
                             "gui` again to apply it."),
                          &painter);
     }
@@ -1409,6 +1411,8 @@ void CaptureWidget::resizeEvent(QResizeEvent* e)
 {
     QWidget::resizeEvent(e);
     m_context.widgetOffset = mapToGlobal(QPoint(0, 0));
+    m_context.widgetScreenOffset =
+      nativeWindowOrigin(winId(), m_context.widgetOffset);
     if (!m_context.fullscreen) {
         m_panel->setFixedHeight(height());
         m_buttonHandler->updateScreenRegions(rect());
@@ -1419,6 +1423,8 @@ void CaptureWidget::moveEvent(QMoveEvent* e)
 {
     QWidget::moveEvent(e);
     m_context.widgetOffset = mapToGlobal(QPoint(0, 0));
+    m_context.widgetScreenOffset =
+      nativeWindowOrigin(winId(), m_context.widgetOffset);
 }
 
 void CaptureWidget::changeEvent(QEvent* e)
@@ -1435,6 +1441,8 @@ void CaptureWidget::initContext(bool fullscreen, const CaptureRequest& req)
 {
     m_context.color = m_config.drawColor();
     m_context.widgetOffset = mapToGlobal(QPoint(0, 0));
+    m_context.widgetScreenOffset =
+      nativeWindowOrigin(winId(), m_context.widgetOffset);
     m_context.mousePos = mapFromGlobal(QCursor::pos());
     m_context.toolSize = m_config.drawThickness();
     m_context.fullscreen = fullscreen;
@@ -1510,6 +1518,15 @@ void CaptureWidget::initPanel()
             &SidePanelWidget::toolSizeChanged,
             this,
             &CaptureWidget::onToolSizeChanged);
+    // onToolSizeChanged only updates the live state. Without this the panel's
+    // slider and spin box were the one size control that never persisted, so
+    // a size set there was lost the moment another tool was selected. Writing
+    // on every tick is safe: onToolSizeSettled ignores CaptureTool::NONE, so
+    // selecting a placed object cannot write its size over a tool's.
+    connect(m_sidePanel,
+            &SidePanelWidget::toolSizeChanged,
+            this,
+            &CaptureWidget::onToolSizeSettled);
     connect(this,
             &CaptureWidget::colorChanged,
             m_sidePanel,
@@ -1655,7 +1672,9 @@ void CaptureWidget::setState(CaptureToolButton* b)
             m_activeButton->setColor(m_contrastUiColor);
             m_panel->setActiveLayer(-1);
             m_panel->setToolWidget(b->tool()->configurationWidget());
-        } else if (m_activeButton) {
+        } else if (m_activeButton && !b->tool()->hasOptionsMenu()) {
+            // A button that opens a picker keeps its selection: clicking it
+            // again is a request to change the variant, not to deselect
             m_panel->clearToolWidget();
             m_activeButton->setColor(m_uiColor);
             m_activeButton = nullptr;

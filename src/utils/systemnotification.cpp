@@ -17,7 +17,7 @@
 // the system folder, so instead the absolute path to the
 // icon (saved somewhere in /snap/flameshot/...) is passed
 #ifndef FLAMESHOT_ICON
-#define FLAMESHOT_ICON "flameshot"
+#define FLAMESHOT_ICON "phramer"
 #endif
 
 SystemNotification::SystemNotification(QObject* parent)
@@ -48,7 +48,7 @@ SystemNotification::SystemNotification(QObject* parent)
 void SystemNotification::sendMessage(const QString& text,
                                      const QString& savePath)
 {
-    sendMessage(text, tr("Flameshot Info"), savePath);
+    sendMessage(text, tr("Phramer Info"), savePath);
 }
 
 void SystemNotification::sendMessage(const QString& text,

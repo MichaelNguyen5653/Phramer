@@ -8,12 +8,23 @@
 #include <QStringList>
 #include <QVector>
 
-struct OcrLine
+struct OcrWord
 {
     QString text;
     // Bounding box in the coordinates of the (preprocessed) image that was
     // passed to OcrEngine::recognize()
     QRectF boundingBox;
+};
+
+struct OcrLine
+{
+    QString text;
+    // Union of the word boxes, in the same coordinates as OcrWord
+    QRectF boundingBox;
+    // Word boxes are what make glyph height measurable and the reading order
+    // reconstructible; a line box alone cannot distinguish a wide heading
+    // from a column of body text
+    QVector<OcrWord> words;
 };
 
 struct OcrResult

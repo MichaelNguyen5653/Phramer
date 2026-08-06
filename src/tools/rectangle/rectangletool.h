@@ -42,6 +42,11 @@ private:
     // Rounded outline shared by both fill modes, so they cover exactly the
     // same area
     QPainterPath roundedPath() const;
+    // The same area again, but valid at size 0 where the solid mode falls
+    // back to a plain rectangle
+    QPainterPath highlightPath() const;
 
     FillMode m_fillMode = FillMode::Solid;
+    // Highlight border width, snapshotted at drawStart. See HighlightStyle.
+    int m_outlineWidth = 2;
 };

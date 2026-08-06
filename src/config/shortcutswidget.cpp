@@ -6,6 +6,7 @@
 #include "core/qguiappcurrentscreen.h"
 #include "tools/capturetool.h"
 #include "tools/toolfactory.h"
+#include "utils/fuzzymatch.h"
 #include "utils/globalvalues.h"
 #if defined(Q_OS_WIN)
 #include "utils/printscreenkey.h"
@@ -18,6 +19,7 @@
 #include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QRect>
 #include <QScreen>
@@ -30,7 +32,7 @@ ShortcutsWidget::ShortcutsWidget(QWidget* parent)
   : QWidget(parent)
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowIcon(QIcon(GlobalValues::iconPath()));
+    setWindowIcon(GlobalValues::appIcon());
     setWindowTitle(tr("Hot Keys"));
 
     QRect position = frameGeometry();
@@ -45,6 +47,7 @@ ShortcutsWidget::ShortcutsWidget(QWidget* parent)
     checkPrintScreenForcesSnipping();
 #endif
 
+    initSearchBox();
     initInfoTable();
     connect(ConfigHandler::getInstance(),
             &ConfigHandler::fileChanged,
@@ -56,6 +59,42 @@ ShortcutsWidget::ShortcutsWidget(QWidget* parent)
 #endif
 
     show();
+}
+
+void ShortcutsWidget::initSearchBox()
+{
+    m_searchBox = new QLineEdit(this);
+    m_searchBox->setPlaceholderText(tr("Search shortcuts"));
+    m_searchBox->setClearButtonEnabled(true);
+    m_searchBox->setToolTip(
+      tr("Filter the list below by action or by key. Partial words and typos "
+         "are tolerated; clear the box to show everything again."));
+    m_layout->addWidget(m_searchBox);
+
+    connect(m_searchBox,
+            &QLineEdit::textChanged,
+            this,
+            &ShortcutsWidget::applySearchFilter);
+}
+
+void ShortcutsWidget::applySearchFilter(const QString& query)
+{
+    const QString trimmed = query.trimmed();
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        bool visible = trimmed.isEmpty();
+        if (!visible) {
+            // Both columns are searchable, so a key can be looked up as
+            // readily as the action it belongs to
+            for (int column = 0; column < m_table->columnCount(); ++column) {
+                QTableWidgetItem* cell = m_table->item(row, column);
+                if (cell && FuzzyMatch::matches(trimmed, cell->text())) {
+                    visible = true;
+                    break;
+                }
+            }
+        }
+        m_table->setRowHidden(row, !visible);
+    }
 }
 
 void ShortcutsWidget::initInfoTable()
@@ -266,14 +305,14 @@ void ShortcutsWidget::checkPrintScreenForcesSnipping()
     if (!isPrintScreenKeyForSnippingDisabled() &&
         !ConfigHandler().ignorePrntScrForcesSnipping()) {
         QMessageBox msgBox;
-        msgBox.setWindowTitle("Flameshot");
+        msgBox.setWindowTitle("Phramer");
         msgBox.setIcon(QMessageBox::Question);
         msgBox.setText(tr("It seems, that Windows forces to open its screenshot"
                           " tool when the 'Print Screen' key is pressed. Would "
-                          "you like to disable this so that Flameshot can use "
+                          "you like to disable this so that Phramer can use "
                           "the 'Print Screen' key?") +
                        "\n\n" +
-                       tr("Flameshot must be restarted for changes to take "
+                       tr("Phramer must be restarted for changes to take "
                           "effect."));
         QPushButton* yesBtn = msgBox.addButton(QMessageBox::Yes);
         QPushButton* noBtn = msgBox.addButton(QMessageBox::No);
@@ -286,7 +325,7 @@ void ShortcutsWidget::checkPrintScreenForcesSnipping()
         if (msgBox.clickedButton() == yesBtn) {
             if (!disablePrintScreenKeyForSnipping()) {
                 QMessageBox::warning(
-                  this, "Flameshot", tr("The registry could not be changed!"));
+                  this, "Phramer", tr("The registry could not be changed!"));
             }
         } else if (msgBox.clickedButton() == noDontAskAgainBtn) {
             ConfigHandler().setIgnorePrntScrForcesSnipping(true);
@@ -307,11 +346,11 @@ bool ShortcutsWidget::disablePrintScreenKeyForSnipping()
 void ShortcutsWidget::initMsScreenclipCheckbox()
 {
     m_registerMsScreenclip =
-      new QCheckBox(tr("Register Flameshot as MS-SCREENCLIP application "
+      new QCheckBox(tr("Register Phramer as MS-SCREENCLIP application "
                        "(administrator privileges required)"),
                     this);
     m_registerMsScreenclip->setToolTip(
-      tr("After registering, you can select Flameshot as the default "
+      tr("After registering, you can select Phramer as the default "
          "screenshot application in Windows Settings."));
     m_registerMsScreenclip->setChecked(isMsScreenclipRegistered());
     m_layout->addWidget(m_registerMsScreenclip);
@@ -322,9 +361,9 @@ void ShortcutsWidget::initMsScreenclipCheckbox()
               if (!registerMsScreenclip()) {
                   QMessageBox::warning(
                     this,
-                    "Flameshot",
+                    "Phramer",
                     tr("The registry could not be changed!") + "\n" +
-                      tr("You may start Flameshot as administrator ONCE and "
+                      tr("You may start Phramer as administrator ONCE and "
                          "try again!"));
                   m_registerMsScreenclip->setChecked(false);
               }
@@ -332,9 +371,9 @@ void ShortcutsWidget::initMsScreenclipCheckbox()
               if (!unregisterMsScreenclip()) {
                   QMessageBox::warning(
                     this,
-                    "Flameshot",
+                    "Phramer",
                     tr("The registry could not be changed!") + "\n" +
-                      tr("You may start Flameshot as administrator ONCE and "
+                      tr("You may start Phramer as administrator ONCE and "
                          "try again!"));
                   m_registerMsScreenclip->setChecked(true);
               }
@@ -345,22 +384,22 @@ void ShortcutsWidget::initMsScreenclipCheckbox()
 bool ShortcutsWidget::isMsScreenclipRegistered()
 {
     QSettings URLAssociations(
-      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Flameshot\\Capabilities\\URLAssociations",
+      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Phramer\\Capabilities\\URLAssociations",
       QSettings::NativeFormat);
     QString value = URLAssociations.value("ms-screenclip", "").toString();
-    if (value.toLower() != "flameshot")
+    if (value.toLower() != "phramer")
         return false;
 
     QSettings RegisteredApplications(
       "HKEY_LOCAL_MACHINE\\SOFTWARE\\RegisteredApplications",
       QSettings::NativeFormat);
-    value = RegisteredApplications.value("Flameshot", "").toString();
+    value = RegisteredApplications.value("Phramer", "").toString();
     if (value.toLower() !=
-        QString("SOFTWARE\\Flameshot\\Capabilities").toLower())
+        QString("SOFTWARE\\Phramer\\Capabilities").toLower())
         return false;
 
     QSettings FlameshotShellCmd(
-      "HKEY_CURRENT_USER\\Software\\Classes\\Flameshot\\Shell\\Open\\command",
+      "HKEY_CURRENT_USER\\Software\\Classes\\Phramer\\Shell\\Open\\command",
       QSettings::NativeFormat);
     value = FlameshotShellCmd.value(".").toString();
     if (value.toLower() != QString("\"" +
@@ -376,9 +415,9 @@ bool ShortcutsWidget::isMsScreenclipRegistered()
 bool ShortcutsWidget::registerMsScreenclip()
 {
     QSettings URLAssociations(
-      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Flameshot\\Capabilities\\URLAssociations",
+      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Phramer\\Capabilities\\URLAssociations",
       QSettings::NativeFormat);
-    URLAssociations.setValue("ms-screenclip", "Flameshot");
+    URLAssociations.setValue("ms-screenclip", "Phramer");
     URLAssociations.sync();
     if (QSettings::AccessError == URLAssociations.status()) {
         return false;
@@ -387,15 +426,15 @@ bool ShortcutsWidget::registerMsScreenclip()
     QSettings RegisteredApplications(
       "HKEY_LOCAL_MACHINE\\SOFTWARE\\RegisteredApplications",
       QSettings::NativeFormat);
-    RegisteredApplications.setValue("Flameshot",
-                                    "SOFTWARE\\Flameshot\\Capabilities");
+    RegisteredApplications.setValue("Phramer",
+                                    "SOFTWARE\\Phramer\\Capabilities");
     RegisteredApplications.sync();
     if (QSettings::AccessError == RegisteredApplications.status()) {
         return false;
     }
 
     QSettings FlameshotShellCmd(
-      "HKEY_CURRENT_USER\\Software\\Classes\\Flameshot\\Shell\\Open\\command",
+      "HKEY_CURRENT_USER\\Software\\Classes\\Phramer\\Shell\\Open\\command",
       QSettings::NativeFormat);
     FlameshotShellCmd.setValue(
       ".",
@@ -413,7 +452,7 @@ bool ShortcutsWidget::unregisterMsScreenclip()
 {
     QSettings FlameshotShellCmd("HKEY_CURRENT_USER\\Software\\Classes",
                                 QSettings::NativeFormat);
-    FlameshotShellCmd.remove("Flameshot");
+    FlameshotShellCmd.remove("Phramer");
     FlameshotShellCmd.sync();
     if (QSettings::AccessError == FlameshotShellCmd.status()) {
         return false;
@@ -422,14 +461,14 @@ bool ShortcutsWidget::unregisterMsScreenclip()
     QSettings RegisteredApplications(
       "HKEY_LOCAL_MACHINE\\SOFTWARE\\RegisteredApplications",
       QSettings::NativeFormat);
-    RegisteredApplications.remove("Flameshot");
+    RegisteredApplications.remove("Phramer");
     RegisteredApplications.sync();
     if (QSettings::AccessError == RegisteredApplications.status()) {
         return false;
     }
 
     QSettings URLAssociations(
-      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Flameshot\\Capabilities\\URLAssociations",
+      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Phramer\\Capabilities\\URLAssociations",
       QSettings::NativeFormat);
     URLAssociations.remove("ms-screenclip");
     URLAssociations.sync();

@@ -10,6 +10,8 @@
 #include <QIcon>
 #include <QPainter>
 
+class QMenu;
+
 class CaptureTool : public QObject
 {
     Q_OBJECT
@@ -52,6 +54,8 @@ public:
         TYPE_ACCEPT = 23,
         TYPE_CANCEL = 24,
         TYPE_OCR = 25,
+        TYPE_OPEN_IN_EDITOR = 26,
+        TYPE_SHAPE = 27,
     };
     Q_ENUM(Type);
 
@@ -136,6 +140,17 @@ public:
     // When the tool is selected this method is called and the widget is added
     // to the configuration panel inside the main widget.
     virtual QWidget* configurationWidget() { return nullptr; }
+
+    // A tool whose toolbar button opens a picker as well as selecting the
+    // tool. Such a button never toggles itself off, since a click on it is a
+    // request to see the picker, not to deselect.
+    virtual bool hasOptionsMenu() const { return false; }
+    // The picker itself. Ownership passes to the caller.
+    virtual QMenu* optionsMenu(QWidget* parent)
+    {
+        Q_UNUSED(parent)
+        return nullptr;
+    }
     // Return a copy of the tool
     virtual CaptureTool* copy(QObject* parent = nullptr) = 0;
 

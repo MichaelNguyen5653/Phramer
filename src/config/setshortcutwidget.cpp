@@ -16,7 +16,7 @@ SetShortcutDialog::SetShortcutDialog(QDialog* parent,
   : QDialog(parent)
 {
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    setWindowIcon(QIcon(GlobalValues::iconPath()));
+    setWindowIcon(GlobalValues::appIcon());
     setWindowTitle(tr("Set Shortcut"));
     m_ks = QKeySequence();
 
@@ -47,12 +47,12 @@ SetShortcutDialog::SetShortcutDialog(QDialog* parent,
     auto restartMessageAdded = false;
     if (shortcutName == "TAKE_SCREENSHOT" && restartMessageAdded == false) {
         msg +=
-          "\n" + tr("Flameshot must be restarted for changes to take effect.");
+          "\n" + tr("Phramer must be restarted for changes to take effect.");
         restartMessageAdded = true;
     }
     if (shortcutName == "SCREENSHOT_HISTORY" && restartMessageAdded == false) {
         msg +=
-          "\n" + tr("Flameshot must be restarted for changes to take effect.");
+          "\n" + tr("Phramer must be restarted for changes to take effect.");
         restartMessageAdded = true;
     }
 

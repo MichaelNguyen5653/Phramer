@@ -5,6 +5,7 @@
 
 #include <QApplication>
 #include <QFontMetrics>
+#include <QIcon>
 #if defined(Q_OS_MACOS)
 #include <QOperatingSystemVersion>
 #endif
@@ -16,42 +17,36 @@ int GlobalValues::buttonBaseSize()
 
 QString GlobalValues::versionInfo()
 {
-    return QStringLiteral("Flameshot " APP_VERSION " (" FLAMESHOT_GIT_HASH ")"
+    return QStringLiteral("Phramer " APP_VERSION " (" FLAMESHOT_GIT_HASH ")"
                           "\nCompiled with Qt " QT_VERSION_STR);
+}
+
+const QIcon& GlobalValues::appIcon()
+{
+    static const QIcon icon = []() {
+        QIcon built;
+        for (int size : { 16, 24, 32, 48, 64, 128, 256, 512 }) {
+            built.addFile(QStringLiteral(":img/app/appicon-%1.png").arg(size),
+                          QSize(size, size));
+        }
+        return built;
+    }();
+    return icon;
 }
 
 QString GlobalValues::iconPath()
 {
-#if USE_MONOCHROME_ICON
-    return QString(":img/app/flameshot.monochrome.svg");
-#else
-    return { ":img/app/flameshot.svg" };
-#endif
+    return { ":img/app/appicon-256.png" };
 }
 
 QString GlobalValues::iconPathPNG()
 {
-#if USE_MONOCHROME_ICON
-    return QString(":img/app/flameshot.monochrome.png");
-#else
-    return { ":img/app/flameshot.png" };
-#endif
+    return { ":img/app/appicon-256.png" };
 }
 
 QString GlobalValues::trayIconPath()
 {
-#if USE_MONOCHROME_ICON
-#if defined(Q_OS_MACOS)
-    auto currentMacOsVersion = QOperatingSystemVersion::current();
-    if (currentMacOsVersion >= QOperatingSystemVersion::MacOSBigSur) {
-        return { ":img/app/flameshot.mask.png" };
-    } else {
-        return { ":img/app/flameshot.monochrome.png" };
-    }
-#else
-    return { ":img/app/flameshot.monochrome.png" };
-#endif
-#else
-    return { ":img/app/flameshot.png" };
-#endif
+    // The tray draws at 16 or 24 px depending on DPI; the small renders are
+    // the ones that were made to survive it
+    return { ":img/app/appicon-32.png" };
 }

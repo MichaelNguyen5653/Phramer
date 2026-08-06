@@ -25,7 +25,7 @@ CaptureLauncher::CaptureLauncher(QDialog* parent)
     qApp->installEventFilter(this); // see eventFilter()
     ui->setupUi(this);
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowIcon(QIcon(GlobalValues::iconPath()));
+    setWindowIcon(GlobalValues::appIcon());
     bool ok;
 
     ui->captureType->insertItem(

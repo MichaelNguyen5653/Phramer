@@ -34,13 +34,13 @@ PinWidget::PinWidget(const QPixmap& pixmap,
   , m_label(new QLabel())
   , m_shadowEffect(new QGraphicsDropShadowEffect(this))
 {
-    setWindowIcon(QIcon(GlobalValues::iconPath()));
+    setWindowIcon(GlobalValues::appIcon());
     setWindowFlags(Qt::WindowStaysOnTopHint | Qt::FramelessWindowHint |
                    Qt::Dialog);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowTitle("flameshot-pin");
+    setWindowTitle("phramer-pin");
     ConfigHandler conf;
     m_baseColor = conf.uiColor();
     m_hoverColor = conf.contrastUiColor();

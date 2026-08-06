@@ -340,6 +340,12 @@ QVariant ButtonList::fallback()
     auto buttons = CaptureToolButton::getIterableButtonTypes();
     buttons.removeOne(CaptureTool::TYPE_SIZEDECREASE);
     buttons.removeOne(CaptureTool::TYPE_SIZEINCREASE);
+    // Consolidated into the single TYPE_SHAPE picker. Still selectable from
+    // Interface settings and still bound to their shortcuts, just not on the
+    // toolbar out of the box.
+    buttons.removeOne(CaptureTool::TYPE_RECTANGLE);
+    buttons.removeOne(CaptureTool::TYPE_CIRCLE);
+    buttons.removeOne(CaptureTool::TYPE_SELECTION);
     sortButtons(buttons);
     return QVariant::fromValue(buttons);
 }

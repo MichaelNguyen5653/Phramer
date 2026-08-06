@@ -40,7 +40,7 @@ ConfigWindow::ConfigWindow(QWidget* parent)
     layout->addWidget(m_tabWidget);
 
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowIcon(QIcon(GlobalValues::iconPath()));
+    setWindowIcon(GlobalValues::appIcon());
     setWindowTitle(tr("Configuration"));
 
     connect(ConfigHandler::getInstance(),

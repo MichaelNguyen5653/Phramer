@@ -30,14 +30,14 @@ bool verifyLaunchFile()
     QString path = QStandardPaths::locate(QStandardPaths::GenericConfigLocation,
                                           "autostart/",
                                           QStandardPaths::LocateDirectory) +
-                   "Flameshot.desktop";
+                   "Phramer.desktop";
     bool res = QFile(path).exists();
 #elif defined(Q_OS_WIN)
     QSettings bootUpSettings(
       "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
       QSettings::NativeFormat);
     bool res =
-      bootUpSettings.value("Flameshot").toString() ==
+      bootUpSettings.value("Phramer").toString() ==
       QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
 #endif
     return res;
@@ -107,15 +107,31 @@ static QMap<class QString, QSharedPointer<ValueHandler>>
     OPTION("undoLimit"                   ,BoundedInt         ( 0, 999, 100   )),
     // Interface tab
     OPTION("uiLanguage"                  ,String             ( "auto"        )),
-    OPTION("uiColor"                     ,Color              ( {116, 0, 150} )),
-    OPTION("contrastUiColor"             ,Color              ( {39, 0, 50}   )),
+    // Phramer brand blue, taken from the logo mark (#3899c2), with a deep
+    // navy for the contrast colour the selection handles and pressed buttons
+    // use
+    OPTION("uiColor"                     ,Color              ( {56, 153, 194})),
+    OPTION("contrastUiColor"             ,Color              ( {17, 60, 79}  )),
     OPTION("contrastOpacity"             ,BoundedInt         ( 0, 255, 190   )),
     OPTION("buttons"                     ,ButtonList         ( {}            )),
     // Filename Editor tab
     OPTION("filenamePattern"             ,FilenamePattern    ( {}            )),
     // Others
-    // drawThickness shared by Pencil, Line, Arrow, Rectangular Selection, Circle
+    // Fallback thickness for any tool without a key of its own. It used to be
+    // shared by Pencil, Line, Arrow, Rectangular Selection and Circle, which
+    // meant resizing one silently resized the others; those now have their
+    // own keys below. Kept because it has shipped, and it still seeds tools
+    // that have no dedicated size.
     OPTION("drawThickness"               ,LowerBoundedInt    ( 1, 3          )),
+    OPTION("drawPencilSize"              ,LowerBoundedInt    ( 1, 3          )),
+    OPTION("drawLineSize"                ,LowerBoundedInt    ( 1, 3          )),
+    OPTION("drawArrowSize"               ,LowerBoundedInt    ( 1, 3          )),
+    OPTION("drawCircleSize"              ,LowerBoundedInt    ( 1, 3          )),
+    OPTION("drawSelectionSize"           ,LowerBoundedInt    ( 1, 3          )),
+    // Border stroked around a highlight shape. Multiply compositing cannot
+    // lighten, so without it a highlight over a dark capture is invisible;
+    // 0 turns it off and restores the pure-multiply look.
+    OPTION("highlightOutlineWidth"       ,BoundedInt         ( 0, 20, 2      )),
     OPTION("drawFontSize"                ,LowerBoundedInt    ( 1, 8          )),
     OPTION("drawCircleCounterSize"       ,LowerBoundedInt    ( 1, 1          )),
     OPTION("drawPixelateSize"            ,LowerBoundedInt    ( 1, 2          )),
@@ -140,6 +156,29 @@ static QMap<class QString, QSharedPointer<ValueHandler>>
     // Filled rectangle appearance: 0 = solid, 1 = highlighter
     OPTION("rectangleFillMode"           ,BoundedInt         ( 0, 1, 0       )),
     OPTION("insecurePixelate"            ,Bool               ( false         )),
+    // Send every GUI capture straight to the standalone editor instead of
+    // showing the action bar around the selection
+    OPTION("autoOpenInEditor"            ,Bool               ( false         )),
+    // Version whose welcome tour has already been shown. Empty means never,
+    // so a fresh install sees it; after an update it no longer matches
+    // APP_VERSION and the tour returns once.
+    OPTION("welcomeTourShownFor"         ,String             ( ""            )),
+    // Ticking "Don't show this again" suppresses the tour for good, updates
+    // included
+    OPTION("welcomeTourDisabled"         ,Bool               ( false         )),
+    // Shape tool picker: 0 = square, 1 = circle
+    OPTION("shapeKind"                   ,BoundedInt         ( 0, 1, 0       )),
+    // Shape tool picker: 0 = hollow, 1 = filled, 2 = highlight
+    OPTION("shapeStyle"                  ,BoundedInt         ( 0, 2, 1       )),
+    // Superseded by ocrTextLayout. Kept because removing a key that has
+    // been written to a config file raises a visible error on next launch.
+    OPTION("ocrJoinWrappedLines"         ,Bool               ( false         )),
+    // How recognized text is laid out: 0 = preserve indentation and column
+    // gaps, 1 = plain trimmed lines, 2 = join wrapped paragraphs
+    OPTION("ocrTextLayout"               ,BoundedInt         ( 0, 2, 0       )),
+    // BCP-47 tag last chosen in the OCR results window; empty means the
+    // system default
+    OPTION("ocrLanguage"                 ,String             ( ""            )),
 #if defined(Q_OS_WIN)
     // Not visible on settings dialog
     OPTION("ignorePrntScrForcesSnipping" ,Bool               ( false         )),
@@ -218,6 +257,13 @@ static QMap<QString, QSharedPointer<KeySequence>> recognizedShortcuts = {
     SHORTCUT("TYPE_DELETE_CURRENT_TOOL" ,   "Delete"                ),
 #endif
     SHORTCUT("TYPE_PIN"                 ,                           ),
+    SHORTCUT("TYPE_OPEN_IN_EDITOR"      ,   "E"                     ),
+    // Registered with no default on purpose: R and C still belong to the
+    // rectangle and circle tools this replaces, and a duplicate default
+    // would leave Qt with an ambiguous binding. The name must still be
+    // here — every iterable button type gets asked for its shortcut, and an
+    // unregistered name puts ConfigHandler into its error state.
+    SHORTCUT("TYPE_SHAPE"               ,                           ),
     SHORTCUT("TYPE_SIZEINCREASE"        ,                           ),
     SHORTCUT("TYPE_SIZEDECREASE"        ,                           ),
     SHORTCUT("TYPE_CIRCLECOUNT"         ,                           ),
@@ -233,7 +279,7 @@ ConfigHandler::ConfigHandler()
                qApp->organizationName(),
                qApp->applicationName())
 #else
-  : m_settings(qApp->applicationDirPath() + "/flameshot.ini",
+  : m_settings(qApp->applicationDirPath() + "/phramer.ini",
                QSettings::IniFormat)
 #endif
 {
@@ -304,13 +350,13 @@ void ConfigHandler::setStartupLaunch(const bool start)
                         << "-e"
                         << "tell application \"System Events\" to make login "
                            "item at end with properties {name: "
-                           "\"Flameshot\",path:\"/Applications/"
-                           "flameshot.app\", hidden:false}");
+                           "\"Phramer\",path:\"/Applications/"
+                           "phramer.app\", hidden:false}");
     } else {
         process.start("osascript",
                       QStringList() << "-e"
                                     << "tell application \"System Events\" to "
-                                       "delete login item \"Flameshot\"");
+                                       "delete login item \"Phramer\"");
     }
     if (!process.waitForFinished()) {
         qWarning() << "Login items is changed. " << process.errorString();
@@ -327,11 +373,11 @@ void ConfigHandler::setStartupLaunch(const bool start)
         autostartDir.mkpath(".");
     }
 
-    QFile file(path + "Flameshot.desktop");
+    QFile file(path + "Phramer.desktop");
     if (start) {
         if (file.open(QIODevice::WriteOnly)) {
-            QByteArray data("[Desktop Entry]\nName=flameshot\nIcon=flameshot"
-                            "\nExec=flameshot\nTerminal=false\nType=Application"
+            QByteArray data("[Desktop Entry]\nName=phramer\nIcon=phramer"
+                            "\nExec=phramer\nTerminal=false\nType=Application"
                             "\nX-GNOME-Autostart-enabled=true\n");
             file.write(data);
         }
@@ -350,18 +396,18 @@ void ConfigHandler::setStartupLaunch(const bool start)
     if (start) {
         QString app_path =
           QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
-        bootUpSettings.setValue("Flameshot", app_path);
+        bootUpSettings.setValue("Phramer", app_path);
 
         // set application workdir
-        bootUpPath.beginGroup("flameshot.exe");
+        bootUpPath.beginGroup("phramer.exe");
         bootUpPath.setValue("Path", QCoreApplication::applicationDirPath());
         bootUpPath.endGroup();
 
     } else {
-        bootUpSettings.remove("Flameshot");
+        bootUpSettings.remove("Phramer");
 
         // remove application workdir
-        bootUpPath.beginGroup("flameshot.exe");
+        bootUpPath.beginGroup("phramer.exe");
         bootUpPath.remove("");
         bootUpPath.endGroup();
     }
@@ -379,7 +425,10 @@ void ConfigHandler::setToolSize(CaptureTool::Type toolType, int size)
 {
     if (toolType == CaptureTool::TYPE_TEXT) {
         setDrawFontSize(size);
-    } else if (toolType == CaptureTool::TYPE_RECTANGLE) {
+    } else if (toolType == CaptureTool::TYPE_RECTANGLE ||
+               toolType == CaptureTool::TYPE_SHAPE) {
+        // The shape tool supersedes the rectangle, so it inherits the
+        // thickness the user already tuned for it
         setDrawRectangleSize(size);
     } else if (toolType == CaptureTool::TYPE_MARKER) {
         setDrawMarkerSize(size);
@@ -387,17 +436,44 @@ void ConfigHandler::setToolSize(CaptureTool::Type toolType, int size)
         setDrawPixelateSize(size);
     } else if (toolType == CaptureTool::TYPE_CIRCLECOUNT) {
         setDrawCircleCounterSize(size);
+    } else if (toolType == CaptureTool::TYPE_PENCIL) {
+        setDrawPencilSize(size);
+    } else if (toolType == CaptureTool::TYPE_DRAWER) {
+        setDrawLineSize(size);
+    } else if (toolType == CaptureTool::TYPE_ARROW) {
+        setDrawArrowSize(size);
+    } else if (toolType == CaptureTool::TYPE_CIRCLE) {
+        setDrawCircleSize(size);
+    } else if (toolType == CaptureTool::TYPE_SELECTION) {
+        setDrawSelectionSize(size);
     } else if (toolType != CaptureTool::NONE) {
-        // All other tools are sharing the same size
+        // Anything without a size of its own
         setDrawThickness(size);
     }
+}
+
+/**
+ * @brief A tool's own size, falling back to the one they all used to share.
+ *
+ * Pencil, line, arrow, circle and selection every one read drawThickness
+ * before they were given keys of their own, so resizing any of them resized
+ * the rest. An absent key has to keep producing that old shared value,
+ * otherwise every existing configuration would look like it had been reset.
+ */
+int ConfigHandler::perToolSize(const QString& key)
+{
+    if (!m_settings.contains(key)) {
+        return drawThickness();
+    }
+    return value(key).toInt();
 }
 
 int ConfigHandler::toolSize(CaptureTool::Type toolType)
 {
     if (toolType == CaptureTool::TYPE_TEXT) {
         return drawFontSize();
-    } else if (toolType == CaptureTool::TYPE_RECTANGLE) {
+    } else if (toolType == CaptureTool::TYPE_RECTANGLE ||
+               toolType == CaptureTool::TYPE_SHAPE) {
         return drawRectangleSize();
     } else if (toolType == CaptureTool::TYPE_MARKER) {
         return drawMarkerSize();
@@ -405,8 +481,18 @@ int ConfigHandler::toolSize(CaptureTool::Type toolType)
         return drawPixelateSize();
     } else if (toolType == CaptureTool::TYPE_CIRCLECOUNT) {
         return drawCircleCounterSize();
+    } else if (toolType == CaptureTool::TYPE_PENCIL) {
+        return perToolSize(QStringLiteral("drawPencilSize"));
+    } else if (toolType == CaptureTool::TYPE_DRAWER) {
+        return perToolSize(QStringLiteral("drawLineSize"));
+    } else if (toolType == CaptureTool::TYPE_ARROW) {
+        return perToolSize(QStringLiteral("drawArrowSize"));
+    } else if (toolType == CaptureTool::TYPE_CIRCLE) {
+        return perToolSize(QStringLiteral("drawCircleSize"));
+    } else if (toolType == CaptureTool::TYPE_SELECTION) {
+        return perToolSize(QStringLiteral("drawSelectionSize"));
     } else {
-        // All other tools are sharing the same size
+        // Anything without a size of its own
         return drawThickness();
     }
 }

@@ -1,5 +1,6 @@
 add_subdirectory(panel)
 add_subdirectory(capture)
+add_subdirectory(editor)
 
 # Required to generate MOC
 target_sources(
@@ -18,6 +19,7 @@ target_sources(
         orientablepushbutton.h
 
         colorpickerwidget.h
+        welcometour.h
         capture/capturetoolobjects.h
 )
 
@@ -45,6 +47,7 @@ target_sources(
         notificationwidget.cpp
         orientablepushbutton.cpp
         colorpickerwidget.cpp
+        welcometour.cpp
         capture/capturetoolobjects.cpp
 )
 

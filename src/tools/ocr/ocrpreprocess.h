@@ -7,30 +7,48 @@
 #include <QImage>
 
 /**
- * @brief Prepare a screenshot crop for OCR.
+ * @brief Pad an image out to a workable minimum size.
+ *
+ * The engine returns nothing at all for very small crops, so a tight
+ * selection around a couple of words has to be given room. The border is
+ * filled with the top-left pixel so it reads as more background rather than
+ * as an edge the recognizer has to explain.
+ *
+ * Images already at least minSide on both axes are returned unchanged.
+ */
+QImage ocrPadImage(const QImage& image, int minSide = 64, int border = 8);
+
+/**
+ * @brief Put a screenshot crop into the form the engine expects, unscaled.
  *
  * Converts to QImage::Format_RGBA8888, inverts light-on-dark captures
  * (terminals, dark themes — the engine is markedly less accurate on them),
- * and upscales small selections with smooth filtering, since accuracy drops
- * sharply for glyphs under ~30 px. If the image exceeds maxDimension in
- * either direction it is scaled down to fit instead; 0 means unlimited.
- *
- * scaleOverride > 0 replaces the size-based upscale heuristic with an exact
- * factor (still capped by maxDimension); used by the second OCR pass once
- * the real glyph size is known.
+ * and pads. Scaling is deliberately not done here: the right factor is not
+ * knowable until a first recognition pass has measured the glyphs.
  *
  * Pure function, kept separate so it can be tested without an engine.
  */
-QImage ocrPreprocessImage(const QImage& image,
-                          int maxDimension = 0,
-                          qreal scaleOverride = 0.0);
+QImage ocrNormalizeImage(const QImage& image);
 
 /**
- * @brief Decide whether a second OCR pass on an upscaled image is worth it.
+ * @brief Scale a normalized image, keeping it within the engine's limit.
  *
- * The selection size is a bad proxy for glyph size (a full-window capture
- * of a terminal is large but its text is small), so after the first pass
- * the median recognized line height is measured instead. Returns the scale
- * factor to re-run with, or 0 when the text is already large enough.
+ * `scale` is clamped so neither side exceeds maxDimension (0 means
+ * unlimited), and an image already over the limit is scaled down to fit
+ * regardless of `scale`. Always returns Format_RGBA8888.
  */
-qreal ocrRefinementScale(const QVector<OcrLine>& lines);
+QImage ocrScaleImage(const QImage& image, qreal scale, int maxDimension = 0);
+
+/**
+ * @brief The scale that would put recognized glyphs at the engine's sweet
+ * spot.
+ *
+ * Selection size is a bad proxy for glyph size (a full-window capture of a
+ * terminal is large but its text is tiny), so this measures the boxes an
+ * actual pass produced. Word boxes are preferred over line boxes because a
+ * line box spans the whole line and is skewed by any oversized glyph in it.
+ *
+ * Returns 1.0 when there is nothing to measure, so callers can treat "no
+ * change" and "no data" alike.
+ */
+qreal ocrIdealScale(const QVector<OcrLine>& lines);

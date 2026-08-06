@@ -113,6 +113,9 @@ OcrResult WindowsOcrEngine::recognize(const QImage& image,
     }
     ApartmentScope apartment;
     try {
+        // Deliberately built per call and never cached: ApartmentScope
+        // uninitializes the COM apartment when this scope ends, and a WinRT
+        // interface that outlives its apartment is undefined behaviour
         WinOcr::OcrEngine engine{ nullptr };
         if (!language.isEmpty()) {
             winrt::Windows::Globalization::Language lang{ winrt::hstring(
@@ -151,8 +154,12 @@ OcrResult WindowsOcrEngine::recognize(const QImage& image,
             QRectF box;
             for (const auto& word : line.Words()) {
                 const auto rect = word.BoundingRect();
-                box =
-                  box.united(QRectF(rect.X, rect.Y, rect.Width, rect.Height));
+                OcrWord ocrWord;
+                ocrWord.text = toQString(word.Text());
+                ocrWord.boundingBox =
+                  QRectF(rect.X, rect.Y, rect.Width, rect.Height);
+                box = box.united(ocrWord.boundingBox);
+                ocrLine.words.append(ocrWord);
             }
             ocrLine.boundingBox = box;
             result.lines.append(ocrLine);

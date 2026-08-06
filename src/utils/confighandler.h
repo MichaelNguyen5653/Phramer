@@ -101,6 +101,12 @@ public:
     CONFIG_GETTER_SETTER(filenamePattern, setFilenamePattern, QString)
     CONFIG_GETTER_SETTER(disabledTrayIcon, setDisabledTrayIcon, bool)
     CONFIG_GETTER_SETTER(drawThickness, setDrawThickness, int)
+    CONFIG_GETTER_SETTER(drawPencilSize, setDrawPencilSize, int)
+    CONFIG_GETTER_SETTER(drawLineSize, setDrawLineSize, int)
+    CONFIG_GETTER_SETTER(drawArrowSize, setDrawArrowSize, int)
+    CONFIG_GETTER_SETTER(drawCircleSize, setDrawCircleSize, int)
+    CONFIG_GETTER_SETTER(drawSelectionSize, setDrawSelectionSize, int)
+    CONFIG_GETTER_SETTER(highlightOutlineWidth, setHighlightOutlineWidth, int)
     CONFIG_GETTER_SETTER(drawFontSize, setDrawFontSize, int)
     CONFIG_GETTER_SETTER(drawCircleCounterSize, setDrawCircleCounterSize, int)
     CONFIG_GETTER_SETTER(drawPixelateSize, setDrawPixelateSize, int)
@@ -151,6 +157,14 @@ public:
     CONFIG_GETTER_SETTER(arrowStyle, setArrowStyle, int)
     CONFIG_GETTER_SETTER(rectangleFillMode, setRectangleFillMode, int)
     CONFIG_GETTER_SETTER(insecurePixelate, setInsecurePixelate, bool)
+    CONFIG_GETTER_SETTER(autoOpenInEditor, setAutoOpenInEditor, bool)
+    CONFIG_GETTER_SETTER(welcomeTourShownFor, setWelcomeTourShownFor, QString)
+    CONFIG_GETTER_SETTER(welcomeTourDisabled, setWelcomeTourDisabled, bool)
+    CONFIG_GETTER_SETTER(shapeKind, setShapeKind, int)
+    CONFIG_GETTER_SETTER(shapeStyle, setShapeStyle, int)
+    CONFIG_GETTER_SETTER(ocrJoinWrappedLines, setOcrJoinWrappedLines, bool)
+    CONFIG_GETTER_SETTER(ocrTextLayout, setOcrTextLayout, int)
+    CONFIG_GETTER_SETTER(ocrLanguage, setOcrLanguage, QString)
     CONFIG_GETTER_SETTER(showSelectionGeometryHideTime,
                          showSelectionGeometryHideTime,
                          int)
@@ -180,6 +194,9 @@ public:
     void setAllTheButtons();
     void setToolSize(CaptureTool::Type toolType, int size);
     int toolSize(CaptureTool::Type toolType);
+    // Reads a per-tool size key, falling back to drawThickness when the key
+    // is absent so configs written before per-tool sizes keep their value
+    int perToolSize(const QString& key);
 
     // DEFAULTS
     QString filenamePatternDefault();

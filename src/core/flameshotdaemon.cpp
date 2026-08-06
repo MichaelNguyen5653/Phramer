@@ -7,6 +7,7 @@
 #include "utils/screenshotsaver.h"
 #include "widgets/capture/capturewidget.h"
 #include "widgets/trayicon.h"
+#include "widgets/welcometour.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -113,10 +114,13 @@ FlameshotDaemon::FlameshotDaemon()
     }
 #endif
 
+    // Queued so the tray icon and the event loop are up before any dialog
+    // appears. The tour comes first and is modal, so the Print Screen
+    // question waits behind it rather than fighting it for focus.
+    QTimer::singleShot(0, this, []() { WelcomeTour::showIfDue(); });
+
 #if defined(Q_OS_WIN)
     if (ConfigHandler().showWelcomeMessage()) {
-        // Queued so the tray icon and event loop are up before a modal
-        // dialog appears
         QTimer::singleShot(0, this, &FlameshotDaemon::showWelcomeMessage);
     }
 #endif
@@ -130,10 +134,10 @@ void FlameshotDaemon::showWelcomeMessage()
     ConfigHandler().setShowWelcomeMessage(false);
 
     QMessageBox msgBox;
-    msgBox.setWindowTitle(QStringLiteral("Flameshot v2"));
-    msgBox.setWindowIcon(QIcon(GlobalValues::iconPath()));
+    msgBox.setWindowTitle(QStringLiteral("Phramer"));
+    msgBox.setWindowIcon(GlobalValues::appIcon());
     msgBox.setIcon(QMessageBox::Question);
-    msgBox.setText(QObject::tr("Welcome to Flameshot v2!"));
+    msgBox.setText(QObject::tr("Welcome to Phramer!"));
 
     if (PrintScreenKey::isSnippingDisabled()) {
         msgBox.setIcon(QMessageBox::Information);
@@ -147,10 +151,10 @@ void FlameshotDaemon::showWelcomeMessage()
 
     msgBox.setInformativeText(
       QObject::tr("Windows currently opens its own snipping tool when you "
-                  "press Print Screen. Would you like Flameshot to take over "
+                  "press Print Screen. Would you like Phramer to take over "
                   "that key instead?") +
       "\n\n" +
-      QObject::tr("Flameshot must be restarted for the change to take "
+      QObject::tr("Phramer must be restarted for the change to take "
                   "effect."));
     QPushButton* yesBtn = msgBox.addButton(QMessageBox::Yes);
     msgBox.addButton(QMessageBox::No);
@@ -160,7 +164,7 @@ void FlameshotDaemon::showWelcomeMessage()
     if (msgBox.clickedButton() == yesBtn &&
         !PrintScreenKey::disableSnipping()) {
         QMessageBox::warning(nullptr,
-                             QStringLiteral("Flameshot v2"),
+                             QStringLiteral("Phramer"),
                              QObject::tr("The registry could not be "
                                          "changed!"));
     }
@@ -189,7 +193,7 @@ void FlameshotDaemon::createPin(const QPixmap& capture, QRect geometry)
 
 #if defined(USE_KDSINGLEAPPLICATION) &&                                        \
   (defined(Q_OS_MACOS) || defined(Q_OS_WIN))
-    auto kdsa = KDSingleApplication(QStringLiteral("org.flameshot.Flameshot"));
+    auto kdsa = KDSingleApplication(QStringLiteral("com.phramer.Phramer"));
     stream << QStringLiteral("attachPin") << capture << geometry;
     kdsa.sendMessage(data);
 #else
@@ -212,7 +216,7 @@ void FlameshotDaemon::copyToClipboard(const QPixmap& capture)
 
 #if defined(USE_KDSINGLEAPPLICATION) &&                                        \
   (defined(Q_OS_MACOS) || defined(Q_OS_WIN))
-    auto kdsa = KDSingleApplication(QStringLiteral("org.flameshot.Flameshot"));
+    auto kdsa = KDSingleApplication(QStringLiteral("com.phramer.Phramer"));
     stream << QStringLiteral("attachScreenshotToClipboard") << capture;
     kdsa.sendMessage(data);
 #else
@@ -235,7 +239,7 @@ void FlameshotDaemon::copyToClipboard(const QString& text,
 
 #if defined(USE_KDSINGLEAPPLICATION) &&                                        \
   (defined(Q_OS_MACOS) || defined(Q_OS_WIN))
-    auto kdsa = KDSingleApplication(QStringLiteral("org.flameshot.Flameshot"));
+    auto kdsa = KDSingleApplication(QStringLiteral("com.phramer.Phramer"));
     QByteArray data;
     QDataStream stream(&data, QIODevice::WriteOnly);
     stream << QStringLiteral("attachTextToClipboard") << text << notification;
@@ -261,7 +265,7 @@ void FlameshotDaemon::sendTrayNotification(const QString& text,
 {
     if (m_trayIcon) {
         m_trayIcon->showMessage(
-          title, text, QIcon(GlobalValues::iconPath()), timeout);
+          title, text, GlobalValues::appIcon(), timeout);
     }
 }
 
@@ -317,7 +321,7 @@ void FlameshotDaemon::checkForUpdates()
         QDesktopServices::openUrl(QUrl(m_appLatestUrl));
 #endif
     } else {
-        sendTrayNotification(tr("You have the latest version"), "Flameshot");
+        sendTrayNotification(tr("You have the latest version"), "Phramer");
     }
 }
 
@@ -348,13 +352,13 @@ void FlameshotDaemon::startUpdateAndRestart()
     }
 
     QMessageBox box;
-    box.setWindowTitle(QStringLiteral("Flameshot v2"));
-    box.setWindowIcon(QIcon(GlobalValues::iconPath()));
+    box.setWindowTitle(QStringLiteral("Phramer"));
+    box.setWindowIcon(GlobalValues::appIcon());
     box.setIcon(QMessageBox::Question);
     box.setText(
       tr("Update to version %1 and restart?").arg(m_appLatestVersion));
     box.setInformativeText(
-      tr("Flameshot will close while the update installs and reopen when it "
+      tr("Phramer will close while the update installs and reopen when it "
          "is done. Windows will ask for administrator approval; if this "
          "account has no administrator rights, administrator credentials "
          "can be entered at that prompt.") +
@@ -410,8 +414,8 @@ void FlameshotDaemon::downloadUpdateInstaller()
           m_updateDownloader->get(assetRequest(m_appLatestMsiUrl));
 
         auto* progress = new QProgressDialog(
-          tr("Downloading Flameshot v2 update…"), tr("Cancel"), 0, 100);
-        progress->setWindowTitle(QStringLiteral("Flameshot v2"));
+          tr("Downloading Phramer update…"), tr("Cancel"), 0, 100);
+        progress->setWindowTitle(QStringLiteral("Phramer"));
         progress->setWindowModality(Qt::ApplicationModal);
         progress->setMinimumDuration(0);
         progress->setAttribute(Qt::WA_DeleteOnClose);
@@ -459,7 +463,7 @@ void FlameshotDaemon::downloadUpdateInstaller()
 
               const QString msiPath =
                 QStandardPaths::writableLocation(QStandardPaths::TempLocation) +
-                QStringLiteral("/Flameshot-v2-%1-win64.msi")
+                QStringLiteral("/Phramer-%1-win64.msi")
                   .arg(m_appLatestVersion);
               QFile msiFile(msiPath);
               if (!msiFile.open(QIODevice::WriteOnly) ||
@@ -482,7 +486,7 @@ void FlameshotDaemon::applyUpdate(const QString& msiPath)
     // version back instead of leaving nothing running.
     const QString scriptPath =
       QStandardPaths::writableLocation(QStandardPaths::TempLocation) +
-      QStringLiteral("/flameshot-v2-update.cmd");
+      QStringLiteral("/phramer-update.cmd");
     QFile script(scriptPath);
     if (!script.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         failUpdate(tr("Could not prepare the update script."));
@@ -507,7 +511,7 @@ void FlameshotDaemon::applyUpdate(const QString& msiPath)
 void FlameshotDaemon::failUpdate(const QString& reason)
 {
     m_updateInProgress = false;
-    sendTrayNotification(reason, QStringLiteral("Flameshot v2"));
+    sendTrayNotification(reason, QStringLiteral("Phramer"));
 }
 #endif
 #endif
@@ -687,7 +691,7 @@ void FlameshotDaemon::handleReplyCheckUpdates(QNetworkReply* reply)
             }
         } else if (m_showManualCheckAppUpdateStatus) {
             sendTrayNotification(tr("You have the latest version"),
-                                 "Flameshot");
+                                 "Phramer");
         }
     } else {
         qWarning() << "Failed to get information about the latest version. "
@@ -696,7 +700,7 @@ void FlameshotDaemon::handleReplyCheckUpdates(QNetworkReply* reply)
             if (FlameshotDaemon::instance()) {
                 FlameshotDaemon::instance()->sendTrayNotification(
                   tr("Failed to get information about the latest version."),
-                  "Flameshot");
+                  "Phramer");
             }
         }
     }
@@ -708,7 +712,7 @@ void FlameshotDaemon::handleReplyCheckUpdates(QNetworkReply* reply)
 QDBusMessage FlameshotDaemon::createMethodCall(const QString& method)
 {
     QDBusMessage m =
-      QDBusMessage::createMethodCall(QStringLiteral("org.flameshot.Flameshot"),
+      QDBusMessage::createMethodCall(QStringLiteral("com.phramer.Phramer"),
                                      QStringLiteral("/"),
                                      QLatin1String(""),
                                      method);

@@ -23,6 +23,22 @@ constexpr QPainter::CompositionMode CompositionMode =
 constexpr qreal Opacity = 0.35;
 
 /**
+ * @brief The border that keeps a highlight visible on dark captures.
+ *
+ * Multiply can only darken, so over a black background the fill resolves to
+ * the background itself and the shape disappears. Closed highlight shapes
+ * therefore stroke an outline at normal composition, outside the PainterState
+ * scope so it never composites over its own fill. Freehand strokes
+ * deliberately do not: a marker with a border stops reading as one.
+ *
+ * The width is the user's `highlightOutlineWidth` setting, snapshotted by
+ * each tool when a drag starts so that placed objects keep the border they
+ * were drawn with. Zero means no border, which is the pure-multiply look
+ * this had before the setting existed.
+ */
+constexpr int MaxOutlineWidth = 20;
+
+/**
  * @brief Applies the highlight compositing for the current scope.
  *
  * Restores the painter's previous composition mode and opacity on

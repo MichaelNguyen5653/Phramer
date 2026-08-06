@@ -5,6 +5,7 @@
 #include "tools/abstractactiontool.h"
 
 #include <QPixmap>
+#include <QRect>
 
 class OcrTool : public AbstractActionTool
 {
@@ -30,4 +31,7 @@ public slots:
 
 private:
     QPixmap m_capture;
+    // Where that pixmap came from, in physical screen pixels, so the text
+    // can also be asked for from the window that drew it
+    QRect m_captureScreenRect;
 };
