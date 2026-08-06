@@ -154,7 +154,7 @@ jobs:
         if:  matrix.type == 'installer'
         shell: pwsh
         run: |
-          Move-Item -Path $env:GITHUB_WORKSPACE/build/Package/Flameshot-*-${{ matrix.config.pak_arch }}.msi -Destination $env:GITHUB_WORKSPACE/build/Package/installer/Flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi
+          Move-Item -Path $env:GITHUB_WORKSPACE/build/Package/Phramer-*-${{ matrix.config.pak_arch }}.msi -Destination $env:GITHUB_WORKSPACE/build/Package/installer/Phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi
 
       - name: Package Prepare (portable)
         if:  matrix.type == 'portable'
@@ -166,8 +166,8 @@ jobs:
         if:  matrix.type == 'installer'
         shell: bash
         run: |
-          sha256sum $GITHUB_WORKSPACE/build/Package/installer/Flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi
-          sha256sum $GITHUB_WORKSPACE/build/Package/installer/Flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi > $GITHUB_WORKSPACE/build/Package/installer/Flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi.sha256sum
+          sha256sum $GITHUB_WORKSPACE/build/Package/installer/Phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi
+          sha256sum $GITHUB_WORKSPACE/build/Package/installer/Phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi > $GITHUB_WORKSPACE/build/Package/installer/Phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi.sha256sum
 
       - name: SHA256Sum of Windows portable
         if:  matrix.type == 'portable'
@@ -182,8 +182,8 @@ jobs:
         with:
           name: ${{ env.PRODUCT }}-${{ env.VER_INFO }}-artifact-win-${{ matrix.config.arch }}-${{ matrix.type }}
           path: |
-            ${{ github.workspace }}/build/Package/installer/Flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi
-            ${{ github.workspace }}/build/Package/installer/Flameshot-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi.sha256sum
+            ${{ github.workspace }}/build/Package/installer/Phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi
+            ${{ github.workspace }}/build/Package/installer/Phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.msi.sha256sum
           overwrite: true
 
       - name: Artifact Upload

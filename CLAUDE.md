@@ -269,6 +269,25 @@ Rules:
 - **PowerShell does not expand variables in a bare token starting with a
   dash.** `-DFOO=$bar` passes the literal text; write `"-DFOO=$bar"`. This
   broke the release pipeline three times.
+- **A default local build never compiles the installer configuration.**
+  `USE_PORTABLE_CONFIG` defaults ON here and is forced OFF by
+  `Windows-release.yml` and by the installer job of `Windows-pack.yml`. The
+  `#else` branches it guards — `migrateLegacyConfig()` among them — are
+  invisible to a plain `cmake --build`, so a missing include there builds
+  clean locally and fails the release. Before tagging, build once with
+  `-DUSE_PORTABLE_CONFIG=OFF -DCMAKE_BUILD_TYPE=Release`.
+- **The two packages are named differently, and the case matters.** The
+  portable ZIP takes `APP_BINARY_NAME` (`phramer-…zip`); the MSI has no
+  `CPACK_PACKAGE_FILE_NAME` set and falls back to `CPACK_PACKAGE_NAME`
+  (`Phramer-…msi`). `Windows-pack.yml` names both explicitly and breaks if
+  either changes. Read `build/CPackConfig.cmake` for the authoritative name
+  rather than guessing. `Windows-release.yml` globs `*.msi` and is immune.
+- **The `clang-format.exe` under `Python…/Scripts/` is a broken shim.** It is
+  a MinGW build missing `libgcc_s_seh-1`, `libstdc++-6` and
+  `libwinpthread-1`, so it exits 0 printing nothing and every file appears
+  formatted. Use the wheel's own binary at
+  `site-packages/clang_format/data/bin/clang-format.exe`, and sanity-check
+  that `--version` actually prints.
 - **`cmake --install` deploys debug Qt DLLs.** `src/CMakeLists.txt` picks
   `windeployqt --debug` from `CMAKE_BUILD_TYPE`, which is always empty for
   multi-config generators, and the app then dies with "no Qt platform plugin
