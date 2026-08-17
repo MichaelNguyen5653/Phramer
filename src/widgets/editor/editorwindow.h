@@ -4,6 +4,9 @@
 
 #include "tools/capturetool.h"
 
+#include <QColor>
+#include <QHash>
+#include <QKeySequence>
 #include <QMainWindow>
 #include <QPointer>
 #include <QVector>
@@ -48,6 +51,11 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    // Tool keys are matched here rather than through QAction::setShortcut. A
+    // window shortcut fires wherever the focus is, so typing "p" into a text
+    // annotation would swap to the pencil mid-word; an unhandled key event
+    // only reaches this window because the focused widget did not want it.
+    void keyPressEvent(QKeyEvent* event) override;
 
 private slots:
     void copyCurrent();
@@ -58,6 +66,7 @@ private slots:
     void chooseColor();
     void onToolActionTriggered();
     void onCanvasContentChanged();
+    void onImagesReordered(int from, int to);
 #if defined(Q_OS_WIN)
     void runOcr();
 #endif
@@ -76,6 +85,14 @@ private:
                            CaptureTool::Type type,
                            const QColor& background);
     void buildStatusBar();
+    // Selects the tool the key is bound to, if any. Configured shortcuts win
+    // over the editor's own fallbacks, so remapping a tool onto V or N in
+    // Settings does what the user asked for.
+    bool activateToolShortcut(const QKeySequence& pressed);
+    void selectToolAction(QAction* action);
+    // The shape button wears the icon of whichever variant is configured, so
+    // the R and C keys have to repaint it after switching kinds
+    void refreshShapeIcon();
     // Makes a uniquely named folder under parent to hold one Save All batch.
     // Empty on failure.
     QString createSessionFolder(const QString& parent);
@@ -94,6 +111,13 @@ private:
     int m_currentIndex{ -1 };
 
     QActionGroup* m_toolGroup{ nullptr };
+    // Tool type to its toolbar entry, for keyboard selection. Keyed by int
+    // because CaptureTool::Type is not a hashable key without a qHash.
+    QHash<int, QAction*> m_toolActions;
+    QAction* m_selectAction{ nullptr };
+    // Window background the tool icons were chosen against, kept so an icon
+    // can be rebuilt later without re-deriving it
+    QColor m_toolbarBackground;
     QAction* m_undoAction{ nullptr };
     QAction* m_redoAction{ nullptr };
     QAction* m_colorAction{ nullptr };

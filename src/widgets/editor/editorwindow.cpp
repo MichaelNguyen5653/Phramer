@@ -28,6 +28,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
@@ -39,11 +40,13 @@
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QStringList>
 #include <QStyle>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QVariant>
 
 QPointer<EditorWindow> EditorWindow::s_instance;
 
@@ -71,6 +74,82 @@ const QVector<CaptureTool::Type>& editorToolTypes()
 
 constexpr int ThumbnailRefreshMs = 250;
 
+// Editor-only keys for the two tools that have no configuration entry. The
+// shape button is reached through the rectangle and circle keys instead, so
+// it needs none of its own.
+constexpr auto SelectToolKey = Qt::Key_V;
+constexpr auto CircleCountKey = Qt::Key_N;
+
+// The name a tool's shortcut is stored under is its Q_ENUM name
+QString shortcutFor(CaptureTool::Type type)
+{
+    return ConfigHandler().shortcut(QVariant::fromValue(type).toString());
+}
+
+// One shape key, and the variant the tool it belongs to draws in the capture
+// overlay
+struct ShapeBinding
+{
+    CaptureTool::Type key;
+    ShapeTool::Kind kind;
+    ShapeTool::Style style;
+};
+
+/**
+ * @brief Maps the three retired shape tools onto shape-button variants.
+ *
+ * RectangleTool fills, SelectionTool strokes a rectangle and CircleTool
+ * strokes an ellipse. Those three still exist and still hold R, S and C, so
+ * the editor has to reproduce what pressing each of them draws rather than
+ * inventing its own arrangement. There is no key for a filled circle or for
+ * a highlight, because the overlay has none either.
+ */
+const QVector<ShapeBinding>& shapeBindings()
+{
+    static const QVector<ShapeBinding> bindings = {
+        { CaptureTool::TYPE_RECTANGLE,
+          ShapeTool::Kind::Square,
+          ShapeTool::Style::Filled },
+        { CaptureTool::TYPE_SELECTION,
+          ShapeTool::Kind::Square,
+          ShapeTool::Style::Hollow },
+        { CaptureTool::TYPE_CIRCLE,
+          ShapeTool::Kind::Circle,
+          ShapeTool::Style::Hollow },
+    };
+    return bindings;
+}
+
+// What the tooltip should advertise, which is not always a configured key
+QString editorShortcutHint(CaptureTool::Type type)
+{
+    switch (type) {
+        case CaptureTool::TYPE_SHAPE: {
+            // One button, one key per variant it absorbed
+            QStringList keys;
+            for (const ShapeBinding& binding : shapeBindings()) {
+                const QString key = shortcutFor(binding.key);
+                if (!key.isEmpty()) {
+                    keys << key;
+                }
+            }
+            return keys.join(QStringLiteral(" / "));
+        }
+        case CaptureTool::TYPE_CIRCLECOUNT:
+            return QKeySequence(QKeyCombination(CircleCountKey)).toString();
+        default:
+            return shortcutFor(type);
+    }
+}
+
+QString withShortcut(const QString& description, const QString& key)
+{
+    if (key.isEmpty()) {
+        return description;
+    }
+    return QStringLiteral("%1 (%2)").arg(description, key);
+}
+
 } // namespace
 
 EditorWindow::EditorWindow(QWidget* parent)
@@ -88,6 +167,10 @@ EditorWindow::EditorWindow(QWidget* parent)
             &EditorFilmstrip::imageActivated,
             this,
             [this](int index) { setCurrentIndex(index); });
+    connect(m_filmstrip,
+            &EditorFilmstrip::imagesReordered,
+            this,
+            &EditorWindow::onImagesReordered);
 
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
@@ -208,6 +291,7 @@ void EditorWindow::buildToolBar()
     // Tool icons come in a light and a dark variant; pick the one that
     // contrasts with whatever palette the window is actually using
     const QColor background = palette().color(QPalette::Window);
+    m_toolbarBackground = background;
     const QString iconDir = ColorUtils::colorIsDark(background)
                               ? PathInfo::whiteIconPath()
                               : PathInfo::blackIconPath();
@@ -221,12 +305,14 @@ void EditorWindow::buildToolBar()
     selectAction->setChecked(true);
     selectAction->setData(static_cast<int>(CaptureTool::NONE));
     selectAction->setToolTip(
-      tr("Select, move and delete objects you have placed"));
+      withShortcut(tr("Select, move and delete objects you have placed"),
+                   QKeySequence(QKeyCombination(SelectToolKey)).toString()));
     m_toolGroup->addAction(selectAction);
     connect(selectAction,
             &QAction::triggered,
             this,
             &EditorWindow::onToolActionTriggered);
+    m_selectAction = selectAction;
 
     for (CaptureTool::Type type : editorToolTypes()) {
         CaptureTool* prototype = ToolFactory().CreateTool(type, this);
@@ -237,8 +323,10 @@ void EditorWindow::buildToolBar()
           bar->addAction(prototype->icon(background, true), prototype->name());
         action->setCheckable(true);
         action->setData(static_cast<int>(type));
-        action->setToolTip(prototype->description());
+        action->setToolTip(
+          withShortcut(prototype->description(), editorShortcutHint(type)));
         m_toolGroup->addAction(action);
+        m_toolActions.insert(static_cast<int>(type), action);
         connect(action,
                 &QAction::triggered,
                 this,
@@ -313,7 +401,9 @@ void EditorWindow::buildToolBar()
 #if defined(Q_OS_WIN)
     bar->addSeparator();
     QAction* ocrAction = bar->addAction(QIcon(iconDir + "ocr.svg"), tr("OCR"));
-    ocrAction->setToolTip(tr("Extract text from the current image"));
+    ocrAction->setToolTip(
+      withShortcut(tr("Extract text from the current image"),
+                   shortcutFor(CaptureTool::TYPE_OCR)));
     connect(ocrAction, &QAction::triggered, this, &EditorWindow::runOcr);
 #endif
 }
@@ -454,6 +544,148 @@ void EditorWindow::onToolActionTriggered()
     m_sizeBox->blockSignals(true);
     m_sizeBox->setValue(canvas->toolSize());
     m_sizeBox->blockSignals(false);
+}
+
+void EditorWindow::keyPressEvent(QKeyEvent* event)
+{
+    switch (event->key()) {
+        // A modifier on its own is not a shortcut, and matching one would
+        // fire the moment the user reaches for Ctrl+S
+        case Qt::Key_Control:
+        case Qt::Key_Shift:
+        case Qt::Key_Alt:
+        case Qt::Key_Meta:
+            break;
+        default: {
+            // Keypad origin is not part of a configured sequence, so a key
+            // pressed on the number pad has to compare equal to the same key
+            // on the main block
+            const QKeyCombination combination = event->keyCombination();
+            const QKeySequence pressed(QKeyCombination(
+              combination.keyboardModifiers() & ~Qt::KeypadModifier,
+              combination.key()));
+            if (activateToolShortcut(pressed)) {
+                event->accept();
+                return;
+            }
+            break;
+        }
+    }
+    QMainWindow::keyPressEvent(event);
+}
+
+bool EditorWindow::activateToolShortcut(const QKeySequence& pressed)
+{
+    if (pressed.isEmpty()) {
+        return false;
+    }
+
+    const auto bound = [&pressed](CaptureTool::Type type) {
+        const QString configured = shortcutFor(type);
+        return !configured.isEmpty() && QKeySequence(configured) == pressed;
+    };
+
+    // Configured keys are matched first, so remapping a tool onto one of the
+    // editor's own fallbacks below takes precedence over that fallback
+    for (auto it = m_toolActions.constBegin(); it != m_toolActions.constEnd();
+         ++it) {
+        if (bound(static_cast<CaptureTool::Type>(it.key()))) {
+            selectToolAction(it.value());
+            return true;
+        }
+    }
+
+    // The shape button replaced three tools that still own their shortcuts,
+    // so each key has to land on the variant its tool used to draw. Both
+    // halves of the variant are written, not just the kind: leaving the style
+    // alone makes R draw whatever was last picked from the menu instead of
+    // the filled rectangle it draws in the capture overlay.
+    if (QAction* shape = m_toolActions.value(CaptureTool::TYPE_SHAPE)) {
+        for (const ShapeBinding& binding : shapeBindings()) {
+            if (!bound(binding.key)) {
+                continue;
+            }
+            ConfigHandler config;
+            config.setShapeKind(static_cast<int>(binding.kind));
+            config.setShapeStyle(static_cast<int>(binding.style));
+            refreshShapeIcon();
+            selectToolAction(shape);
+            return true;
+        }
+    }
+
+#if defined(Q_OS_WIN)
+    if (bound(CaptureTool::TYPE_OCR)) {
+        runOcr();
+        return true;
+    }
+#endif
+
+    if (pressed == QKeySequence(QKeyCombination(SelectToolKey))) {
+        selectToolAction(m_selectAction);
+        return true;
+    }
+    if (pressed == QKeySequence(QKeyCombination(CircleCountKey))) {
+        selectToolAction(m_toolActions.value(CaptureTool::TYPE_CIRCLECOUNT));
+        return true;
+    }
+    return false;
+}
+
+void EditorWindow::selectToolAction(QAction* action)
+{
+    if (!action) {
+        return;
+    }
+    action->setChecked(true);
+    onToolActionTriggered();
+    // Drawing happens on the canvas, so the keystroke should leave the focus
+    // there rather than wherever it happened to be
+    if (EditorCanvas* canvas = currentCanvas()) {
+        canvas->setFocus();
+    }
+}
+
+void EditorWindow::refreshShapeIcon()
+{
+    QAction* action = m_toolActions.value(CaptureTool::TYPE_SHAPE);
+    if (!action) {
+        return;
+    }
+    CaptureTool* tool =
+      ToolFactory().CreateTool(CaptureTool::TYPE_SHAPE, nullptr);
+    if (tool) {
+        action->setIcon(tool->icon(m_toolbarBackground, true));
+        delete tool;
+    }
+}
+
+void EditorWindow::onImagesReordered(int from, int to)
+{
+    if (from == to || from < 0 || from >= m_canvases.size() || to < 0 ||
+        to >= m_canvases.size()) {
+        return;
+    }
+
+    m_canvases.move(from, to);
+    // QStackedWidget has no move of its own. Removing a page detaches it
+    // without deleting it, which is what makes reinserting it safe.
+    QWidget* page = m_pages->widget(from);
+    m_pages->removeWidget(page);
+    m_pages->insertWidget(to, page);
+
+    // The dragged image is the one on screen: pressing a tile to start the
+    // drag already navigated to it, and the strip leaves it selected
+    m_currentIndex = to;
+    m_pages->setCurrentIndex(to);
+    updateNavigationState();
+
+    // A drag leaves the focus on the strip, and QListWidget answers a plain
+    // letter with its own keyboard search — so without this the tool keys go
+    // dead until the canvas is clicked again
+    if (EditorCanvas* canvas = currentCanvas()) {
+        canvas->setFocus();
+    }
 }
 
 void EditorWindow::onCanvasContentChanged()
