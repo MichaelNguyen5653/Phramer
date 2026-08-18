@@ -136,8 +136,8 @@ OcrResult ocrRunPipeline(const QImage& capture,
     const qreal measured = best.result.lines.isEmpty()
                              ? EmptyResultRetryScale
                              : ocrIdealScale(best.result.lines);
-    qreal scale = effort == OcrEffort::High ? qMax(measured, HighEffortMinScale)
-                                            : measured;
+    qreal scale =
+      effort == OcrEffort::High ? qMax(measured, HighEffortMinScale) : measured;
     // Tiling, not clamping, is what keeps the engine within its limit here --
     // clamping is the defect this pipeline exists to fix -- but an unbounded
     // upscale would still turn into an unbounded number of round trips

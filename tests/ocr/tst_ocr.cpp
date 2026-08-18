@@ -332,9 +332,8 @@ private slots:
 
     void moreRecognizedTextScoresHigher()
     {
-        const OcrResult rich = okResult(
-          { makeWordLine({ QStringLiteral("hello"), QStringLiteral("world") },
-                         0) });
+        const OcrResult rich = okResult({ makeWordLine(
+          { QStringLiteral("hello"), QStringLiteral("world") }, 0) });
         const OcrResult sparse =
           okResult({ makeWordLine({ QStringLiteral("hi") }, 0) });
 
@@ -349,9 +348,8 @@ private slots:
         for (int i = 0; i < 8; ++i) {
             junk.append(makeWordLine({ QStringLiteral(".") }, i * 30.0));
         }
-        const OcrResult clean = okResult(
-          { makeWordLine({ QStringLiteral("hello"), QStringLiteral("world") },
-                         0) });
+        const OcrResult clean = okResult({ makeWordLine(
+          { QStringLiteral("hello"), QStringLiteral("world") }, 0) });
 
         QVERIFY(ocrScoreResult(clean) > ocrScoreResult(okResult(junk)));
     }
@@ -439,9 +437,8 @@ private slots:
 
     void remappingTranslatesLineAndWordBoxes()
     {
-        const QVector<OcrLine> remapped =
-          ocrRemapLines({ makeWordLine({ QStringLiteral("abc") }, 5.0) },
-                        QPointF(100, 200));
+        const QVector<OcrLine> remapped = ocrRemapLines(
+          { makeWordLine({ QStringLiteral("abc") }, 5.0) }, QPointF(100, 200));
 
         QCOMPARE(remapped.first().boundingBox.left(), 100.0);
         QCOMPARE(remapped.first().boundingBox.top(), 205.0);
@@ -758,11 +755,8 @@ private slots:
         high.reply = [](int, const QImage&) {
             return scriptedResult(30, 40.0);
         };
-        ocrRunPipeline(blankCapture(400, 300),
-                       high.fn(),
-                       QString(),
-                       2600,
-                       OcrEffort::High);
+        ocrRunPipeline(
+          blankCapture(400, 300), high.fn(), QString(), 2600, OcrEffort::High);
 
         QVERIFY(high.seen.size() > normal.seen.size());
     }
