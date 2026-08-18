@@ -3,6 +3,7 @@
 #pragma once
 
 #include "tools/ocr/ocrengine.h"
+#include "tools/ocr/ocrpipeline.h"
 
 #include <QPixmap>
 #include <QRect>
@@ -25,7 +26,11 @@ class OcrWorker : public QObject
 {
     Q_OBJECT
 public:
-    OcrWorker(QImage image, QString language, quint64 runId);
+    OcrWorker(QImage image,
+              QRect screenRect,
+              QString language,
+              quint64 runId,
+              OcrEffort effort);
 
 public slots:
     void process();
@@ -35,8 +40,12 @@ signals:
 
 private:
     QImage m_image;
+    // Where the capture sits in physical screen pixels; the exact-text
+    // reader needs it to find the window the pixels came from
+    QRect m_screenRect;
     QString m_language;
     quint64 m_runId;
+    OcrEffort m_effort;
 };
 
 /**
@@ -77,7 +86,7 @@ private slots:
     void onWorkerFinished(const OcrResult& result, quint64 runId);
 
 private:
-    void startRecognition();
+    void startRecognition(OcrEffort effort = OcrEffort::Normal);
     // Rebuild the text view from the stored result. Changing how lines are
     // joined must not cost another recognition pass.
     void refreshText();

@@ -3,7 +3,9 @@
 #include "ocrresultswindow.h"
 
 #include "tools/ocr/ocrlayout.h"
+#include "tools/ocr/ocrpipeline.h"
 #include "tools/ocr/ocrpreprocess.h"
+#include "tools/ocr/uiatextreader.h"
 #include "utils/confighandler.h"
 #include "widgets/loadspinner.h"
 
@@ -26,11 +28,6 @@
 
 namespace {
 
-// The first pass found nothing at all, which for a screenshot almost always
-// means the glyphs are too small to resolve rather than that there is no
-// text, so retry well upscaled before giving up
-constexpr qreal EmptyResultRetryScale = 4.0;
-
 /// Run `worker` on a thread of its own and have both clean themselves up
 /// once its finished() signal has been delivered.
 template<typename Worker, typename Signal>
@@ -47,45 +44,52 @@ void startWorker(Worker* worker, Signal finishedSignal)
 
 } // namespace
 
-OcrWorker::OcrWorker(QImage image, QString language, quint64 runId)
+OcrWorker::OcrWorker(QImage image,
+                     QRect screenRect,
+                     QString language,
+                     quint64 runId,
+                     OcrEffort effort)
   : m_image(std::move(image))
+  , m_screenRect(screenRect)
   , m_language(std::move(language))
   , m_runId(runId)
+  , m_effort(effort)
 {}
 
 void OcrWorker::process()
 {
+#ifdef Q_OS_WIN
+    // A screenshot is a lossy encoding of text the source application still
+    // holds verbatim. Where it can be read back, recognition has nothing to
+    // add. High effort means the user was unhappy with a recognized result,
+    // and this path has already declined once, so it is not retried.
+    if (m_effort == OcrEffort::Normal) {
+        OcrResult exact = readWindowText(m_screenRect);
+        if (exact.status == OcrResult::Status::Ok) {
+            exact.source = OcrResult::Source::Exact;
+            exact.diagnostics =
+              QStringLiteral("read directly from the window under the "
+                             "selection; no recognition was needed");
+            exact.lines = ocrOrderLines(exact.lines);
+            emit finished(exact, m_runId);
+            return;
+        }
+    }
+#endif
+
     // The engine is created inside the worker thread so nothing is shared
     // with the GUI thread
     QScopedPointer<OcrEngine> engine(OcrEngine::create());
-    const int maxDimension = engine->maxImageDimension();
+    OcrEngine* raw = engine.data();
 
-    const QImage normalized = ocrNormalizeImage(m_image);
-    const QImage firstPass = ocrScaleImage(normalized, 1.0, maxDimension);
-    OcrResult result = engine->recognize(firstPass, m_language);
-
-    // Selection size is a poor proxy for glyph size, and on a scaled display
-    // it is not even a consistent one. Measuring the boxes the first pass
-    // produced is, so the real upscale is decided here and applied to the
-    // untouched image — rescaling the first pass's output instead would
-    // compound its interpolation loss.
-    if (result.status == OcrResult::Status::Ok ||
-        result.status == OcrResult::Status::NoTextFound) {
-        const qreal scale = result.lines.isEmpty()
-                              ? EmptyResultRetryScale
-                              : ocrIdealScale(result.lines);
-        if (qAbs(scale - 1.0) > 0.05) {
-            const QImage rescaled =
-              ocrScaleImage(normalized, scale, maxDimension);
-            if (rescaled.size() != firstPass.size()) {
-                const OcrResult secondPass =
-                  engine->recognize(rescaled, m_language);
-                if (secondPass.status == OcrResult::Status::Ok) {
-                    result = secondPass;
-                }
-            }
-        }
-    }
+    OcrResult result = ocrRunPipeline(
+      m_image,
+      [raw](const QImage& image, const QString& language) {
+          return raw->recognize(image, language);
+      },
+      m_language,
+      engine->maxImageDimension(),
+      m_effort);
 
     // Ordering is deterministic, so doing it here keeps it off the GUI
     // thread and lets the window re-join the lines for free
@@ -271,7 +275,7 @@ void OcrResultsWindow::onLanguagesProbed(const QStringList& languages)
     m_languageRow->show();
 }
 
-void OcrResultsWindow::startRecognition()
+void OcrResultsWindow::startRecognition(OcrEffort effort)
 {
     const quint64 runId = ++m_runId;
     m_statusLabel->hide();
@@ -282,7 +286,8 @@ void OcrResultsWindow::startRecognition()
     // The worker communicates only through a queued connection, which Qt
     // severs safely if this window is closed mid-recognition; the thread
     // then finishes on its own and deletes itself
-    auto* worker = new OcrWorker(m_capture.toImage(), m_language, runId);
+    auto* worker = new OcrWorker(
+      m_capture.toImage(), m_screenRect, m_language, runId, effort);
     connect(
       worker, &OcrWorker::finished, this, &OcrResultsWindow::onWorkerFinished);
     startWorker(worker, &OcrWorker::finished);
