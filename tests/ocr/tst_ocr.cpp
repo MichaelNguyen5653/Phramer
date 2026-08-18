@@ -2,6 +2,7 @@
 
 #include "tools/ocr/ocrlayout.h"
 #include "tools/ocr/ocrpreprocess.h"
+#include "tools/ocr/ocrscore.h"
 
 #include <QTest>
 
@@ -38,6 +39,32 @@ QStringList textsOf(const QVector<OcrLine>& lines)
         out.append(line.text);
     }
     return out;
+}
+
+OcrLine makeWordLine(const QStringList& words, qreal top)
+{
+    OcrLine line;
+    line.text = words.join(QLatin1Char(' '));
+    qreal x = 0;
+    for (const QString& word : words) {
+        OcrWord w;
+        w.text = word;
+        // 10px per character is arbitrary but consistent; only the text
+        // lengths matter to scoring
+        w.boundingBox = QRectF(x, top, word.size() * 10.0, 20.0);
+        x += word.size() * 10.0 + 10.0;
+        line.words.append(w);
+    }
+    line.boundingBox = QRectF(0, top, x, 20.0);
+    return line;
+}
+
+OcrResult okResult(const QVector<OcrLine>& lines)
+{
+    OcrResult result;
+    result.lines = lines;
+    result.status = OcrResult::Status::Ok;
+    return result;
 }
 
 } // namespace
@@ -161,6 +188,53 @@ private slots:
         source.fill(Qt::white);
 
         QCOMPARE(ocrScaleImage(source, 1.0, 200).size(), QSize(200, 50));
+    }
+
+    // --- ocrScoreResult --------------------------------------------------
+
+    void moreRecognizedTextScoresHigher()
+    {
+        const OcrResult rich = okResult(
+          { makeWordLine({ QStringLiteral("hello"), QStringLiteral("world") },
+                         0) });
+        const OcrResult sparse =
+          okResult({ makeWordLine({ QStringLiteral("hi") }, 0) });
+
+        QVERIFY(ocrScoreResult(rich) > ocrScoreResult(sparse));
+    }
+
+    void scatteredPunctuationLosesToRealText()
+    {
+        // A badly scaled pass comes back as stray marks spread over many
+        // lines. Line count alone would let that outscore a clean result.
+        QVector<OcrLine> junk;
+        for (int i = 0; i < 8; ++i) {
+            junk.append(makeWordLine({ QStringLiteral(".") }, i * 30.0));
+        }
+        const OcrResult clean = okResult(
+          { makeWordLine({ QStringLiteral("hello"), QStringLiteral("world") },
+                         0) });
+
+        QVERIFY(ocrScoreResult(clean) > ocrScoreResult(okResult(junk)));
+    }
+
+    void aFailedResultScoresNothing()
+    {
+        OcrResult failed =
+          okResult({ makeWordLine({ QStringLiteral("ignored") }, 0) });
+        failed.status = OcrResult::Status::EngineError;
+
+        QCOMPARE(ocrScoreResult(failed), 0);
+    }
+
+    void scoresLinesThatHaveNoWordBoxes()
+    {
+        // Line text without word boxes still counts; an engine may report it
+        OcrLine line;
+        line.text = QStringLiteral("abcd");
+        line.boundingBox = QRectF(0, 0, 40, 20);
+
+        QCOMPARE(ocrScoreResult(okResult({ line })), 6);
     }
 
     // --- ocrOrderLines ---------------------------------------------------
