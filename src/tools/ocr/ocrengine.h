@@ -38,6 +38,15 @@ struct OcrResult
         EngineError,
     };
 
+    // Where the text came from. Exact text is read back from the source
+    // application and has no recognition error in it at all, which is worth
+    // telling the user because it changes how much they should check it.
+    enum class Source
+    {
+        Recognized,
+        Exact,
+    };
+
     QString fullText;
     QVector<OcrLine> lines;
     Status status{ Status::NoTextFound };
@@ -45,6 +54,10 @@ struct OcrResult
     // User-facing wording for each status is built by the UI, so that
     // strings can be wrapped in tr() there.
     QString errorMessage;
+    Source source{ Source::Recognized };
+    // An account of what was attempted, for the user to read when a result
+    // disappoints. Shown as-is; never parsed.
+    QString diagnostics;
 };
 
 /**

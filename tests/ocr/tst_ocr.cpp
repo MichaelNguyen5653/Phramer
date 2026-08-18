@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tools/ocr/ocrlayout.h"
+#include "tools/ocr/ocrpipeline.h"
 #include "tools/ocr/ocrpreprocess.h"
 #include "tools/ocr/ocrscore.h"
 #include "tools/ocr/ocrtiling.h"
@@ -107,6 +108,50 @@ QImage twoTonePage(int darkRows, int dark, int light)
             image.setPixelColor(x, y, QColor(dark, dark, dark));
         }
     }
+    return image;
+}
+
+/**
+ * Records every image it is handed and answers from a script, so the
+ * pipeline's choices can be tested with no engine present. `reply` sees the
+ * call index and the image it was given.
+ */
+struct FakeEngine
+{
+    QVector<QSize> seen;
+    std::function<OcrResult(int index, const QImage& image)> reply;
+
+    OcrRecognizeFn fn()
+    {
+        return [this](const QImage& image, const QString&) {
+            const int index = seen.size();
+            seen.append(image.size());
+            return reply(index, image);
+        };
+    }
+};
+
+/// A result whose score is roughly `words` * 7
+OcrResult scriptedResult(int words, qreal glyphHeight)
+{
+    QVector<OcrLine> lines;
+    for (int i = 0; i < words; ++i) {
+        OcrLine line;
+        line.text = QStringLiteral("wordy");
+        OcrWord word;
+        word.text = line.text;
+        word.boundingBox = QRectF(0, i * glyphHeight * 2, 50, glyphHeight);
+        line.boundingBox = word.boundingBox;
+        line.words.append(word);
+        lines.append(line);
+    }
+    return okResult(lines);
+}
+
+QImage blankCapture(int width, int height)
+{
+    QImage image(width, height, QImage::Format_RGBA8888);
+    image.fill(Qt::white);
     return image;
 }
 
@@ -630,6 +675,110 @@ private slots:
 
         QCOMPARE(ocrAssembleText(lines, OcrTextLayout::Join),
                  QStringLiteral("the quick brown fox jumps"));
+    }
+
+    // --- ocrRunPipeline --------------------------------------------------
+
+    void aBetterLaterPassWins()
+    {
+        FakeEngine engine;
+        // The first pass measures 10px glyphs, so the second runs at 4x and
+        // reads far more
+        engine.reply = [](int index, const QImage&) {
+            return index == 0 ? scriptedResult(2, 10.0)
+                              : scriptedResult(20, 40.0);
+        };
+
+        const OcrResult result =
+          ocrRunPipeline(blankCapture(400, 300), engine.fn(), QString(), 2600);
+
+        QCOMPARE(result.status, OcrResult::Status::Ok);
+        QCOMPARE(result.lines.size(), 20);
+    }
+
+    void aWorseLaterPassIsDiscarded()
+    {
+        FakeEngine engine;
+        engine.reply = [](int index, const QImage&) {
+            return index == 0 ? scriptedResult(20, 10.0)
+                              : scriptedResult(2, 40.0);
+        };
+
+        const OcrResult result =
+          ocrRunPipeline(blankCapture(400, 300), engine.fn(), QString(), 2600);
+
+        QCOMPARE(result.lines.size(), 20);
+    }
+
+    void anEmptyFirstPassTriggersTheUpscaleRetry()
+    {
+        FakeEngine engine;
+        engine.reply = [](int index, const QImage&) {
+            return index == 0 ? OcrResult{} : scriptedResult(5, 40.0);
+        };
+
+        const OcrResult result =
+          ocrRunPipeline(blankCapture(400, 300), engine.fn(), QString(), 2600);
+
+        QVERIFY(engine.seen.size() >= 2);
+        const qreal ratio =
+          qreal(engine.seen[1].width()) / qreal(engine.seen[0].width());
+        QVERIFY2(qAbs(ratio - 4.0) < 0.05,
+                 qPrintable(QStringLiteral("ratio was %1").arg(ratio)));
+        QCOMPARE(result.lines.size(), 5);
+    }
+
+    void anOversizedPassIsTiledRatherThanShrunk()
+    {
+        FakeEngine engine;
+        // Small glyphs, so the second pass wants a large upscale on an image
+        // that is already over the limit
+        engine.reply = [](int, const QImage&) {
+            return scriptedResult(3, 8.0);
+        };
+
+        ocrRunPipeline(blankCapture(3000, 800), engine.fn(), QString(), 1000);
+
+        QVERIFY(engine.seen.size() > 1);
+        for (const QSize& size : engine.seen) {
+            QVERIFY(size.width() <= 1000);
+            QVERIFY(size.height() <= 1000);
+        }
+    }
+
+    void highEffortRunsMorePassesThanNormal()
+    {
+        FakeEngine normal;
+        normal.reply = [](int, const QImage&) {
+            return scriptedResult(30, 40.0);
+        };
+        ocrRunPipeline(blankCapture(400, 300), normal.fn(), QString(), 2600);
+
+        FakeEngine high;
+        high.reply = [](int, const QImage&) {
+            return scriptedResult(30, 40.0);
+        };
+        ocrRunPipeline(blankCapture(400, 300),
+                       high.fn(),
+                       QString(),
+                       2600,
+                       OcrEffort::High);
+
+        QVERIFY(high.seen.size() > normal.seen.size());
+    }
+
+    void everyPassIsDescribedInTheDiagnostics()
+    {
+        FakeEngine engine;
+        engine.reply = [](int, const QImage&) {
+            return scriptedResult(30, 40.0);
+        };
+
+        const OcrResult result =
+          ocrRunPipeline(blankCapture(400, 300), engine.fn(), QString(), 2600);
+
+        QVERIFY(result.diagnostics.contains(QStringLiteral("400x300")));
+        QVERIFY(result.diagnostics.contains(QStringLiteral("pass A")));
     }
 };
 

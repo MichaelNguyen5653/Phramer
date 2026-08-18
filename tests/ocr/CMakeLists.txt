@@ -9,7 +9,8 @@ add_executable(
   ${CMAKE_SOURCE_DIR}/src/tools/ocr/ocrpreprocess.cpp
   ${CMAKE_SOURCE_DIR}/src/tools/ocr/ocrlayout.cpp
   ${CMAKE_SOURCE_DIR}/src/tools/ocr/ocrscore.cpp
-  ${CMAKE_SOURCE_DIR}/src/tools/ocr/ocrtiling.cpp)
+  ${CMAKE_SOURCE_DIR}/src/tools/ocr/ocrtiling.cpp
+  ${CMAKE_SOURCE_DIR}/src/tools/ocr/ocrpipeline.cpp)
 
 set_target_properties(ocr_tests PROPERTIES AUTOMOC ON WIN32_EXECUTABLE OFF)
 target_include_directories(ocr_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
