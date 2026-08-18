@@ -3,6 +3,7 @@
 #include "tools/ocr/ocrlayout.h"
 #include "tools/ocr/ocrpreprocess.h"
 #include "tools/ocr/ocrscore.h"
+#include "tools/ocr/ocrtiling.h"
 
 #include <QTest>
 
@@ -65,6 +66,35 @@ OcrResult okResult(const QVector<OcrLine>& lines)
     result.lines = lines;
     result.status = OcrResult::Status::Ok;
     return result;
+}
+
+/// Whether every pixel of `size` falls inside at least one tile. Sampled on
+/// a coarse grid plus the four corners: a gap large enough to lose a line of
+/// text cannot hide between samples 13px apart.
+bool tilesCoverEverything(const QSize& size, const QVector<QRect>& tiles)
+{
+    QVector<QPoint> samples{ QPoint(0, 0),
+                             QPoint(size.width() - 1, 0),
+                             QPoint(0, size.height() - 1),
+                             QPoint(size.width() - 1, size.height() - 1) };
+    for (int y = 0; y < size.height(); y += 13) {
+        for (int x = 0; x < size.width(); x += 13) {
+            samples.append(QPoint(x, y));
+        }
+    }
+    for (const QPoint& point : samples) {
+        bool covered = false;
+        for (const QRect& tile : tiles) {
+            if (tile.contains(point)) {
+                covered = true;
+                break;
+            }
+        }
+        if (!covered) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -235,6 +265,109 @@ private slots:
         line.boundingBox = QRectF(0, 0, 40, 20);
 
         QCOMPARE(ocrScoreResult(okResult({ line })), 6);
+    }
+
+    // --- ocrPlanTiles ----------------------------------------------------
+
+    void smallImagesAreASingleTile()
+    {
+        const QVector<QRect> tiles = ocrPlanTiles(QSize(800, 600), 2600);
+
+        QCOMPARE(tiles.size(), 1);
+        QCOMPARE(tiles.first(), QRect(0, 0, 800, 600));
+    }
+
+    void anUnlimitedEngineIsASingleTile()
+    {
+        const QVector<QRect> tiles = ocrPlanTiles(QSize(9000, 9000), 0);
+
+        QCOMPARE(tiles.size(), 1);
+        QCOMPARE(tiles.first(), QRect(0, 0, 9000, 9000));
+    }
+
+    void oversizedImagesAreSplitWithoutGaps()
+    {
+        const QSize size(5000, 3000);
+        const QVector<QRect> tiles = ocrPlanTiles(size, 2000);
+
+        QVERIFY(tiles.size() > 1);
+        for (const QRect& tile : tiles) {
+            QVERIFY(tile.width() <= 2000);
+            QVERIFY(tile.height() <= 2000);
+            QVERIFY(QRect(QPoint(0, 0), size).contains(tile));
+        }
+        QVERIFY(tilesCoverEverything(size, tiles));
+    }
+
+    void adjacentTilesOverlap()
+    {
+        // A line of text sitting on a seam has to be whole in one tile or
+        // the merge has nothing to prefer
+        const QVector<QRect> tiles = ocrPlanTiles(QSize(4000, 500), 2000);
+
+        QVERIFY(tiles.size() >= 2);
+        QVERIFY(tiles[0].right() > tiles[1].left());
+    }
+
+    // --- ocrScaleWithinTileBudget ----------------------------------------
+
+    void aScaleThatAlreadyFitsIsUntouched()
+    {
+        QCOMPARE(ocrScaleWithinTileBudget(QSize(400, 300), 2.0, 2600), 2.0);
+    }
+
+    void anExtremeScaleIsReducedToTheTileBudget()
+    {
+        const QSize size(3840, 2160);
+        const qreal scale = ocrScaleWithinTileBudget(size, 6.0, 2600);
+
+        QVERIFY(scale < 6.0);
+        const QSize scaled(qRound(size.width() * scale),
+                           qRound(size.height() * scale));
+        QVERIFY(ocrPlanTiles(scaled, 2600).size() <= OcrMaxTiles);
+    }
+
+    // --- ocrRemapLines ---------------------------------------------------
+
+    void remappingTranslatesLineAndWordBoxes()
+    {
+        const QVector<OcrLine> remapped =
+          ocrRemapLines({ makeWordLine({ QStringLiteral("abc") }, 5.0) },
+                        QPointF(100, 200));
+
+        QCOMPARE(remapped.first().boundingBox.left(), 100.0);
+        QCOMPARE(remapped.first().boundingBox.top(), 205.0);
+        QCOMPARE(remapped.first().words.first().boundingBox.left(), 100.0);
+        QCOMPARE(remapped.first().words.first().boundingBox.top(), 205.0);
+    }
+
+    // --- ocrMergeTiledLines ----------------------------------------------
+
+    void seamDuplicatesCollapseToTheLongerReading()
+    {
+        // The same line seen through two overlapping tiles: one tile saw all
+        // of it, the other only the part inside its own bounds
+        QVector<OcrLine> lines{
+            makeLine(QStringLiteral("full sentence here"),
+                     QRectF(0, 0, 200, 20)),
+            makeLine(QStringLiteral("full sen"), QRectF(0, 0, 190, 20)),
+        };
+
+        const QVector<OcrLine> merged = ocrMergeTiledLines(lines);
+
+        QCOMPARE(merged.size(), 1);
+        QCOMPARE(merged.first().text, QStringLiteral("full sentence here"));
+    }
+
+    void distinctNeighbouringLinesAreNotMerged()
+    {
+        QVector<OcrLine> lines{
+            makeLine(QStringLiteral("first"), QRectF(0, 0, 100, 20)),
+            makeLine(QStringLiteral("second"), QRectF(0, 24, 100, 20)),
+            makeLine(QStringLiteral("beside"), QRectF(120, 0, 100, 20)),
+        };
+
+        QCOMPARE(ocrMergeTiledLines(lines).size(), 3);
     }
 
     // --- ocrOrderLines ---------------------------------------------------

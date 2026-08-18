@@ -68,7 +68,9 @@ target_sources(
           ocr/ocrlayout.h
           ocr/ocrlayout.cpp
           ocr/ocrscore.h
-          ocr/ocrscore.cpp)
+          ocr/ocrscore.cpp
+          ocr/ocrtiling.h
+          ocr/ocrtiling.cpp)
 if (WIN32)
   target_sources(
     flameshot
