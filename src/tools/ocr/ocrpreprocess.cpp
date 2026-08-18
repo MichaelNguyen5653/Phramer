@@ -18,24 +18,13 @@ constexpr qreal IdealGlyphHeight = 40.0;
 constexpr qreal MinScale = 0.5;
 constexpr qreal MaxScale = 6.0;
 
-bool hasDarkBackground(const QImage& image)
-{
-    // Mean luminance of a small resample is enough to classify; exact
-    // statistics are not needed
-    const QImage sample =
-      image.scaled(32, 32, Qt::IgnoreAspectRatio, Qt::FastTransformation)
-        .convertToFormat(QImage::Format_Grayscale8);
-    const uchar* bits = sample.constBits();
-    const qsizetype size = sample.sizeInBytes();
-    if (size <= 0) {
-        return false;
-    }
-    qint64 sum = 0;
-    for (qsizetype i = 0; i < size; ++i) {
-        sum += bits[i];
-    }
-    return (sum / size) < 100;
-}
+// Luminance histogram resolution for the dark-ground test. Coarse on
+// purpose: it is looking for the dominant tonal region, not a mode.
+constexpr int HistogramBuckets = 64;
+
+// The dominant tone must fall in the bottom third of the range, and the
+// median pixel must be below this, before the capture is inverted
+constexpr int DarkMedianCeiling = 110;
 
 } // namespace
 
@@ -57,6 +46,112 @@ QImage ocrPadImage(const QImage& image, int minSide, int border)
     return padded;
 }
 
+bool ocrIsDarkBackground(const QImage& image)
+{
+    if (image.isNull()) {
+        return false;
+    }
+
+    // A resample is enough: this is a question about large regions, and the
+    // smooth filter keeps a thin bright band from vanishing entirely
+    const QImage sample =
+      image.scaled(64, 64, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+        .convertToFormat(QImage::Format_Grayscale8);
+
+    int buckets[HistogramBuckets] = { 0 };
+    int total = 0;
+    for (int y = 0; y < sample.height(); ++y) {
+        const uchar* row = sample.constScanLine(y);
+        for (int x = 0; x < sample.width(); ++x) {
+            buckets[row[x] * HistogramBuckets / 256] += 1;
+            ++total;
+        }
+    }
+    if (total == 0) {
+        return false;
+    }
+
+    int dominant = 0;
+    int seen = 0;
+    int median = 0;
+    bool haveMedian = false;
+    for (int i = 0; i < HistogramBuckets; ++i) {
+        if (buckets[i] > buckets[dominant]) {
+            dominant = i;
+        }
+        seen += buckets[i];
+        if (!haveMedian && seen * 2 >= total) {
+            median = i * 256 / HistogramBuckets;
+            haveMedian = true;
+        }
+    }
+
+    return dominant < HistogramBuckets / 3 && median < DarkMedianCeiling;
+}
+
+QImage ocrBinarize(const QImage& image)
+{
+    if (image.isNull()) {
+        return image;
+    }
+
+    const QImage grey = image.convertToFormat(QImage::Format_Grayscale8);
+
+    qint64 histogram[256] = { 0 };
+    qint64 total = 0;
+    for (int y = 0; y < grey.height(); ++y) {
+        const uchar* row = grey.constScanLine(y);
+        for (int x = 0; x < grey.width(); ++x) {
+            histogram[row[x]] += 1;
+            ++total;
+        }
+    }
+    if (total == 0) {
+        return image;
+    }
+
+    // Otsu's method: the threshold that maximizes the variance between the
+    // two populations it separates
+    qint64 sum = 0;
+    for (int i = 0; i < 256; ++i) {
+        sum += qint64(i) * histogram[i];
+    }
+    qint64 belowWeight = 0;
+    qint64 belowSum = 0;
+    qreal bestVariance = -1.0;
+    int threshold = 127;
+    for (int i = 0; i < 256; ++i) {
+        belowWeight += histogram[i];
+        if (belowWeight == 0) {
+            continue;
+        }
+        const qint64 aboveWeight = total - belowWeight;
+        if (aboveWeight == 0) {
+            break;
+        }
+        belowSum += qint64(i) * histogram[i];
+        const qreal belowMean = qreal(belowSum) / qreal(belowWeight);
+        const qreal aboveMean = qreal(sum - belowSum) / qreal(aboveWeight);
+        const qreal variance = qreal(belowWeight) * qreal(aboveWeight) *
+                               (belowMean - aboveMean) *
+                               (belowMean - aboveMean);
+        if (variance > bestVariance) {
+            bestVariance = variance;
+            threshold = i;
+        }
+    }
+
+    QImage flat(grey.size(), QImage::Format_Grayscale8);
+    for (int y = 0; y < grey.height(); ++y) {
+        const uchar* source = grey.constScanLine(y);
+        uchar* target = flat.scanLine(y);
+        for (int x = 0; x < grey.width(); ++x) {
+            target[x] = source[x] > threshold ? 255 : 0;
+        }
+    }
+    return flat.convertToFormat(QImage::Format_RGBA8888);
+}
+
 QImage ocrNormalizeImage(const QImage& image)
 {
     if (image.isNull()) {
@@ -68,7 +163,7 @@ QImage ocrNormalizeImage(const QImage& image)
     // The engine is trained mostly on dark-on-light text; terminals and dark
     // themes recognize much better inverted. Inverting before padding keeps
     // the padded border the same colour as the background it extends.
-    if (hasDarkBackground(prepared)) {
+    if (ocrIsDarkBackground(prepared)) {
         prepared.invertPixels();
     }
 

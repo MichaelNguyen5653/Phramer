@@ -97,6 +97,19 @@ bool tilesCoverEverything(const QSize& size, const QVector<QRect>& tiles)
     return true;
 }
 
+/// A 100x100 image whose top `darkRows` rows are `dark` and the rest `light`
+QImage twoTonePage(int darkRows, int dark, int light)
+{
+    QImage image(100, 100, QImage::Format_RGBA8888);
+    image.fill(QColor(light, light, light));
+    for (int y = 0; y < darkRows; ++y) {
+        for (int x = 0; x < 100; ++x) {
+            image.setPixelColor(x, y, QColor(dark, dark, dark));
+        }
+    }
+    return image;
+}
+
 } // namespace
 
 class OcrTests : public QObject
@@ -218,6 +231,56 @@ private slots:
         source.fill(Qt::white);
 
         QCOMPARE(ocrScaleImage(source, 1.0, 200).size(), QSize(200, 50));
+    }
+
+    // --- ocrIsDarkBackground ---------------------------------------------
+
+    void aDarkTerminalIsDark()
+    {
+        QVERIFY(ocrIsDarkBackground(twoTonePage(90, 18, 255)));
+    }
+
+    void aLightPageIsNotDark()
+    {
+        QVERIFY(!ocrIsDarkBackground(twoTonePage(10, 0, 255)));
+    }
+
+    void aMostlyDarkPageWithABrightImageIsDark()
+    {
+        // Mean luminance here is about 131, so a single-mean test calls this
+        // light and leaves a dark page uninverted. The dominant tone and the
+        // median both say otherwise.
+        QVERIFY(ocrIsDarkBackground(twoTonePage(55, 30, 255)));
+    }
+
+    void anEvenlyMidTonedPageIsNotDark()
+    {
+        // Neither condition holds: the dominant tone is well above the
+        // bottom third and the median is not low
+        QVERIFY(!ocrIsDarkBackground(twoTonePage(50, 120, 200)));
+    }
+
+    // --- ocrBinarize -----------------------------------------------------
+
+    void binarizingLeavesOnlyTwoTones()
+    {
+        // A ramp stands in for antialiased glyph edges
+        QImage ramp(256, 8, QImage::Format_RGBA8888);
+        for (int x = 0; x < 256; ++x) {
+            for (int y = 0; y < 8; ++y) {
+                ramp.setPixelColor(x, y, QColor(x, x, x));
+            }
+        }
+
+        const QImage flat = ocrBinarize(ramp);
+
+        QCOMPARE(flat.size(), ramp.size());
+        for (int x = 0; x < 256; ++x) {
+            const int value = flat.pixelColor(x, 0).red();
+            QVERIFY(value == 0 || value == 255);
+        }
+        QCOMPARE(flat.pixelColor(0, 0), QColor(Qt::black));
+        QCOMPARE(flat.pixelColor(255, 0), QColor(Qt::white));
     }
 
     // --- ocrScoreResult --------------------------------------------------

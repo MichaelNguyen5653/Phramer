@@ -19,6 +19,34 @@
 QImage ocrPadImage(const QImage& image, int minSide = 64, int border = 8);
 
 /**
+ * @brief Whether this capture is light text on a dark ground.
+ *
+ * The engine is trained mostly on dark-on-light text, so a terminal or a
+ * dark theme recognizes markedly better inverted — and a page inverted
+ * wrongly recognizes markedly worse, so the test has to be hard to fool. A
+ * single mean is not: one large region of the opposite tone drags it across
+ * the threshold. This requires both that the most common tone is a dark one
+ * and that the median pixel is dark, so a mixed-brightness capture is left
+ * alone rather than inverted on the strength of its bright half.
+ *
+ * Exposed for testing; ocrNormalizeImage() is the intended entry point.
+ */
+bool ocrIsDarkBackground(const QImage& image);
+
+/**
+ * @brief Flatten a capture to pure black text on pure white.
+ *
+ * Subpixel antialiasing leaves glyph edges as a spread of intermediate
+ * tones, which at small sizes is most of the glyph. Thresholding at the
+ * split that best separates the image's two tonal populations (Otsu's
+ * method) restores the hard edges the recognizer expects. It is not always
+ * an improvement — on photographic backgrounds it destroys detail — so the
+ * pipeline runs it as a candidate pass and keeps it only if it scores
+ * better.
+ */
+QImage ocrBinarize(const QImage& image);
+
+/**
  * @brief Put a screenshot crop into the form the engine expects, unscaled.
  *
  * Converts to QImage::Format_RGBA8888, inverts light-on-dark captures
