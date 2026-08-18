@@ -202,6 +202,17 @@ OcrResultsWindow::OcrResultsWindow(const QPixmap& capture,
 
     auto* buttonLayout = new QHBoxLayout();
     buttonLayout->addStretch();
+    m_tryHarderButton = new QPushButton(tr("Try harder"), this);
+    m_tryHarderButton->setToolTip(
+      tr("Recognize again with every strategy the tool has, including "
+         "thresholding and a larger upscale. Slower."));
+    // Nothing to improve on until a disappointing result exists
+    m_tryHarderButton->setEnabled(false);
+    connect(m_tryHarderButton,
+            &QPushButton::clicked,
+            this,
+            &OcrResultsWindow::retryHarder);
+    buttonLayout->addWidget(m_tryHarderButton);
     m_copyButton = new QPushButton(tr("Copy all"), this);
     connect(
       m_copyButton, &QPushButton::clicked, this, &OcrResultsWindow::copyAll);
@@ -232,6 +243,11 @@ OcrResultsWindow::OcrResultsWindow(const QPixmap& capture,
 void OcrResultsWindow::copyAll()
 {
     QApplication::clipboard()->setText(m_textEdit->toPlainText());
+}
+
+void OcrResultsWindow::retryHarder()
+{
+    startRecognition(OcrEffort::High);
 }
 
 void OcrResultsWindow::onLanguageChanged(int index)
@@ -281,6 +297,7 @@ void OcrResultsWindow::startRecognition(OcrEffort effort)
     m_statusLabel->hide();
     m_textEdit->setPlainText(QString());
     m_hasResult = false;
+    m_tryHarderButton->setEnabled(false);
     m_busyDelay->start();
 
     // The worker communicates only through a queued connection, which Qt
@@ -307,6 +324,20 @@ void OcrResultsWindow::onWorkerFinished(const OcrResult& result, quint64 runId)
 
     m_result = result;
     m_hasResult = true;
+
+    // Once there is a result, what the user needs to know is where it came
+    // from — advice about framing the capture no longer applies to it
+    const bool exact = result.source == OcrResult::Source::Exact;
+    m_hintLabel->setText(exact
+                           ? tr("Exact text, read from the window itself.")
+                           : tr("Recognized from the captured image. Capture "
+                                "close up and unblurred for the best result."));
+    m_hintLabel->setToolTip(result.diagnostics);
+    m_statusLabel->setToolTip(result.diagnostics);
+
+    // Exact text has no recognition error in it, so there is nothing a
+    // harder attempt could improve
+    m_tryHarderButton->setEnabled(!exact);
 
     refreshText();
     if (result.status != OcrResult::Status::Ok) {

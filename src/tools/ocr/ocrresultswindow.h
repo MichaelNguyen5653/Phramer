@@ -80,6 +80,7 @@ public:
 
 private slots:
     void copyAll();
+    void retryHarder();
     void onLanguageChanged(int index);
     void onLayoutChanged(int index);
     void onLanguagesProbed(const QStringList& languages);
@@ -107,6 +108,7 @@ private:
     QLabel* m_hintLabel{ nullptr };
     QLabel* m_statusLabel{ nullptr };
     QPushButton* m_copyButton{ nullptr };
+    QPushButton* m_tryHarderButton{ nullptr };
     LoadSpinner* m_spinner{ nullptr };
     QTimer* m_busyDelay{ nullptr };
 
