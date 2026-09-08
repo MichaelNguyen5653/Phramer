@@ -228,6 +228,20 @@ void TextTool::process(QPainter& painter, const QPixmap& pixmap)
     }
 }
 
+// Picking tests the pixels a tool paints, and process() paints only glyphs.
+// Without this the gaps between letters and the whole interior of the box
+// are dead space, so the object can only be grabbed by landing on a letter
+// stroke. Claiming the box makes the grabbable area match the outline
+// drawObjectSelection draws, which is what the user is aiming at.
+void TextTool::drawSearchArea(QPainter& painter, const QPixmap& pixmap)
+{
+    Q_UNUSED(pixmap)
+    if (m_text.isEmpty()) {
+        return;
+    }
+    painter.fillRect(m_textArea, Qt::black);
+}
+
 void TextTool::drawObjectSelection(QPainter& painter)
 {
     if (m_text.isEmpty()) {

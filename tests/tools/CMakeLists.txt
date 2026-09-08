@@ -37,3 +37,36 @@ if(WIN32)
       ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
 endif()
+
+# Picking is exercised through CaptureToolObjects, which only reaches as far
+# as the CaptureTool interface. TextTool itself is not linked here: it pulls
+# in ConfigHandler, which reaches ValueHandler and from there every tool.
+add_executable(
+  tool_picking_tests
+  tst_toolpicking.cpp
+  ${CMAKE_SOURCE_DIR}/src/tools/capturetool.h
+  ${CMAKE_SOURCE_DIR}/src/widgets/capture/capturetoolobjects.cpp
+  ${CMAKE_SOURCE_DIR}/src/tools/capturecontext.cpp
+  ${CMAKE_SOURCE_DIR}/src/core/capturerequest.cpp)
+
+set_target_properties(tool_picking_tests PROPERTIES AUTOMOC ON
+                                                    WIN32_EXECUTABLE OFF)
+target_include_directories(tool_picking_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(
+  tool_picking_tests
+  PRIVATE project_options Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
+          Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Test)
+
+if(MSVC)
+  target_link_options(tool_picking_tests PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
+
+add_test(NAME tool_picking_tests COMMAND tool_picking_tests)
+
+if(WIN32)
+  set_tests_properties(
+    tool_picking_tests
+    PROPERTIES
+      ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
+endif()
