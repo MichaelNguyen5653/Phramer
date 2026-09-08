@@ -48,6 +48,10 @@ CaptureTool* AcceptTool::copy(QObject* parent)
 
 void AcceptTool::pressed(CaptureContext& context)
 {
+    // The selected object's outline is painted into the pixmap the capture
+    // is exported from, so it has to be taken back out before the capture
+    // is marked done
+    emit requestAction(REQ_CLEAR_SELECTION);
     emit requestAction(REQ_CAPTURE_DONE_OK);
     if (context.request.tasks() & CaptureRequest::PIN) {
         QRect geometry = context.selection;

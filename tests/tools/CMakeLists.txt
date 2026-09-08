@@ -70,3 +70,40 @@ if(WIN32)
       ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
 endif()
+
+# AcceptTool reaches no further than CaptureContext. The other export tools
+# are not linked here: AppLauncher needs AppLauncherWidget, which pulls in
+# ConfigHandler and from there every tool.
+add_executable(
+  export_signal_tests
+  tst_exportsignals.cpp
+  ${CMAKE_SOURCE_DIR}/src/tools/capturetool.h
+  ${CMAKE_SOURCE_DIR}/src/tools/accept/accepttool.cpp
+  ${CMAKE_SOURCE_DIR}/src/tools/abstractactiontool.cpp
+  ${CMAKE_SOURCE_DIR}/src/tools/capturecontext.cpp
+  ${CMAKE_SOURCE_DIR}/src/core/capturerequest.cpp
+  # Leaf helpers AcceptTool::icon() resolves against
+  ${CMAKE_SOURCE_DIR}/src/utils/colorutils.cpp
+  ${CMAKE_SOURCE_DIR}/src/utils/pathinfo.cpp)
+
+set_target_properties(export_signal_tests PROPERTIES AUTOMOC ON
+                                                     WIN32_EXECUTABLE OFF)
+target_include_directories(export_signal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(
+  export_signal_tests
+  PRIVATE project_options Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
+          Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Test)
+
+if(MSVC)
+  target_link_options(export_signal_tests PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
+
+add_test(NAME export_signal_tests COMMAND export_signal_tests)
+
+if(WIN32)
+  set_tests_properties(
+    export_signal_tests
+    PROPERTIES
+      ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
+endif()

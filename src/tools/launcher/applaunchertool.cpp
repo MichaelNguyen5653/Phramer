@@ -45,6 +45,9 @@ CaptureTool* AppLauncher::copy(QObject* parent)
 
 void AppLauncher::pressed(CaptureContext& context)
 {
+    // Must precede the grab below: the request is delivered synchronously and
+    // is what repaints the screenshot without the selected object's outline
+    emit requestAction(REQ_CLEAR_SELECTION);
     capture = context.selectedScreenshotArea();
     emit requestAction(REQ_CAPTURE_DONE_OK);
     emit requestAction(REQ_ADD_EXTERNAL_WIDGETS);
