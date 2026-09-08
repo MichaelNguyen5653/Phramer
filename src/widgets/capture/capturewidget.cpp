@@ -19,6 +19,7 @@
 #include "utils/screencoordinates.h"
 #include "utils/screengrabber.h"
 #include "utils/screenshotsaver.h"
+#include "utils/toolsizewheel.h"
 #include "widgets/capture/colorpicker.h"
 #include "widgets/capture/hovereventfilter.h"
 #include "widgets/capture/modificationcommand.h"
@@ -46,7 +47,6 @@
 #endif
 
 #define MOUSE_DISTANCE_TO_START_MOVING 3
-auto const MOUSE_WHEEL_TRESHOLD = 60;
 
 // CaptureWidget is the main component used to capture the screen. It contains
 // an area of selection with its respective buttons.
@@ -1379,40 +1379,21 @@ void CaptureWidget::keyReleaseEvent(QKeyEvent* e)
 
 void CaptureWidget::wheelEvent(QWheelEvent* e)
 {
-    /* Mouse scroll usually gives value 120, not more or less, just how many
-     * times.
-     * Touchpad gives the value 2 or more (usually 2-8), it doesn't give
-     * too big values like mouse wheel on normal scrolling, so it is almost
-     * impossible to scroll. It's easier to calculate number of requests and do
-     * not accept events faster that one in 200ms.
-     * */
-    int toolSizeOffset = 0;
-    if (qAbs(e->angleDelta().y()) >= MOUSE_WHEEL_TRESHOLD) {
-        auto const delta =
-          qMax(qMin(e->angleDelta().y() / MOUSE_WHEEL_TRESHOLD, 1), -1);
-        if (activeButtonTool() &&
-            activeButtonTool()->handleMouseWheelEvent(
-              delta, m_adjustmentButtonPressed, m_context)) {
-            this->repaint();
-            return;
-        }
-        toolSizeOffset = delta;
-    } else {
-        // touchpad scroll
-        qint64 current = QDateTime::currentMSecsSinceEpoch();
-        if ((current - m_lastMouseWheel) > 200) {
-            if (e->angleDelta().y() > 0) {
-                toolSizeOffset = 1;
-            } else if (e->angleDelta().y() < 0) {
-                toolSizeOffset = -1;
-            }
-            m_lastMouseWheel = current;
-        } else {
-            return;
-        }
+    const ToolSizeWheel::Step step =
+      ToolSizeWheel::evaluate(e->angleDelta().y(),
+                              QDateTime::currentMSecsSinceEpoch(),
+                              m_lastMouseWheel);
+    if (!step.accepted) {
+        return;
+    }
+    if (step.fromWheel && activeButtonTool() &&
+        activeButtonTool()->handleMouseWheelEvent(
+          step.delta, m_adjustmentButtonPressed, m_context)) {
+        this->repaint();
+        return;
     }
 
-    setToolSize(m_context.toolSize + toolSizeOffset);
+    setToolSize(m_context.toolSize + step.delta);
 }
 
 void CaptureWidget::resizeEvent(QResizeEvent* e)

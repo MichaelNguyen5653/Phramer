@@ -54,6 +54,11 @@ public:
     CaptureTool::Type activeToolType() const { return m_activeToolType; }
 
     void setDrawColor(const QColor& color);
+    // The range the toolbar's size field offers, kept here so the field and
+    // the canvas cannot drift apart
+    static constexpr int MinToolSize = 1;
+    static constexpr int MaxToolSize = 100;
+
     void setToolSize(int size);
     int toolSize() const { return m_context.toolSize; }
 
@@ -70,6 +75,9 @@ signals:
     // The drawing colour was changed from the canvas itself, so the window's
     // colour swatch can follow
     void drawColorChanged(const QColor& color);
+    // Likewise for the size, which the wheel and the keyboard shortcuts both
+    // change without going through the toolbar
+    void toolSizeChanged(int size);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -77,6 +85,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
@@ -105,6 +114,8 @@ private:
     // Prototype for the tool type currently chosen in the toolbar. Placed
     // objects are copies of it, exactly as in the capture editor.
     QPointer<CaptureTool> m_toolPrototype;
+    // Rate limiting state for touchpad wheel events
+    qint64 m_lastWheelMs{ 0 };
     CaptureTool::Type m_activeToolType{ CaptureTool::NONE };
 
     // The object currently being drawn or edited

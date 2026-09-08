@@ -29,6 +29,8 @@ target_sources(
           colorutils.cpp
           history.cpp
           strfparse.cpp
+          toolsizewheel.h
+          toolsizewheel.cpp
 )
 
 IF (UNIX AND NOT APPLE)

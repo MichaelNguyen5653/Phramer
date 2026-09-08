@@ -241,6 +241,18 @@ void EditorWindow::addImage(const QPixmap& image)
     connect(canvas, &EditorCanvas::drawColorChanged, this, [this]() {
         updateColorSwatch();
     });
+    // The wheel and the size shortcuts change the size on the canvas, so the
+    // field has to follow rather than be the only way to set it
+    connect(
+      canvas, &EditorCanvas::toolSizeChanged, this, [this, canvas](int size) {
+          // The toolbar is shared, so only the visible canvas may drive it
+          if (currentCanvas() != canvas) {
+              return;
+          }
+          m_sizeBox->blockSignals(true);
+          m_sizeBox->setValue(size);
+          m_sizeBox->blockSignals(false);
+      });
     // The canvas is fixed to the image size; the scroll area handles captures
     // larger than the window
     auto* scroll = new QScrollArea(m_pages);
@@ -373,7 +385,7 @@ void EditorWindow::buildToolBar()
     sizeLabel->setContentsMargins(8, 0, 4, 0);
     bar->addWidget(sizeLabel);
     m_sizeBox = new QSpinBox(bar);
-    m_sizeBox->setRange(1, 100);
+    m_sizeBox->setRange(EditorCanvas::MinToolSize, EditorCanvas::MaxToolSize);
     m_sizeBox->setValue(ConfigHandler().drawThickness());
     m_sizeBox->setToolTip(tr("Thickness of the active tool"));
     connect(m_sizeBox, &QSpinBox::valueChanged, this, [this](int value) {

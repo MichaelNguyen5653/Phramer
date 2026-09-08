@@ -5,13 +5,17 @@
 #include "core/qguiappcurrentscreen.h"
 #include "tools/toolfactory.h"
 #include "utils/confighandler.h"
+#include "utils/toolsizewheel.h"
 #include "widgets/capture/colorpicker.h"
 
+#include <QDateTime>
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScreen>
 #include <QUndoCommand>
+#include <QWheelEvent>
 
 // Matches CaptureWidget: an object only starts moving once the drag clears
 // this many pixels, so a click that selects does not also nudge
@@ -157,6 +161,10 @@ void EditorCanvas::setDrawColor(const QColor& color)
 
 void EditorCanvas::setToolSize(int size)
 {
+    size = qBound(MinToolSize, size, MaxToolSize);
+    if (m_context.toolSize == size) {
+        return;
+    }
     m_context.toolSize = size;
     if (m_activeToolType != CaptureTool::NONE) {
         ConfigHandler().setToolSize(m_activeToolType, size);
@@ -177,6 +185,7 @@ void EditorCanvas::setToolSize(int size)
         m_selectedIndex = reselect;
         renderObjects();
     }
+    emit toolSizeChanged(size);
 }
 
 void EditorCanvas::restoreObjects(const CaptureToolObjects& objects)
@@ -284,6 +293,38 @@ void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
     m_activeTool->setEditMode(true);
     renderObjects();
     handleToolSignal(CaptureTool::REQ_ADD_CHILD_WIDGET);
+}
+
+void EditorCanvas::wheelEvent(QWheelEvent* event)
+{
+    // In select mode the canvas draws nothing, so the wheel belongs to the
+    // scroll area this widget lives in rather than to a tool
+    if (m_activeToolType == CaptureTool::NONE) {
+        event->ignore();
+        return;
+    }
+    event->accept();
+
+    const ToolSizeWheel::Step step =
+      ToolSizeWheel::evaluate(event->angleDelta().y(),
+                              QDateTime::currentMSecsSinceEpoch(),
+                              m_lastWheelMs);
+    if (!step.accepted) {
+        return;
+    }
+
+    // Same order as the capture overlay: a tool that wants the wheel for
+    // itself, as the circle counter does while Ctrl is held, gets it first
+    const bool adjustmentHeld =
+      QGuiApplication::keyboardModifiers().testFlag(Qt::ControlModifier);
+    if (step.fromWheel && m_toolPrototype &&
+        m_toolPrototype->handleMouseWheelEvent(
+          step.delta, adjustmentHeld, m_context)) {
+        update();
+        return;
+    }
+
+    setToolSize(m_context.toolSize + step.delta);
 }
 
 void EditorCanvas::mouseMoveEvent(QMouseEvent* event)

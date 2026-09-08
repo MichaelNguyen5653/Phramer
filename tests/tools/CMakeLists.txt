@@ -107,3 +107,29 @@ if(WIN32)
       ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
 endif()
+
+# Pure arithmetic with no Qt object dependencies, so it needs no QApplication
+add_executable(
+  wheel_tests
+  tst_toolsizewheel.cpp
+  ${CMAKE_SOURCE_DIR}/src/utils/toolsizewheel.cpp)
+
+set_target_properties(wheel_tests PROPERTIES AUTOMOC ON WIN32_EXECUTABLE OFF)
+target_include_directories(wheel_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(
+  wheel_tests PRIVATE project_options Qt${QT_VERSION_MAJOR}::Core
+                      Qt${QT_VERSION_MAJOR}::Test)
+
+if(MSVC)
+  target_link_options(wheel_tests PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
+
+add_test(NAME wheel_tests COMMAND wheel_tests)
+
+if(WIN32)
+  set_tests_properties(
+    wheel_tests
+    PROPERTIES
+      ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
+endif()
