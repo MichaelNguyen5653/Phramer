@@ -147,9 +147,13 @@ void ColorPickerWidget::initColorPicker()
     }
 }
 
+// The leading invalid QColor is the "pick a custom colour" slot. White and
+// black sit next to it so the two most common annotation colours are a
+// short flick from where the wheel opens.
 QVector<QColor> ColorPickerWidget::defaultSmallColorPalette = {
-    QColor(),      Qt::darkRed, Qt::red,  Qt::yellow,  Qt::green,
-    Qt::darkGreen, Qt::cyan,    Qt::blue, Qt::magenta, Qt::darkMagenta
+    QColor(), Qt::white,  Qt::black,   Qt::darkRed,
+    Qt::red,  Qt::yellow, Qt::green,   Qt::darkGreen,
+    Qt::cyan, Qt::blue,   Qt::magenta, Qt::darkMagenta
 };
 
 QVector<QColor> ColorPickerWidget::defaultLargeColorPalette = {
