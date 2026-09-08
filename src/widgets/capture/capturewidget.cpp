@@ -46,7 +46,6 @@
 #endif
 
 #define MOUSE_DISTANCE_TO_START_MOVING 3
-
 auto const MOUSE_WHEEL_TRESHOLD = 60;
 
 // CaptureWidget is the main component used to capture the screen. It contains
@@ -859,7 +858,8 @@ void CaptureWidget::showColorPicker(const QPoint& pos)
 bool CaptureWidget::startDrawObjectTool(const QPoint& pos)
 {
     if (activeButtonToolType() != CaptureTool::NONE &&
-        activeButtonToolType() != CaptureTool::TYPE_MOVESELECTION) {
+        activeButtonToolType() != CaptureTool::TYPE_MOVESELECTION &&
+        activeButtonToolType() != CaptureTool::TYPE_MOVE_OBJECT) {
         if (commitCurrentTool()) {
             return false;
         }
@@ -898,7 +898,13 @@ int CaptureWidget::selectToolItemAtPos(const QPoint& pos)
     // Try to select existing tool, "-1" - no active tool
     int activeLayerIndex = -1;
     auto selectionMouseSide = m_selection->getMouseSide(pos);
-    if (m_activeButton.isNull() &&
+    // Any other active button means the user is drawing, not picking. The
+    // hand mode is the exception: selecting an existing object is the whole
+    // point of the button being down.
+    const bool pickingAllowed =
+      m_activeButton.isNull() ||
+      activeButtonToolType() == CaptureTool::TYPE_MOVE_OBJECT;
+    if (pickingAllowed &&
         m_captureToolObjects.captureToolObjects().size() > 0 &&
         (selectionMouseSide == SelectionWidget::NO_SIDE ||
          selectionMouseSide == SelectionWidget::CENTER)) {
@@ -1206,7 +1212,10 @@ void CaptureWidget::mouseMoveEvent(QMouseEvent* e)
     }
 
     // The rest assumes that left mouse button is clicked
-    if (!m_activeButton && m_panel->activeLayerIndex() >= 0) {
+    const bool movingObjects =
+      !m_activeButton ||
+      activeButtonToolType() == CaptureTool::TYPE_MOVE_OBJECT;
+    if (movingObjects && m_panel->activeLayerIndex() >= 0) {
         // Move existing object
         if (!m_startMove) {
             // Check for the minimal offset to start moving an object
@@ -2010,6 +2019,13 @@ void CaptureWidget::updateCursor()
 {
     if (m_colorPicker && m_colorPicker->isVisible()) {
         setCursor(Qt::ArrowCursor);
+    } else if (m_activeToolIsMoved) {
+        // A drag of a placed object owns the cursor however it was started.
+        // The selection widget unsets its own cursor while it ignores the
+        // mouse, so this reaches inside the selection as well.
+        setCursor(Qt::ClosedHandCursor);
+    } else if (activeButtonToolType() == CaptureTool::TYPE_MOVE_OBJECT) {
+        setCursor(Qt::OpenHandCursor);
     } else if (m_activeButton != nullptr &&
                activeButtonToolType() != CaptureTool::TYPE_MOVESELECTION) {
         setCursor(Qt::CrossCursor);

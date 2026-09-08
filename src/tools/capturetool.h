@@ -56,6 +56,7 @@ public:
         TYPE_OCR = 25,
         TYPE_OPEN_IN_EDITOR = 26,
         TYPE_SHAPE = 27,
+        TYPE_MOVE_OBJECT = 28,
     };
     Q_ENUM(Type);
 

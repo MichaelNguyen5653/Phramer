@@ -230,7 +230,11 @@ static QMap<QString, QSharedPointer<KeySequence>> recognizedShortcuts = {
     SHORTCUT("TYPE_REDO"                ,   "Ctrl+Shift+Z"          ),
     SHORTCUT("TYPE_TEXT"                ,   "T"                     ),
     SHORTCUT("TYPE_TOGGLE_PANEL"        ,   "Space"                 ),
-    SHORTCUT("TYPE_GRAB_COLOR"          ,   "G"                     ),
+    // Moved off bare G, which now selects the object-move mode. A config
+    // that already saved G here keeps it, so the two collide until the user
+    // resets that shortcut.
+    SHORTCUT("TYPE_GRAB_COLOR"          ,   "Alt+G"                 ),
+    SHORTCUT("TYPE_MOVE_OBJECT"         ,   "G"                     ),
     SHORTCUT("TYPE_RESIZE_LEFT"         ,   "Shift+Left"            ),
     SHORTCUT("TYPE_RESIZE_RIGHT"        ,   "Shift+Right"           ),
     SHORTCUT("TYPE_RESIZE_UP"           ,   "Shift+Up"              ),

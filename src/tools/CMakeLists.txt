@@ -35,6 +35,8 @@ target_sources(flameshot PRIVATE editor/openineditortool.h editor/openineditorto
 target_sources(flameshot PRIVATE line/linetool.h line/linetool.cpp)
 target_sources(flameshot PRIVATE marker/markertool.h marker/markertool.cpp)
 target_sources(flameshot PRIVATE move/movetool.h move/movetool.cpp)
+target_sources(flameshot PRIVATE moveobject/moveobjecttool.h
+                                 moveobject/moveobjecttool.cpp)
 target_sources(flameshot PRIVATE pencil/penciltool.h pencil/penciltool.cpp)
 target_sources(
   flameshot

@@ -74,10 +74,14 @@ const QVector<CaptureTool::Type>& editorToolTypes()
 
 constexpr int ThumbnailRefreshMs = 250;
 
-// Editor-only keys for the two tools that have no configuration entry. The
+// Editor-only keys for the tools that have no configuration entry. The
 // shape button is reached through the rectangle and circle keys instead, so
 // it needs none of its own.
-constexpr auto SelectToolKey = Qt::Key_V;
+//
+// Select-and-move is configured as TYPE_MOVE_OBJECT so the editor and the
+// capture overlay answer to the same key; V is kept as an alias because it
+// shipped as this mode's only key before that entry existed.
+constexpr auto LegacySelectToolKey = Qt::Key_V;
 constexpr auto CircleCountKey = Qt::Key_N;
 
 // The name a tool's shortcut is stored under is its Q_ENUM name
@@ -300,13 +304,13 @@ void EditorWindow::buildToolBar()
     m_toolGroup->setExclusive(true);
 
     auto* selectAction =
-      bar->addAction(QIcon(iconDir + "cursor-move.svg"), tr("Select and move"));
+      bar->addAction(QIcon(iconDir + "pan-tool.svg"), tr("Select and move"));
     selectAction->setCheckable(true);
     selectAction->setChecked(true);
     selectAction->setData(static_cast<int>(CaptureTool::NONE));
     selectAction->setToolTip(
       withShortcut(tr("Select, move and delete objects you have placed"),
-                   QKeySequence(QKeyCombination(SelectToolKey)).toString()));
+                   shortcutFor(CaptureTool::TYPE_MOVE_OBJECT)));
     m_toolGroup->addAction(selectAction);
     connect(selectAction,
             &QAction::triggered,
@@ -621,7 +625,8 @@ bool EditorWindow::activateToolShortcut(const QKeySequence& pressed)
     }
 #endif
 
-    if (pressed == QKeySequence(QKeyCombination(SelectToolKey))) {
+    if (bound(CaptureTool::TYPE_MOVE_OBJECT) ||
+        pressed == QKeySequence(QKeyCombination(LegacySelectToolKey))) {
         selectToolAction(m_selectAction);
         return true;
     }

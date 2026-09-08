@@ -17,6 +17,7 @@
 #include "tools/line/linetool.h"
 #include "tools/marker/markertool.h"
 #include "tools/move/movetool.h"
+#include "tools/moveobject/moveobjecttool.h"
 #if defined(Q_OS_WIN)
 #include "tools/ocr/ocrtool.h"
 #endif
@@ -52,6 +53,7 @@ CaptureTool* ToolFactory::CreateTool(CaptureTool::Type t, QObject* parent)
         if_TYPE_return_TOOL(TYPE_CIRCLE, CircleTool);
         if_TYPE_return_TOOL(TYPE_MARKER, MarkerTool);
         if_TYPE_return_TOOL(TYPE_MOVESELECTION, MoveTool);
+        if_TYPE_return_TOOL(TYPE_MOVE_OBJECT, MoveObjectTool);
         if_TYPE_return_TOOL(TYPE_UNDO, UndoTool);
         if_TYPE_return_TOOL(TYPE_COPY, CopyTool);
         if_TYPE_return_TOOL(TYPE_SAVE, SaveTool);

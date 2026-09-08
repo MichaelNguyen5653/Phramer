@@ -187,6 +187,13 @@ if(BUILD_OCR_TESTS)
   add_subdirectory(tests/ocr)
 endif()
 
+# Off by default for the same reason as BUILD_OCR_TESTS above.
+option(BUILD_TOOL_TESTS "Build the capture tool geometry unit tests" OFF)
+if(BUILD_TOOL_TESTS)
+  enable_testing()
+  add_subdirectory(tests/tools)
+endif()
+
 # CPack
 set(CPACK_PACKAGE_VENDOR "Phramer")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Powerful yet simple to use screenshot software.")
