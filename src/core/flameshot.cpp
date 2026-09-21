@@ -466,7 +466,10 @@ void Flameshot::requestCapture(const CaptureRequest& request)
 
 void Flameshot::exportCapture(const QPixmap& capture,
                               QRect& selection,
-                              const CaptureRequest& req)
+                              const CaptureRequest& req,
+                              const QPixmap& editorBase,
+                              const QList<QPointer<CaptureTool>>& editorObjects,
+                              const QPoint& editorOffset)
 {
     using CR = CaptureRequest;
     int tasks = req.tasks(), mode = req.captureMode();
@@ -501,7 +504,11 @@ void Flameshot::exportCapture(const QPixmap& capture,
     }
 
     if (tasks & CR::OPEN_IN_EDITOR) {
-        EditorWindow::addCapture(capture);
+        if (editorObjects.isEmpty() || editorBase.isNull()) {
+            EditorWindow::addCapture(capture);
+        } else {
+            EditorWindow::addCapture(editorBase, editorObjects, editorOffset);
+        }
     }
 
     if (tasks & CR::PIN) {

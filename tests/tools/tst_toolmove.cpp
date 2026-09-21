@@ -134,6 +134,8 @@ private slots:
     void pathMovePreservesShape();
     void pathRenderFollowsMove();
     void pathCopyCarriesMovedPosition();
+    void twoPointTranslateShiftsBothPoints();
+    void pathTranslateShiftsEveryPoint();
 };
 
 void TestToolMove::twoPointMovePreservesShape()
@@ -218,6 +220,32 @@ void TestToolMove::pathCopyCarriesMovedPosition()
 
     QCOMPARE(duplicate->boundingRect(), tool.boundingRect());
     QVERIFY(isPainted(render(*duplicate), QPoint(110, 120)));
+}
+
+void TestToolMove::twoPointTranslateShiftsBothPoints()
+{
+    TwoPointStub tool;
+    tool.place(QPoint(110, 90), QPoint(150, 120));
+
+    // The overlay hands objects to the editor in selection-relative space,
+    // which is a shift by minus the selection's corner
+    tool.translate(QPoint(-100, -80));
+
+    QCOMPARE(tool.points().first, QPoint(10, 10));
+    QCOMPARE(tool.points().second, QPoint(50, 40));
+}
+
+void TestToolMove::pathTranslateShiftsEveryPoint()
+{
+    PathStub tool;
+    tool.place({ QPoint(110, 90), QPoint(120, 110), QPoint(140, 95) });
+    const QSize before = tool.boundingRect().size();
+
+    tool.translate(QPoint(-100, -80));
+
+    QCOMPARE(tool.boundingRect().size(), before);
+    QVERIFY(isPainted(render(tool), QPoint(20, 30)));
+    QVERIFY(!isPainted(render(tool), QPoint(120, 110)));
 }
 
 QTEST_MAIN(TestToolMove)

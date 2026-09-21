@@ -9,6 +9,10 @@
 #define BASE_POINT_SIZE 8
 #define MAX_INFO_LENGTH 24
 
+// Blank space kept between the glyphs and the edge of m_textArea, which is
+// both the object's selection outline and its grabbable area.
+static constexpr int kTextPadding = 5;
+
 TextTool::TextTool(QObject* parent)
   : CaptureTool(parent)
   , m_size(1)
@@ -103,7 +107,7 @@ QWidget* TextTool::widget()
     m_widget = new TextWidget();
     m_widget->setTextColor(m_color);
     m_font.setPointSize(m_size + BASE_POINT_SIZE);
-    m_widget->setFont(m_font);
+    applyWidgetFont();
     m_widget->setAlignment(m_alignment);
     m_widget->setText(m_text);
     m_widget->selectAll();
@@ -115,6 +119,28 @@ QWidget* TextTool::widget()
       [this]() { emit requestAction(REQ_COMMIT_CURRENT_TOOL); },
       Qt::QueuedConnection);
     return m_widget;
+}
+
+// The editor widget is a real child widget, so the canvas's painter transform
+// does not reach it. Scaling the point size is what makes the text being typed
+// the same visual size as the text that will be committed.
+void TextTool::applyWidgetFont()
+{
+    if (m_widget.isNull()) {
+        return;
+    }
+    QFont scaled = m_font;
+    scaled.setPointSizeF(m_font.pointSizeF() * m_editorScale);
+    m_widget->setFont(scaled);
+}
+
+void TextTool::setEditorScale(qreal scale)
+{
+    if (qFuzzyCompare(scale, m_editorScale)) {
+        return;
+    }
+    m_editorScale = scale;
+    applyWidgetFont();
 }
 
 void TextTool::closeEditor()
@@ -205,20 +231,22 @@ void TextTool::process(QPainter& painter, const QPixmap& pixmap)
     if (m_text.isEmpty()) {
         return;
     }
-    const int val = 5;
     QFont orig_font = painter.font();
     QPen orig_pen = painter.pen();
     QFontMetrics fm(m_font);
     QSize fontsize(fm.boundingRect(QRect(), 0, m_text).size());
-    fontsize.setWidth(fontsize.width() + val * 2);
-    fontsize.setHeight(fontsize.height() + val * 2);
+    fontsize.setWidth(fontsize.width() + kTextPadding * 2);
+    fontsize.setHeight(fontsize.height() + kTextPadding * 2);
     m_textArea.setSize(fontsize);
     // draw text
     painter.setFont(m_font);
     painter.setPen(m_color);
     if (!editMode()) {
         painter.drawText(
-          m_textArea + QMargins(-val, -val, val, val), m_alignment, m_text);
+          m_textArea +
+            QMargins(-kTextPadding, -kTextPadding, kTextPadding, kTextPadding),
+          m_alignment,
+          m_text);
     }
     painter.setFont(orig_font);
     painter.setPen(orig_pen);
@@ -257,20 +285,59 @@ void TextTool::paintMousePreview(QPainter& painter,
     Q_UNUSED(context)
 }
 
+// Half a line of the current font. The click is an insertion point, so the
+// first line has to straddle it; anchoring the top of the line there instead
+// drops the text below the cursor, and the bigger the font the further it
+// falls.
+int TextTool::firstLineHalfHeight() const
+{
+    return QFontMetrics(m_font).height() / 2;
+}
+
+// m_textArea is the glyphs plus kTextPadding on every side, so back the
+// padding out to leave the glyphs themselves starting at the anchor.
+QPoint TextTool::textAreaTopLeft(const QPoint& anchor) const
+{
+    return { anchor.x() - kTextPadding,
+             anchor.y() - kTextPadding - firstLineHalfHeight() };
+}
+
+// Maps m_textArea's corner onto the editor widget's corner, so the editor
+// shows its glyphs exactly where the committed object will draw them. Without
+// it the text shifts the moment the edit is committed.
+QPoint TextTool::childWidgetOffset() const
+{
+    if (m_widget.isNull()) {
+        return {};
+    }
+    const int padding = qRound(kTextPadding * m_editorScale);
+    return QPoint(padding, padding) - m_widget->textOrigin();
+}
+
 void TextTool::drawEnd(const QPoint& point)
 {
-    m_textArea.moveTo(point);
+    m_textArea.moveTo(textAreaTopLeft(point));
 }
 
 void TextTool::drawMove(const QPoint& point)
 {
-    m_widget->move(point);
+    m_textArea.moveTo(textAreaTopLeft(point));
+    // m_textArea is in image coordinates but the editor is a child widget, so
+    // the scale has to be applied here. At 1.0, which is every case outside
+    // the editor's zoom, this is the identity.
+    const QPoint scaled(qRound(m_textArea.left() * m_editorScale),
+                        qRound(m_textArea.top() * m_editorScale));
+    m_widget->move(scaled + childWidgetOffset());
 }
 
 void TextTool::drawStart(const CaptureContext& context)
 {
     m_color = context.color;
     m_size = context.toolSize;
+    // The editor is positioned from m_textArea, and the anchor depends on the
+    // font, so both have to be resolved before the child widget is created.
+    m_font.setPointSize(m_size + BASE_POINT_SIZE);
+    m_textArea.moveTo(textAreaTopLeft(context.mousePos));
     emit requestAction(REQ_ADD_CHILD_WIDGET);
 }
 
@@ -291,9 +358,7 @@ void TextTool::onSizeChanged(int size)
 {
     m_size = size;
     m_font.setPointSize(m_size + BASE_POINT_SIZE);
-    if (m_widget != nullptr) {
-        m_widget->setFont(m_font);
-    }
+    applyWidgetFont();
 }
 
 void TextTool::updateText(const QString& newText)
@@ -307,41 +372,31 @@ void TextTool::updateFamily(const QString& text)
     if (m_textOld.isEmpty()) {
         ConfigHandler().setFontFamily(m_font.family());
     }
-    if (m_widget != nullptr) {
-        m_widget->setFont(m_font);
-    }
+    applyWidgetFont();
 }
 
 void TextTool::updateFontUnderline(const bool underlined)
 {
     m_font.setUnderline(underlined);
-    if (m_widget != nullptr) {
-        m_widget->setFont(m_font);
-    }
+    applyWidgetFont();
 }
 
 void TextTool::updateFontStrikeOut(const bool strikeout)
 {
     m_font.setStrikeOut(strikeout);
-    if (m_widget != nullptr) {
-        m_widget->setFont(m_font);
-    }
+    applyWidgetFont();
 }
 
 void TextTool::updateFontWeight(const QFont::Weight weight)
 {
     m_font.setWeight(weight);
-    if (m_widget != nullptr) {
-        m_widget->setFont(m_font);
-    }
+    applyWidgetFont();
 }
 
 void TextTool::updateFontItalic(const bool italic)
 {
     m_font.setItalic(italic);
-    if (m_widget != nullptr) {
-        m_widget->setFont(m_font);
-    }
+    applyWidgetFont();
 }
 
 void TextTool::move(const QPoint& pos)

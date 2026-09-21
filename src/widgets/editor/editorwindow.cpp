@@ -36,6 +36,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStandardPaths>
@@ -47,6 +48,11 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
+
+// CaptureTool::Type values are persisted in user configs, so the zoom
+// action carries a sentinel that can never collide with one instead of
+// claiming a type number of its own.
+static constexpr int ZoomActionData = -100;
 
 QPointer<EditorWindow> EditorWindow::s_instance;
 
@@ -214,28 +220,42 @@ bool EditorWindow::isOpen()
     return !s_instance.isNull();
 }
 
-void EditorWindow::addCapture(const QPixmap& capture)
+void EditorWindow::addCapture(const QPixmap& capture,
+                              const QList<QPointer<CaptureTool>>& objects,
+                              const QPoint& offset)
 {
     if (s_instance.isNull()) {
         s_instance = new EditorWindow();
     }
-    s_instance->addImage(capture);
+    s_instance->addImage(capture, objects, offset);
     s_instance->show();
     s_instance->raise();
     s_instance->activateWindow();
 }
 
-void EditorWindow::addImage(const QPixmap& image)
+void EditorWindow::addImage(const QPixmap& image,
+                            const QList<QPointer<CaptureTool>>& objects,
+                            const QPoint& offset)
 {
     if (image.isNull()) {
         return;
     }
 
     auto* canvas = new EditorCanvas(image, this);
+    canvas->setGridVisible(m_gridAction && m_gridAction->isChecked());
+    if (!objects.isEmpty()) {
+        canvas->adoptObjects(objects, offset);
+    }
     connect(canvas,
             &EditorCanvas::contentChanged,
             this,
             &EditorWindow::onCanvasContentChanged);
+    connect(
+      canvas, &EditorCanvas::zoomChanged, this, &EditorWindow::onZoomChanged);
+    connect(canvas,
+            &EditorCanvas::zoomRequested,
+            this,
+            &EditorWindow::zoomCurrentCanvas);
     // The canvas has its own right-click colour picker, so the toolbar
     // swatch cannot assume it is the only thing that sets the colour
     connect(canvas, &EditorCanvas::drawColorChanged, this, [this]() {
@@ -263,7 +283,9 @@ void EditorWindow::addImage(const QPixmap& image)
 
     m_canvases.append(canvas);
     m_pages->addWidget(scroll);
-    m_filmstrip->appendImage(image);
+    // The rendered image, so a capture that arrived with annotations shows
+    // them in its thumbnail
+    m_filmstrip->appendImage(canvas->rendered());
 
     // Only for the first image, and only before the window is up: after that
     // the size is the user's business
@@ -329,6 +351,60 @@ void EditorWindow::buildToolBar()
             this,
             &EditorWindow::onToolActionTriggered);
     m_selectAction = selectAction;
+
+    // Called Zoom, not Magnifier: "Show magnifier" is already a shipped
+    // setting for the capture overlay's selection loupe, and two different
+    // features under one word makes every bug report ambiguous.
+    m_zoomAction = bar->addAction(QIcon(iconDir + "magnify.svg"), tr("Zoom"));
+    m_zoomAction->setCheckable(true);
+    m_zoomAction->setData(ZoomActionData);
+    m_zoomAction->setShortcut(QKeySequence(Qt::Key_Z));
+    auto* zoomInAction = new QAction(tr("Zoom In"), this);
+    zoomInAction->setShortcuts(
+      { QKeySequence::ZoomIn, QKeySequence(Qt::CTRL | Qt::Key_Equal) });
+    connect(zoomInAction, &QAction::triggered, this, [this]() {
+        zoomCurrentCanvas(1, viewportCentre());
+    });
+    addAction(zoomInAction);
+
+    auto* zoomOutAction = new QAction(tr("Zoom Out"), this);
+    zoomOutAction->setShortcut(QKeySequence::ZoomOut);
+    connect(zoomOutAction, &QAction::triggered, this, [this]() {
+        zoomCurrentCanvas(-1, viewportCentre());
+    });
+    addAction(zoomOutAction);
+
+    auto* zoomResetAction = new QAction(tr("Actual Size"), this);
+    zoomResetAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
+    connect(zoomResetAction, &QAction::triggered, this, [this]() {
+        if (EditorCanvas* canvas = currentCanvas()) {
+            canvas->setZoom(1.0);
+        }
+    });
+    addAction(zoomResetAction);
+
+    m_zoomAction->setToolTip(
+      tr("Zoom the view with the wheel. Ctrl+wheel zooms from any tool."));
+    m_toolGroup->addAction(m_zoomAction);
+    connect(m_zoomAction,
+            &QAction::triggered,
+            this,
+            &EditorWindow::onToolActionTriggered);
+
+    // A view toggle, so it stays out of m_toolGroup and works alongside any
+    // tool. Off for every new window, and one state for all open images.
+    m_gridAction = bar->addAction(QIcon(iconDir + "grid.svg"), tr("Grid"));
+    m_gridAction->setCheckable(true);
+    m_gridAction->setChecked(false);
+    m_gridAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Apostrophe));
+    m_gridAction->setToolTip(withShortcut(
+      tr("Show grid lines. View only: never saved or copied"),
+      m_gridAction->shortcut().toString(QKeySequence::NativeText)));
+    connect(m_gridAction, &QAction::toggled, this, [this](bool visible) {
+        for (EditorCanvas* canvas : std::as_const(m_canvases)) {
+            canvas->setGridVisible(visible);
+        }
+    });
 
     for (CaptureTool::Type type : editorToolTypes()) {
         CaptureTool* prototype = ToolFactory().CreateTool(type, this);
@@ -413,6 +489,20 @@ void EditorWindow::buildToolBar()
     saveAllAction->setToolTip(
       tr("Save every image in this session to one folder"));
     connect(saveAllAction, &QAction::triggered, this, &EditorWindow::saveAll);
+
+    // Separated from Save so a destructive button is not adjacent to the one
+    // people reach for most. No shortcut on purpose: Delete already removes
+    // the selected annotation inside the canvas, and overloading it would
+    // make a misfire cost the whole image.
+    bar->addSeparator();
+    QAction* removeAction =
+      bar->addAction(QIcon(iconDir + "delete.svg"), tr("Remove Image"));
+    removeAction->setToolTip(
+      tr("Remove the current image from this editor session"));
+    connect(removeAction,
+            &QAction::triggered,
+            this,
+            &EditorWindow::removeCurrentImage);
 
 #if defined(Q_OS_WIN)
     bar->addSeparator();
@@ -501,12 +591,14 @@ void EditorWindow::buildStatusBar()
     connect(m_nextButton, &QPushButton::clicked, this, &EditorWindow::showNext);
 
     m_positionLabel = new QLabel(container);
+    m_zoomLabel = new QLabel(container);
 
     layout->addWidget(m_prevButton);
     layout->addWidget(m_nextButton);
     layout->addSpacing(12);
     layout->addWidget(m_positionLabel);
     layout->addStretch();
+    layout->addWidget(m_zoomLabel);
 
     statusBar()->addPermanentWidget(container, 1);
 }
@@ -533,6 +625,10 @@ void EditorWindow::setCurrentIndex(int index)
     m_sizeBox->setValue(canvas->toolSize());
     m_sizeBox->blockSignals(false);
 
+    // Zoom is per canvas, so the readout has to follow the shown image rather
+    // than waiting for the next change
+    onZoomChanged(canvas->zoom());
+
     // The toolbar is shared, so the newly shown canvas has to adopt whatever
     // tool is currently selected
     onToolActionTriggered();
@@ -554,12 +650,76 @@ void EditorWindow::onToolActionTriggered()
     if (!canvas || !m_toolGroup->checkedAction()) {
         return;
     }
-    const auto type = static_cast<CaptureTool::Type>(
-      m_toolGroup->checkedAction()->data().toInt());
+    const int data = m_toolGroup->checkedAction()->data().toInt();
+    // Zoom draws nothing, so the canvas goes into the same no-tool state as
+    // select mode; the mode itself only changes what the wheel does
+    const auto type = data == ZoomActionData
+                        ? CaptureTool::NONE
+                        : static_cast<CaptureTool::Type>(data);
+    canvas->setZoomMode(data == ZoomActionData);
     canvas->setActiveToolType(type);
     m_sizeBox->blockSignals(true);
     m_sizeBox->setValue(canvas->toolSize());
     m_sizeBox->blockSignals(false);
+}
+
+void EditorWindow::zoomCurrentCanvas(int notches, const QPoint& anchorInCanvas)
+{
+    EditorCanvas* canvas = currentCanvas();
+    if (!canvas) {
+        return;
+    }
+    auto* scroll = qobject_cast<QScrollArea*>(m_pages->currentWidget());
+    if (!scroll) {
+        canvas->zoomBy(notches, anchorInCanvas);
+        return;
+    }
+
+    // Where the anchor sits in the viewport, measured before the zoom changes
+    // the canvas geometry. Asking the widget rather than subtracting scroll
+    // bar values matters because the scroll area is centre-aligned: a canvas
+    // smaller than the viewport is offset by the centring margin, which no
+    // scroll bar reports.
+    const QPoint viewportAnchor =
+      canvas->mapTo(scroll->viewport(), anchorInCanvas);
+
+    if (!canvas->zoomBy(notches, anchorInCanvas)) {
+        return;
+    }
+
+    // Put the image point that was under the pointer back under it. Without
+    // this the view drifts away from whatever the user was looking at, which
+    // is the whole reason to zoom at the cursor rather than at the centre.
+    const QPoint want = canvas->fromImage(canvas->lastZoomAnchor());
+    scroll->horizontalScrollBar()->setValue(want.x() - viewportAnchor.x());
+    scroll->verticalScrollBar()->setValue(want.y() - viewportAnchor.y());
+}
+
+// Keyboard zoom has no pointer to anchor on, so it holds the middle of the
+// visible area instead.
+QPoint EditorWindow::viewportCentre() const
+{
+    auto* scroll = qobject_cast<QScrollArea*>(m_pages->currentWidget());
+    EditorCanvas* canvas = currentCanvas();
+    if (!scroll || !canvas) {
+        return {};
+    }
+    // Mapped through the widget for the same reason as above, then pulled
+    // inside the canvas: with a small image most of the viewport is empty
+    // backdrop, and a point out there is not on the image at all.
+    const QPoint centre =
+      canvas->mapFrom(scroll->viewport(),
+                      QPoint(scroll->viewport()->width() / 2,
+                             scroll->viewport()->height() / 2));
+    return { qBound(0, centre.x(), qMax(0, canvas->width() - 1)),
+             qBound(0, centre.y(), qMax(0, canvas->height() - 1)) };
+}
+
+void EditorWindow::onZoomChanged(qreal zoom)
+{
+    if (m_zoomLabel) {
+        m_zoomLabel->setText(tr("Zoom %1%").arg(qRound(zoom * 100)));
+    }
 }
 
 void EditorWindow::keyPressEvent(QKeyEvent* event)
@@ -675,6 +835,56 @@ void EditorWindow::refreshShapeIcon()
         action->setIcon(tool->icon(m_toolbarBackground, true));
         delete tool;
     }
+}
+
+void EditorWindow::removeCurrentImage()
+{
+    if (m_currentIndex < 0 || m_currentIndex >= m_canvases.size()) {
+        return;
+    }
+    EditorCanvas* canvas = m_canvases.at(m_currentIndex);
+
+    // A clean image goes without ceremony; one carrying annotations that were
+    // never saved asks first, using the same clean-state test as the window's
+    // own close prompt.
+    if (canvas->isDirty()) {
+        const auto answer = QMessageBox::question(
+          this,
+          tr("Remove Image"),
+          tr("Image %1 of %2 has annotations that have not been saved. "
+             "Remove it anyway?")
+            .arg(m_currentIndex + 1)
+            .arg(m_canvases.size()),
+          QMessageBox::Discard | QMessageBox::Cancel,
+          QMessageBox::Cancel);
+        if (answer != QMessageBox::Discard) {
+            return;
+        }
+    }
+
+    const int removed = m_currentIndex;
+
+    // Last one out closes the session: an editor with no image has nothing to
+    // show and no way to get one back.
+    if (m_canvases.size() == 1) {
+        m_canvases.clear();
+        close();
+        return;
+    }
+
+    // One removal from each of the three parallel lists keeps the order of
+    // everything else intact
+    m_canvases.removeAt(removed);
+    QWidget* page = m_pages->widget(removed);
+    m_pages->removeWidget(page);
+    page->deleteLater();
+    m_filmstrip->removeImage(removed);
+
+    // Show the image that took its place, or the new last one if the removed
+    // image was at the end
+    m_currentIndex = -1;
+    setCurrentIndex(qMin(removed, m_canvases.size() - 1));
+    updateNavigationState();
 }
 
 void EditorWindow::onImagesReordered(int from, int to)

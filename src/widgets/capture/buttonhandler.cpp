@@ -41,6 +41,18 @@ void ButtonHandler::show()
     }
 }
 
+QVector<QRect> ButtonHandler::occupiedRects() const
+{
+    QVector<QRect> rects;
+    rects.reserve(m_vectorButtons.size());
+    for (const CaptureToolButton* b : m_vectorButtons) {
+        if (b->isVisible()) {
+            rects.append(b->geometry());
+        }
+    }
+    return rects;
+}
+
 bool ButtonHandler::isVisible() const
 {
     bool ret = true;

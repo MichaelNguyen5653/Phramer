@@ -7,9 +7,11 @@
 #include "utils/globalvalues.h"
 #include "utils/screenshotsaver.h"
 
+#include "widgets/editor/editorwindow.h"
 #include <QGraphicsDropShadowEffect>
 #include <QGraphicsOpacityEffect>
 #include <QLabel>
+
 #include <QMenu>
 #include <QPinchGesture>
 #include <QScreen>
@@ -292,6 +294,13 @@ void PinWidget::showContextMenu(const QPoint& pos)
       &saveToFileAction, &QAction::triggered, this, &PinWidget::saveToFile);
     contextMenu.addAction(&saveToFileAction);
 
+    QAction loadIntoEditorAction(tr("Load into editor"), this);
+    connect(&loadIntoEditorAction,
+            &QAction::triggered,
+            this,
+            &PinWidget::loadIntoEditor);
+    contextMenu.addAction(&loadIntoEditorAction);
+
     contextMenu.addSeparator();
 
     QAction rotateRightAction(tr("Rotate Right"), this);
@@ -324,6 +333,17 @@ void PinWidget::showContextMenu(const QPoint& pos)
     contextMenu.addAction(&closePinAction);
 
     contextMenu.exec(mapToGlobal(pos));
+}
+
+// EditorWindow::addCapture already opens a window when none exists and
+// appends to the open one otherwise, so this needs no session logic of its
+// own. The pin keeps showing; loading is a copy, not a move.
+void PinWidget::loadIntoEditor()
+{
+    // m_pixmap carries any rotation the user applied, which is what they see
+    // and therefore what they expect to edit. Pin opacity is a window
+    // property rather than pixels, so it is deliberately not baked in.
+    EditorWindow::addCapture(m_pixmap);
 }
 
 void PinWidget::copyToClipboard()

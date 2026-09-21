@@ -100,6 +100,7 @@ private:
     void initShowAbortNotification();
     void initShowHelp();
     void initShowMagnifier();
+    void initShowEditorHint();
     void initShowQuitPrompt();
     void initShowSidePanelButton();
     void initShowStartupLaunchMessage();
@@ -179,6 +180,7 @@ private:
     QComboBox* m_setSaveAsFileExtension;
     QCheckBox* m_predefinedColorPaletteLarge;
     QCheckBox* m_showMagnifier;
+    QCheckBox* m_showEditorHint;
     QCheckBox* m_squareMagnifier;
     QCheckBox* m_copyOnDoubleClick;
     QCheckBox* m_showSelectionGeometry;

@@ -16,6 +16,7 @@ public:
 
     void adjustSize();
     void setFont(const QFont& f);
+    QPoint textOrigin() const;
 
 protected:
     bool event(QEvent* e) override;

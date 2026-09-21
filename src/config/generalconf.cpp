@@ -88,6 +88,7 @@ GeneralConf::GeneralConf(QWidget* parent)
     m_layout->addStretch();
 
     initShowMagnifier();
+    initShowEditorHint();
     initSquareMagnifier();
     initJpegQuality();
     initReverseArrow();
@@ -125,6 +126,7 @@ void GeneralConf::_updateComponents(bool allowEmptySavePath)
     m_allowMultipleGuiInstances->setChecked(config.allowMultipleGuiInstances());
     m_autoOpenInEditor->setChecked(config.autoOpenInEditor());
     m_showMagnifier->setChecked(config.showMagnifier());
+    m_showEditorHint->setChecked(config.showEditorHint());
     m_squareMagnifier->setChecked(config.squareMagnifier());
     m_saveLastRegion->setChecked(config.saveLastRegion());
     m_reverseArrow->setChecked(config.reverseArrow());
@@ -912,6 +914,19 @@ void GeneralConf::initShowMagnifier()
     m_scrollAreaLayout->addWidget(m_showMagnifier);
     connect(m_showMagnifier, &QCheckBox::clicked, [](bool checked) {
         ConfigHandler().setShowMagnifier(checked);
+    });
+}
+
+void GeneralConf::initShowEditorHint()
+{
+    m_showEditorHint = new QCheckBox(tr("Show the editor keyboard tip"), this);
+    m_showEditorHint->setToolTip(
+      tr("Show a tip on the capture overlay naming the key that opens the "
+         "editor"));
+
+    m_scrollAreaLayout->addWidget(m_showEditorHint);
+    connect(m_showEditorHint, &QCheckBox::clicked, [](bool checked) {
+        ConfigHandler().setShowEditorHint(checked);
     });
 }
 

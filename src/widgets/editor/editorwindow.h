@@ -42,11 +42,17 @@ public:
     ~EditorWindow() override;
 
     // Appends to the open session, or opens the window if it is closed. The
-    // only entry point the rest of the application should use.
-    static void addCapture(const QPixmap& capture);
+    // only entry point the rest of the application should use. objects are
+    // annotations still editable from the capture overlay, and offset maps
+    // their coordinates onto capture; see EditorCanvas::adoptObjects.
+    static void addCapture(const QPixmap& capture,
+                           const QList<QPointer<CaptureTool>>& objects = {},
+                           const QPoint& offset = QPoint());
     static bool isOpen();
 
-    void addImage(const QPixmap& image);
+    void addImage(const QPixmap& image,
+                  const QList<QPointer<CaptureTool>>& objects = {},
+                  const QPoint& offset = QPoint());
     int imageCount() const { return m_canvases.size(); }
 
 protected:
@@ -65,6 +71,13 @@ private slots:
     void showNext();
     void chooseColor();
     void onToolActionTriggered();
+    // Applies a wheel-notch zoom to the current canvas and keeps the image
+    // point under the pointer where it was
+    void zoomCurrentCanvas(int notches, const QPoint& anchorInCanvas);
+    void onZoomChanged(qreal zoom);
+    QPoint viewportCentre() const;
+    // Removes the image on show, closing the window when it was the last one
+    void removeCurrentImage();
     void onCanvasContentChanged();
     void onImagesReordered(int from, int to);
 #if defined(Q_OS_WIN)
@@ -115,6 +128,10 @@ private:
     // because CaptureTool::Type is not a hashable key without a qHash.
     QHash<int, QAction*> m_toolActions;
     QAction* m_selectAction{ nullptr };
+    // Zoom is a view mode, not a tool: it joins m_toolGroup so it is mutually
+    // exclusive with drawing, but places no object
+    QAction* m_zoomAction{ nullptr };
+    QAction* m_gridAction{ nullptr };
     // Window background the tool icons were chosen against, kept so an icon
     // can be rebuilt later without re-deriving it
     QColor m_toolbarBackground;
@@ -125,6 +142,7 @@ private:
     QPushButton* m_prevButton{ nullptr };
     QPushButton* m_nextButton{ nullptr };
     QLabel* m_positionLabel{ nullptr };
+    QLabel* m_zoomLabel{ nullptr };
 
     // Coalesces thumbnail regeneration; redrawing the strip on every stroke
     // of a 4K capture is what makes a filmstrip feel slow

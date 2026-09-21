@@ -4,6 +4,7 @@
 
 #include "core/qguiappcurrentscreen.h"
 #include "tools/toolfactory.h"
+#include "utils/canvasgeometry.h"
 #include "utils/confighandler.h"
 #include "utils/toolsizewheel.h"
 #include "widgets/capture/colorpicker.h"
@@ -13,9 +14,13 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QScopedPointer>
 #include <QScreen>
 #include <QUndoCommand>
 #include <QWheelEvent>
+
+#include <cmath>
+#include <iterator>
 
 // Matches CaptureWidget: an object only starts moving once the drag clears
 // this many pixels, so a click that selects does not also nudge
@@ -80,10 +85,12 @@ EditorCanvas::EditorCanvas(const QPixmap& image, QWidget* parent)
         }
     }
 
-    // Widget coordinates are tool coordinates. Sizing to the image's
-    // device-independent size keeps that true on high-DPI captures, where the
-    // pixmap is larger than the space it occupies on screen.
-    setFixedSize(m_original.deviceIndependentSize().toSize());
+    // The canvas starts as the image and only ever grows from there. Sizing
+    // from the device-independent size keeps one image pixel one tool pixel on
+    // high-DPI captures, where the pixmap is larger than the space it occupies.
+    m_canvasRect =
+      QRect(QPoint(0, 0), m_original.deviceIndependentSize().toSize());
+    updateCanvasSize();
 
     m_context.screenshot = m_rendered;
     m_context.origScreenshot = m_original;
@@ -198,6 +205,26 @@ void EditorCanvas::restoreObjects(const CaptureToolObjects& objects)
     renderObjects();
 }
 
+void EditorCanvas::adoptObjects(const QList<QPointer<CaptureTool>>& objects,
+                                const QPoint& offset)
+{
+    for (const auto& object : objects) {
+        if (object.isNull()) {
+            continue;
+        }
+        // The overlay's objects die with the overlay, so each one is copied
+        // under this canvas before the overlay finishes tearing down.
+        // append() copies again under the same parent, so the intermediate
+        // copy is only a place to apply the offset.
+        QScopedPointer<CaptureTool> local(object->copy(this));
+        local->setEditMode(false);
+        local->translate(offset);
+        m_objects.append(local.data());
+    }
+    restoreCircleCountState();
+    renderObjects();
+}
+
 void EditorCanvas::deleteSelectedObject()
 {
     if (m_selectedIndex < 0) {
@@ -223,13 +250,140 @@ void EditorCanvas::commitActiveTool()
     }
 }
 
+QPoint EditorCanvas::toImage(const QPoint& widgetPos) const
+{
+    return m_canvasRect.topLeft() + QPoint(qRound(widgetPos.x() / m_zoom),
+                                           qRound(widgetPos.y() / m_zoom));
+}
+
+QPoint EditorCanvas::fromImage(const QPoint& imagePos) const
+{
+    const QPoint local = imagePos - m_canvasRect.topLeft();
+    return { qRound(local.x() * m_zoom), qRound(local.y() * m_zoom) };
+}
+
+void EditorCanvas::updateCanvasSize()
+{
+    setFixedSize(qMax(1, qRound(m_canvasRect.width() * m_zoom)),
+                 qMax(1, qRound(m_canvasRect.height() * m_zoom)));
+}
+
+void EditorCanvas::setZoom(qreal zoom)
+{
+    const qreal clamped =
+      qBound(CanvasGeometry::MinZoom, zoom, CanvasGeometry::MaxZoom);
+    if (qFuzzyCompare(clamped, m_zoom)) {
+        return;
+    }
+    m_zoom = clamped;
+    updateCanvasSize();
+    // An open text box is sized in widget pixels, so it has to be told the new
+    // scale or it keeps rendering at the old one
+    if (m_activeTool) {
+        m_activeTool->setEditorScale(m_zoom);
+        if (m_toolWidget) {
+            const QPoint* toolPos = m_activeTool->pos();
+            if (toolPos) {
+                m_toolWidget->move(fromImage(*toolPos) +
+                                   m_activeTool->childWidgetOffset());
+            }
+        }
+    }
+    update();
+    emit zoomChanged(m_zoom);
+}
+
+bool EditorCanvas::zoomBy(int notches, const QPoint& anchor)
+{
+    const qreal next = CanvasGeometry::zoomStep(m_zoom, notches);
+    if (qFuzzyCompare(next, m_zoom)) {
+        return false;
+    }
+    // Remember what the pointer is over before the scale changes, so the
+    // caller can scroll it back under the pointer afterwards
+    const QPoint held = toImage(anchor);
+    setZoom(next);
+    m_lastZoomAnchor = held;
+    return true;
+}
+
+void EditorCanvas::setGridVisible(bool visible)
+{
+    if (m_gridVisible == visible) {
+        return;
+    }
+    m_gridVisible = visible;
+    update();
+}
+
+void EditorCanvas::paintGrid(QPainter& painter, const QRect& dirty) const
+{
+    // The step is in image pixels so the lines stay attached to the image
+    // while zooming, but it widens as the zoom drops so the grid never turns
+    // into a solid wash
+    static constexpr int Steps[] = { 10, 20, 50, 100, 200, 500, 1000 };
+    static constexpr qreal MinSpacing = 12.0;
+    int step = Steps[std::size(Steps) - 1];
+    for (int candidate : Steps) {
+        if (candidate * m_zoom >= MinSpacing) {
+            step = candidate;
+            break;
+        }
+    }
+    const int major = step * 5;
+
+    // Mid grey reads on both light and dark captures; every fifth line is
+    // stronger so distances can be counted at a glance
+    const QPen minorPen(QColor(128, 128, 128, 90), 0);
+    const QPen majorPen(QColor(128, 128, 128, 170), 0);
+
+    // Drawn in widget pixels, after the image, so lines are one screen pixel
+    // wide at any zoom instead of scaling with it
+    const QRectF area = QRectF(rect()).intersected(QRectF(dirty));
+    auto toWidget = [this](int imageCoord, int origin) {
+        return (imageCoord - origin) * m_zoom;
+    };
+    auto firstLine = [step](int from) {
+        return static_cast<int>(std::floor(from / double(step))) * step;
+    };
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    const int left = m_canvasRect.left();
+    const int top = m_canvasRect.top();
+    const int imageFromX = left + static_cast<int>(area.left() / m_zoom);
+    const int imageToX = left + static_cast<int>(area.right() / m_zoom) + 1;
+    for (int x = firstLine(imageFromX); x <= imageToX; x += step) {
+        painter.setPen(x % major == 0 ? majorPen : minorPen);
+        const qreal wx = toWidget(x, left);
+        painter.drawLine(QPointF(wx, area.top()), QPointF(wx, area.bottom()));
+    }
+    const int imageFromY = top + static_cast<int>(area.top() / m_zoom);
+    const int imageToY = top + static_cast<int>(area.bottom() / m_zoom) + 1;
+    for (int y = firstLine(imageFromY); y <= imageToY; y += step) {
+        painter.setPen(y % major == 0 ? majorPen : minorPen);
+        const qreal wy = toWidget(y, top);
+        painter.drawLine(QPointF(area.left(), wy), QPointF(area.right(), wy));
+    }
+    painter.restore();
+}
+
 void EditorCanvas::paintEvent(QPaintEvent* event)
 {
-    Q_UNUSED(event)
     QPainter painter(this);
     if (!painter.isActive()) {
         return;
     }
+
+    // One transform for the whole canvas: everything below draws in image
+    // coordinates and knows nothing about the zoom or the canvas origin.
+    painter.scale(m_zoom, m_zoom);
+    painter.translate(-m_canvasRect.topLeft());
+    if (m_zoom < 1.0) {
+        // Downscaling without this is visibly aliased on text-heavy captures
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    }
+
     painter.drawPixmap(0, 0, m_rendered);
 
     // The in-progress object is drawn on top rather than baked in, so an
@@ -237,6 +391,11 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
     if (m_activeTool && m_mousePressed) {
         painter.setRenderHint(QPainter::Antialiasing);
         m_activeTool->process(painter, m_rendered);
+    }
+
+    if (m_gridVisible) {
+        painter.resetTransform();
+        paintGrid(painter, event->rect());
     }
 }
 
@@ -246,7 +405,7 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
     m_moveStarted = false;
     m_moveStartPos = QPoint();
     m_moveGrabOffset = QPoint();
-    m_context.mousePos = event->pos();
+    m_context.mousePos = toImage(event->pos());
 
     // While the picker is up it owns the mouse; the click that dismisses it
     // must not also start drawing underneath it
@@ -271,10 +430,10 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         commitActiveTool();
     }
 
-    if (startDrawing(event->pos())) {
+    if (startDrawing(toImage(event->pos()))) {
         return;
     }
-    selectObjectAt(event->pos());
+    selectObjectAt(toImage(event->pos()));
     updateCursor();
 }
 
@@ -297,6 +456,18 @@ void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
 
 void EditorCanvas::wheelEvent(QWheelEvent* event)
 {
+    // Ctrl+wheel zooms from any tool, so the user never has to leave the
+    // pencil to get closer. Zoom mode gives the plain wheel the same job.
+    const bool ctrlHeld = event->modifiers().testFlag(Qt::ControlModifier);
+    if (ctrlHeld || m_zoomMode) {
+        if (event->angleDelta().y() != 0) {
+            const int notches = event->angleDelta().y() > 0 ? 1 : -1;
+            emit zoomRequested(notches, event->position().toPoint());
+        }
+        event->accept();
+        return;
+    }
+
     // In select mode the canvas draws nothing, so the wheel belongs to the
     // scroll area this widget lives in rather than to a tool
     if (m_activeToolType == CaptureTool::NONE) {
@@ -329,13 +500,13 @@ void EditorCanvas::wheelEvent(QWheelEvent* event)
 
 void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
 {
-    m_context.mousePos = event->pos();
+    m_context.mousePos = toImage(event->pos());
     if (!(event->buttons() & Qt::LeftButton)) {
         return;
     }
 
     if (m_activeTool && m_mousePressed && !m_activeTool->editMode()) {
-        m_activeTool->drawMove(event->pos());
+        m_activeTool->drawMove(m_context.mousePos);
         update();
         return;
     }
@@ -349,10 +520,13 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
             if (m_moveStartPos.isNull()) {
                 m_moveStartPos = event->pos();
             }
+            // The threshold is a gesture distance on screen, so it stays in
+            // widget pixels; at low zoom an image-pixel threshold would make
+            // objects impossible to nudge
             if ((event->pos() - m_moveStartPos).manhattanLength() >
                 MOUSE_DISTANCE_TO_START_MOVING) {
                 m_moveStarted = true;
-                m_moveGrabOffset = event->pos() - *object->pos();
+                m_moveGrabOffset = m_context.mousePos - *object->pos();
                 // Snapshot before the first pixel of movement so undo returns
                 // to where the object started, not to an intermediate frame
                 m_objectsBackup = m_objects;
@@ -361,7 +535,7 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
             }
         }
         if (m_moveStarted) {
-            object->move(event->pos() - m_moveGrabOffset);
+            object->move(m_context.mousePos - m_moveGrabOffset);
             renderObjects();
         }
     }
@@ -424,9 +598,12 @@ void EditorCanvas::showColorPicker(const QPoint& pos)
     // Right clicking an object recolours that object; right clicking empty
     // space sets the colour the next one will be drawn in. Selecting here is
     // what makes the first case work.
+    // The argument is a widget position because the picker is a child widget,
+    // but object picking happens in image space
+    const QPoint imagePos = toImage(pos);
     auto selected = selectedObject();
-    if (!selected || !selected->boundingRect().contains(pos)) {
-        selectObjectAt(pos);
+    if (!selected || !selected->boundingRect().contains(imagePos)) {
+        selectObjectAt(imagePos);
     }
 
     // The picker is a child widget, so it is clipped by the canvas. Unlike
@@ -560,7 +737,10 @@ void EditorCanvas::selectObjectAt(const QPoint& pos)
         return;
     }
     const int previous = m_selectedIndex;
-    m_selectedIndex = m_objects.find(pos, size());
+    // Picking renders the objects into a scratch pixmap and reads a pixel, so
+    // it works in image space like the objects themselves, not in the scaled
+    // widget space size() reports
+    m_selectedIndex = m_objects.find(pos, m_canvasRect.size());
     if (m_selectedIndex != previous) {
         auto selected = selectedObject();
         if (selected && selected->size() > 0) {
@@ -572,7 +752,11 @@ void EditorCanvas::selectObjectAt(const QPoint& pos)
 
 void EditorCanvas::updateCursor()
 {
-    if (m_activeToolType != CaptureTool::NONE) {
+    if (m_activeToolType == CaptureTool::TYPE_TEXT) {
+        // The text tool places an insertion point, not a region, and the
+        // I-beam is what tells the user the line will straddle the cursor.
+        setCursor(Qt::IBeamCursor);
+    } else if (m_activeToolType != CaptureTool::NONE) {
         setCursor(Qt::CrossCursor);
     } else if (m_selectedIndex >= 0) {
         setCursor(Qt::OpenHandCursor);
@@ -611,10 +795,18 @@ void EditorCanvas::handleToolSignal(CaptureTool::Request request)
                 m_toolWidget->hide();
                 delete m_toolWidget;
             }
+            m_activeTool->setEditorScale(m_zoom);
             m_toolWidget = m_activeTool->widget();
             if (m_toolWidget) {
                 m_toolWidget->setParent(this);
-                m_toolWidget->move(m_context.mousePos);
+                // A tool that carries its own position anchors the editor
+                // from there, so re-opening an existing object lands the
+                // editor exactly over it; the offset maps the object's corner
+                // onto the widget's corner.
+                const QPoint* toolPos = m_activeTool->pos();
+                m_toolWidget->move(
+                  fromImage(toolPos ? *toolPos : m_context.mousePos) +
+                  m_activeTool->childWidgetOffset());
                 m_toolWidget->show();
                 m_toolWidget->setFocus();
             }

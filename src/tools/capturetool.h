@@ -138,6 +138,14 @@ public:
     // If the type is TYPE_EXTERNAL_WIDGET it is created outside as an
     // individual widget.
     virtual QWidget* widget() { return nullptr; }
+    // Offset from the mouse position to the top-left of the widget created by
+    // widget(). A tool that has to anchor its widget somewhere other than the
+    // widget's own corner returns the correction here.
+    [[nodiscard]] virtual QPoint childWidgetOffset() const { return {}; }
+    // The editor's display scale. A tool whose widget() is a real child widget
+    // has to scale it by hand, because the painter transform that scales
+    // everything drawn does not reach a widget.
+    virtual void setEditorScale(qreal scale) { Q_UNUSED(scale) }
     // When the tool is selected this method is called and the widget is added
     // to the configuration panel inside the main widget.
     virtual QWidget* configurationWidget() { return nullptr; }
@@ -183,6 +191,15 @@ public:
     // Move tool objects
     virtual void move(const QPoint& pos) { Q_UNUSED(pos) };
     virtual const QPoint* pos() { return nullptr; };
+    // Shifts the whole object. move() takes an absolute anchor, and each base
+    // defines that anchor differently, so going through pos() is the only
+    // shift that is the same for every tool.
+    void translate(const QPoint& delta)
+    {
+        if (const QPoint* anchor = pos()) {
+            move(*anchor + delta);
+        }
+    }
 
 signals:
     void requestAction(Request r);

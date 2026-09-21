@@ -28,6 +28,9 @@ public:
 
     void setButtons(const QVector<CaptureToolButton*>&);
     bool contains(const QPoint& p) const;
+    // Geometry of the buttons currently on screen. The capture overlay paints
+    // its keyboard hint around them, and nothing else knows where they went.
+    QVector<QRect> occupiedRects() const;
     void updateScreenRegions(const QVector<QRect>& rects);
     void updateScreenRegions(const QRect& rect);
 

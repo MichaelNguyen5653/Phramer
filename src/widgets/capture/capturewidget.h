@@ -153,6 +153,7 @@ private:
     QRect extendedSelection() const;
     QRect extendedRect(const QRect& r) const;
     QRect paddedUpdateRect(const QRect& r) const;
+    void drawEditorHint(QPainter* painter);
     void drawErrorMessage(const QString& msg, QPainter* painter);
     void drawInactiveRegion(QPainter* painter);
     void drawToolsData(bool drawSelection = true);
@@ -215,6 +216,9 @@ private:
     QPointer<QMessageBox> m_quitPrompt;
 
     ButtonHandler* m_buttonHandler;
+    // Set the moment the user starts their first annotation, which is the
+    // signal that the editor hint has done its job for this capture
+    bool m_editingStarted{ false };
     UtilityPanel* m_panel;
     SidePanelWidget* m_sidePanel;
     ColorPicker* m_colorPicker;

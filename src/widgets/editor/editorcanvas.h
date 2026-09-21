@@ -24,11 +24,17 @@ class ColorPicker;
  * static instance parented to it — while the editor needs one independent
  * surface, with its own undo stack, per image in the session.
  *
- * The widget is sized to the image's device-independent size and is meant to
- * live inside a scroll area, so widget coordinates and tool coordinates are
- * the same thing and no transform is threaded through the tools. The image
- * keeps its device pixel ratio, so annotations drawn at logical coordinates
- * still land on the full-resolution output.
+ * Image coordinates are tool coordinates. The origin is the original image's
+ * top-left corner and negative coordinates are legal, so an annotation can sit
+ * beside the image rather than only on it. Zoom and the growable canvas both
+ * live in toImage()/fromImage(); nothing below this class ever learns about
+ * either, which is what keeps the tools free of any transform.
+ *
+ * The widget is sized to the canvas scaled by the zoom and is meant to live
+ * inside a scroll area. The image keeps its device pixel ratio, so annotations
+ * drawn at logical coordinates still land on the full-resolution output. That
+ * ratio is a separate scale from the zoom and the two must never be combined:
+ * the ratio stays inside the pixmap, the zoom stays inside the mapping.
  */
 class EditorCanvas : public QWidget
 {
@@ -51,6 +57,14 @@ public:
 
     // NONE puts the canvas in select/move mode
     void setActiveToolType(CaptureTool::Type type);
+    // Zoom mode gives the plain wheel to the zoom instead of the tool size.
+    // It is a view mode, so the active tool type stays NONE either way.
+    void setZoomMode(bool enabled) { m_zoomMode = enabled; }
+    bool zoomMode() const { return m_zoomMode; }
+    // A view aid only: drawn over the canvas on screen, never into rendered()
+    // or original(), so nothing saved, copied or pinned carries it
+    void setGridVisible(bool visible);
+    bool gridVisible() const { return m_gridVisible; }
     CaptureTool::Type activeToolType() const { return m_activeToolType; }
 
     void setDrawColor(const QColor& color);
@@ -62,8 +76,32 @@ public:
     void setToolSize(int size);
     int toolSize() const { return m_context.toolSize; }
 
+    // Display scale. 1.0 is one image pixel per device-independent pixel.
+    qreal zoom() const { return m_zoom; }
+    void setZoom(qreal zoom);
+    // Steps the zoom by wheel notches, keeping the image point currently under
+    // anchor (in widget coordinates) under it afterwards. Returns true when
+    // the zoom actually changed.
+    bool zoomBy(int notches, const QPoint& anchor);
+    // The image point that was under the pointer when zoomBy last changed the
+    // scale. The window scrolls it back under the pointer; the canvas cannot,
+    // because the scroll bars belong to the scroll area above it.
+    QPoint lastZoomAnchor() const { return m_lastZoomAnchor; }
+
+    // Widget coordinates to image coordinates and back. The only two places
+    // that know the zoom or the canvas origin exist.
+    QPoint toImage(const QPoint& widgetPos) const;
+    QPoint fromImage(const QPoint& imagePos) const;
+
     // Used by the undo command; not part of the public editing API
     void restoreObjects(const CaptureToolObjects& objects);
+
+    // Takes over annotations placed on the capture overlay so they stay
+    // editable here. offset maps overlay coordinates to image coordinates.
+    // They become the starting state: nothing to undo, and not dirty, the
+    // same as a flattened capture.
+    void adoptObjects(const QList<QPointer<CaptureTool>>& objects,
+                      const QPoint& offset);
 
 public slots:
     void deleteSelectedObject();
@@ -78,6 +116,12 @@ signals:
     // Likewise for the size, which the wheel and the keyboard shortcuts both
     // change without going through the toolbar
     void toolSizeChanged(int size);
+    // The zoom changed, so the window can update its readout
+    void zoomChanged(qreal zoom);
+    // A wheel notch asked for a zoom. The canvas cannot honour it alone: the
+    // scroll bars that keep the anchor under the pointer belong to the scroll
+    // area above it, so the window performs the zoom.
+    void zoomRequested(int notches, const QPoint& anchor);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -102,9 +146,21 @@ private:
     void updateCursor();
     void restoreCircleCountState();
     QPointer<CaptureTool> selectedObject();
+    // Resizes the widget to the canvas at the current zoom. Everything that
+    // changes either one goes through here.
+    void updateCanvasSize();
+    void paintGrid(QPainter& painter, const QRect& dirty) const;
 
     QPixmap m_original;
     QPixmap m_rendered;
+
+    // The editable area in image space. Grows to contain annotations drawn
+    // outside the image; never smaller than the image itself.
+    QRect m_canvasRect;
+    qreal m_zoom{ 1.0 };
+    QPoint m_lastZoomAnchor;
+    bool m_zoomMode{ false };
+    bool m_gridVisible{ false };
 
     CaptureContext m_context;
     CaptureToolObjects m_objects;

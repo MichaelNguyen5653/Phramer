@@ -42,6 +42,8 @@
         <file>img/material/black/ocr.svg</file>
         <file>img/material/black/open-in-editor.svg</file>
         <file>img/material/black/open_with.svg</file>
+        <file>img/material/black/magnify.svg</file>
+        <file>img/material/black/grid.svg</file>
         <file>img/material/black/pan-tool.svg</file>
         <file>img/material/black/pencil.svg</file>
         <file>img/material/black/pin.svg</file>
@@ -93,6 +95,8 @@
         <file>img/material/white/ocr.svg</file>
         <file>img/material/white/open-in-editor.svg</file>
         <file>img/material/white/open_with.svg</file>
+        <file>img/material/white/magnify.svg</file>
+        <file>img/material/white/grid.svg</file>
         <file>img/material/white/pan-tool.svg</file>
         <file>img/material/white/pencil.svg</file>
         <file>img/material/white/pin.svg</file>

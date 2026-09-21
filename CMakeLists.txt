@@ -194,6 +194,13 @@ if(BUILD_TOOL_TESTS)
   add_subdirectory(tests/tools)
 endif()
 
+# Off by default for the same reason as BUILD_OCR_TESTS above.
+option(BUILD_EDITOR_TESTS "Build the editor canvas geometry unit tests" OFF)
+if(BUILD_EDITOR_TESTS)
+  enable_testing()
+  add_subdirectory(tests/editor)
+endif()
+
 # CPack
 set(CPACK_PACKAGE_VENDOR "Phramer")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Powerful yet simple to use screenshot software.")

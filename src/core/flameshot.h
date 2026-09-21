@@ -83,9 +83,15 @@ signals:
 
 public slots:
     void requestCapture(const CaptureRequest& request);
+    // editorBase and editorObjects are only for OPEN_IN_EDITOR: the capture
+    // without annotations plus the annotations themselves, so the editor can
+    // keep them editable. Every other task gets the flattened p.
     void exportCapture(const QPixmap& p,
                        QRect& selection,
-                       const CaptureRequest& req);
+                       const CaptureRequest& req,
+                       const QPixmap& editorBase = QPixmap(),
+                       const QList<QPointer<CaptureTool>>& editorObjects = {},
+                       const QPoint& editorOffset = QPoint());
 
 private:
     Flameshot();

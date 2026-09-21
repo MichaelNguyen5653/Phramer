@@ -32,6 +32,8 @@ public:
     QString info() override;
 
     QWidget* widget() override;
+    [[nodiscard]] QPoint childWidgetOffset() const override;
+    void setEditorScale(qreal scale) override;
     QWidget* configurationWidget() override;
     CaptureTool* copy(QObject* parent = nullptr) override;
 
@@ -70,6 +72,10 @@ private slots:
 
 private:
     void closeEditor();
+    // Pushes m_font onto the editor widget at the current display scale
+    void applyWidgetFont();
+    [[nodiscard]] int firstLineHalfHeight() const;
+    [[nodiscard]] QPoint textAreaTopLeft(const QPoint& anchor) const;
 
     QFont m_font;
     Qt::AlignmentFlag m_alignment;
@@ -81,6 +87,9 @@ private:
     QPointer<TextWidget> m_widget;
     QPointer<TextConfig> m_confW;
     QPoint m_currentPos;
+    // The editor's zoom. Only the live editing widget uses it; the committed
+    // object is drawn by a painter that is already scaled.
+    qreal m_editorScale{ 1.0 };
 
     QString m_tempString;
 };

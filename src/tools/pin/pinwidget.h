@@ -57,6 +57,7 @@ private:
 
 private slots:
     void showContextMenu(const QPoint& pos);
+    void loadIntoEditor();
     void copyToClipboard();
     void saveToFile();
 };

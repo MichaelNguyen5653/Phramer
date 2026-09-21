@@ -16,6 +16,7 @@
 #include "core/qguiappcurrentscreen.h"
 #include "tools/copy/copytool.h"
 #include "utils/abstractlogger.h"
+#include "utils/hintplacement.h"
 #include "utils/screencoordinates.h"
 #include "utils/screengrabber.h"
 #include "utils/screenshotsaver.h"
@@ -47,6 +48,10 @@
 #endif
 
 #define MOUSE_DISTANCE_TO_START_MOVING 3
+
+// Hint pill metrics: padding inside the pill and its corner radius
+static constexpr int HintPadding = 10;
+static constexpr int HintRadius = 6;
 
 // CaptureWidget is the main component used to capture the screen. It contains
 // an area of selection with its respective buttons.
@@ -367,8 +372,31 @@ CaptureWidget::~CaptureWidget()
         setLastRegion(lastRegion);
         QRect geometry(m_context.selection);
         geometry.setTopLeft(geometry.topLeft() + m_context.widgetOffset);
-        Flameshot::instance()->exportCapture(
-          pixmap(), geometry, m_context.request);
+        QPixmap editorBase;
+        QList<QPointer<CaptureTool>> editorObjects;
+        QPoint editorOffset;
+        if (m_context.request.tasks() & CaptureRequest::OPEN_IN_EDITOR) {
+            // The editor gets the unannotated capture plus the objects, not
+            // the flattened pixmap, so what was drawn here stays editable.
+            // This must happen here: the objects are children of this widget
+            // and are deleted once the destructor body returns.
+            editorObjects = m_captureToolObjects.captureToolObjects();
+            if (m_context.selection.isNull()) {
+                editorBase = m_context.origScreenshot;
+            } else {
+                editorBase = m_context.origScreenshot.copy(m_context.selection);
+                // selection is in physical pixels and the objects are in
+                // logical widget coordinates
+                editorOffset =
+                  -(QPointF(m_context.selection.topLeft()) / scale).toPoint();
+            }
+        }
+        Flameshot::instance()->exportCapture(pixmap(),
+                                             geometry,
+                                             m_context.request,
+                                             editorBase,
+                                             editorObjects,
+                                             editorOffset);
     } else {
         emit Flameshot::instance()->captureFailed();
     }
@@ -822,6 +850,8 @@ void CaptureWidget::paintEvent(QPaintEvent* paintEvent)
     // draw inactive region
     drawInactiveRegion(&painter);
 
+    drawEditorHint(&painter);
+
     if (!isActiveWindow()) {
         drawErrorMessage(tr("Phramer has lost focus. Keyboard shortcuts won't "
                             "work until you click somewhere."),
@@ -833,6 +863,54 @@ void CaptureWidget::paintEvent(QPaintEvent* paintEvent)
                             "gui` again to apply it."),
                          &painter);
     }
+}
+
+// A one-line pill naming the key that opens the editor. Painted rather than
+// made a widget: the overlay's whole job is capturing drags, and a widget here
+// would take mouse events that belong to the selection underneath it.
+void CaptureWidget::drawEditorHint(QPainter* painter)
+{
+    if (m_editingStarted || !m_selection || !m_selection->isVisible() ||
+        !ConfigHandler().showEditorHint()) {
+        return;
+    }
+    const QRect selection = m_selection->geometry().normalized();
+    if (selection.isEmpty()) {
+        return;
+    }
+
+    // Read the binding rather than hard-coding E. If the user cleared it there
+    // is no key to advertise, so the hint stays away entirely instead of
+    // naming one that does nothing.
+    const QString configured = ConfigHandler().shortcut(
+      QVariant::fromValue(CaptureTool::TYPE_OPEN_IN_EDITOR).toString());
+    if (configured.isEmpty()) {
+        return;
+    }
+    const QString text =
+      tr("Tip: press %1 to open the editor")
+        .arg(QKeySequence(configured).toString(QKeySequence::NativeText));
+
+    const QFontMetrics fm = painter->fontMetrics();
+    const QSize pill(fm.horizontalAdvance(text) + HintPadding * 2,
+                     fm.height() + HintPadding);
+    const QRect target = HintPlacement::place(
+      pill, selection, rect(), m_buttonHandler->occupiedRects());
+    if (target.isNull()) {
+        return;
+    }
+
+    QColor background = ConfigHandler().uiColor();
+    background.setAlpha(190);
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(background);
+    painter->drawRoundedRect(target, HintRadius, HintRadius);
+    painter->setPen(ColorUtils::colorIsDark(background) ? Qt::white
+                                                        : Qt::black);
+    painter->drawText(target, Qt::AlignCenter, text);
+    painter->restore();
 }
 
 void CaptureWidget::showColorPicker(const QPoint& pos)
@@ -880,6 +958,15 @@ bool CaptureWidget::startDrawObjectTool(const QPoint& pos)
 
         m_context.mousePos = m_displayGrid ? snapToGrid(pos) : pos;
         m_activeTool->drawStart(m_context);
+
+        // The user is annotating now, so the editor hint has served its
+        // purpose and would only be in the way. Repainting the whole overlay
+        // once is what actually erases it: every later repaint is partial, so
+        // simply refusing to draw it would leave the pill on screen.
+        if (!m_editingStarted) {
+            m_editingStarted = true;
+            update();
+        }
 
         return true;
     }
@@ -1703,7 +1790,7 @@ void CaptureWidget::handleToolSignal(CaptureTool::Request r)
                 drawToolsData(false);
             }
             break;
-        case CaptureTool::REQ_ADD_CHILD_WIDGET:
+        case CaptureTool::REQ_ADD_CHILD_WIDGET: {
             if (!m_activeTool) {
                 break;
             }
@@ -1715,11 +1802,18 @@ void CaptureWidget::handleToolSignal(CaptureTool::Request r)
             m_toolWidget = m_activeTool->widget();
             if (m_toolWidget) {
                 makeChild(m_toolWidget);
-                m_toolWidget->move(m_context.mousePos);
+                // A tool that carries its own position anchors the editor
+                // from there, so re-opening an existing object lands the
+                // editor exactly over it; the offset maps the object's corner
+                // onto the widget's corner.
+                const QPoint* toolPos = m_activeTool->pos();
+                m_toolWidget->move((toolPos ? *toolPos : m_context.mousePos) +
+                                   m_activeTool->childWidgetOffset());
                 m_toolWidget->show();
                 m_toolWidget->setFocus();
             }
             break;
+        }
         case CaptureTool::REQ_ADD_EXTERNAL_WIDGETS:
             if (!m_activeTool) {
                 break;
@@ -2007,6 +2101,10 @@ void CaptureWidget::updateCursor()
         setCursor(Qt::ClosedHandCursor);
     } else if (activeButtonToolType() == CaptureTool::TYPE_MOVE_OBJECT) {
         setCursor(Qt::OpenHandCursor);
+    } else if (activeButtonToolType() == CaptureTool::TYPE_TEXT) {
+        // The text tool places an insertion point, not a region, and the
+        // I-beam is what tells the user the line will straddle the cursor.
+        setCursor(Qt::IBeamCursor);
     } else if (m_activeButton != nullptr &&
                activeButtonToolType() != CaptureTool::TYPE_MOVESELECTION) {
         setCursor(Qt::CrossCursor);

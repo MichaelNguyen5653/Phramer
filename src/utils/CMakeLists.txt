@@ -31,6 +31,10 @@ target_sources(
           strfparse.cpp
           toolsizewheel.h
           toolsizewheel.cpp
+          canvasgeometry.h
+          canvasgeometry.cpp
+          hintplacement.h
+          hintplacement.cpp
 )
 
 IF (UNIX AND NOT APPLE)

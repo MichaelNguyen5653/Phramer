@@ -5,6 +5,7 @@
 
 #include <QEvent>
 #include <QKeyEvent>
+#include <QTextDocument>
 
 TextWidget::TextWidget(QWidget* parent)
   : QTextEdit(parent)
@@ -76,6 +77,16 @@ void TextWidget::setTextColor(const QColor& c)
     QString s(
       QStringLiteral("TextWidget { background: transparent; color: %1; }"));
     setStyleSheet(s.arg(c.name()));
+}
+
+// Where QTextEdit lays out the first glyph relative to the widget corner:
+// the frame plus the document margin. Read it instead of assuming a number,
+// because the committed object has to reproduce the same origin and a style
+// change here would otherwise make the text jump on commit.
+QPoint TextWidget::textOrigin() const
+{
+    const int inset = frameWidth() + qRound(document()->documentMargin());
+    return { inset, inset };
 }
 
 void TextWidget::adjustSize()
