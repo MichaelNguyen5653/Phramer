@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include "frostedfill.h"
 #include "tools/abstracttwopointtool.h"
+
+#include <QImage>
 
 class PixelateTool : public AbstractTwoPointTool
 {
@@ -27,4 +30,11 @@ protected:
 
 public slots:
     void pressed(CaptureContext& context) override;
+
+private:
+    // Last frosted fill and what it was built from. Not copied: a copy
+    // rebuilds it on its first paint.
+    QImage m_fill;
+    FrostedEdges m_fillEdges;
+    int m_fillStrength{ -1 };
 };

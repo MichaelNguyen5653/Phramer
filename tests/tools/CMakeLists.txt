@@ -133,3 +133,32 @@ if(WIN32)
       ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
 endif()
+
+# The fill is a free function over a pixmap, so only its own source is linked.
+# QPixmap needs a QGuiApplication, which QTEST_MAIN provides with Gui linked.
+add_executable(
+  frosted_fill_tests
+  tst_frostedfill.cpp
+  ${CMAKE_SOURCE_DIR}/src/tools/pixelate/frostedfill.cpp)
+
+set_target_properties(frosted_fill_tests PROPERTIES AUTOMOC ON
+                                                    WIN32_EXECUTABLE OFF)
+target_include_directories(frosted_fill_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(
+  frosted_fill_tests
+  PRIVATE project_options Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
+          Qt${QT_VERSION_MAJOR}::Test)
+
+if(MSVC)
+  target_link_options(frosted_fill_tests PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
+
+add_test(NAME frosted_fill_tests COMMAND frosted_fill_tests)
+
+if(WIN32)
+  set_tests_properties(
+    frosted_fill_tests
+    PROPERTIES
+      ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>")
+endif()
