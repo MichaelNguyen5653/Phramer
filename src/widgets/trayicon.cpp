@@ -5,6 +5,7 @@
 #include "core/qguiappcurrentscreen.h"
 #include "utils/confighandler.h"
 #include "utils/globalvalues.h"
+#include "widgets/welcometour.h"
 
 #include <QApplication>
 #include <QGuiApplication>
@@ -176,6 +177,10 @@ void TrayIcon::initMenu()
             &QAction::triggered,
             Flameshot::instance(),
             &Flameshot::config);
+    m_whatsNewAction = new QAction(tr("&What's New"), this);
+    connect(m_whatsNewAction, &QAction::triggered, this, []() {
+        WelcomeTour::showNow();
+    });
     m_infoAction = new QAction(tr("&About"), this);
     connect(m_infoAction,
             &QAction::triggered,
@@ -254,6 +259,7 @@ void TrayIcon::initMenu()
 #if !defined(DISABLE_UPDATE_CHECKER)
     m_menu->addAction(m_appUpdates);
 #endif
+    m_menu->addAction(m_whatsNewAction);
     m_menu->addAction(m_infoAction);
     m_menu->addSeparator();
     m_menu->addAction(restartAction);

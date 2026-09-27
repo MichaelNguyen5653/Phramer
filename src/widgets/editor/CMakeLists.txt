@@ -5,6 +5,8 @@ target_sources(
         editorcanvas.cpp
         editorfilmstrip.h
         editorfilmstrip.cpp
+        editortheme.h
+        editortheme.cpp
         editorwindow.h
         editorwindow.cpp
 )

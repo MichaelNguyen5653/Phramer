@@ -76,8 +76,8 @@ static QMap<class QString, QSharedPointer<ValueHandler>>
 //         KEY                            TYPE                 DEFAULT_VALUE
     OPTION("showHelp"                    ,Bool               ( true          )),
     OPTION("showSidePanelButton"         ,Bool               ( true          )),
-    OPTION("showDesktopNotification"     ,Bool               ( true          )),
-    OPTION("showAbortNotification"       ,Bool               ( true          )),
+    OPTION("showDesktopNotification"     ,Bool               ( false         )),
+    OPTION("showAbortNotification"       ,Bool               ( false         )),
     OPTION("disabledTrayIcon"            ,Bool               ( false         )),
     OPTION("historyConfirmationToDelete" ,Bool               ( true          )),
 #if !defined(DISABLE_UPDATE_CHECKER)
@@ -87,10 +87,14 @@ static QMap<class QString, QSharedPointer<ValueHandler>>
     OPTION("showMagnifier"               ,Bool               ( false         )),
     OPTION("squareMagnifier"             ,Bool               ( false         )),
     OPTION("autoCloseIdleDaemon"         ,Bool               ( false         )),
-    OPTION("startupLaunch"               ,Bool               ( false         )),
-    OPTION("showStartupLaunchMessage"    ,Bool               ( true          )),
+    // Only reaches the registry through setStartupLaunch() or, for a user who
+    // never chose, ConfigHandler::applyDefaultStartupLaunch()
+    OPTION("startupLaunch"               ,Bool               ( true          )),
+    OPTION("showStartupLaunchMessage"    ,Bool               ( false         )),
     OPTION("showQuitPrompt"              ,Bool               ( false         )),
     OPTION("showEditorHint"              ,Bool               ( true          )),
+    // One-word names under the capture overlay's buttons and the editor's
+    OPTION("showToolLabels"              ,Bool               ( true          )),
     OPTION("copyURLAfterUpload"          ,Bool               ( true          )),
     OPTION("copyPathAfterSave"           ,Bool               ( false         )),
     OPTION("antialiasingPinZoom"         ,Bool               ( true          )),
@@ -101,7 +105,7 @@ static QMap<class QString, QSharedPointer<ValueHandler>>
     OPTION("uploadWithoutConfirmation"   ,Bool               ( false         )),
     OPTION("saveAfterCopy"               ,Bool               ( false         )),
     OPTION("savePath"                    ,ExistingDir        (               )),
-    OPTION("savePathFixed"               ,Bool               ( false         )),
+    OPTION("savePathFixed"               ,Bool               ( true          )),
     OPTION("saveAsFileExtension"         ,SaveFileExtension  (               )),
     OPTION("saveLastRegion"              ,Bool               ( false         )),
     OPTION("uploadHistoryMax"            ,LowerBoundedInt    ( 0, 25         )),
@@ -195,7 +199,11 @@ static QMap<class QString, QSharedPointer<ValueHandler>>
     // 1 = active monitor, 2 = snip across all monitors (Windows only).
     // When absent, derived from captureActiveMonitor; see
     // ConfigHandler::captureRegionMode().
+#if defined(Q_OS_WIN)
+    OPTION("captureRegionMode"            ,BoundedInt         ( 0, 2, 2       )),
+#else
     OPTION("captureRegionMode"            ,BoundedInt         ( 0, 2, 0       )),
+#endif
 #endif
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
     // Bypass freedesktop portal and use Qt's native X11
@@ -328,19 +336,48 @@ ConfigHandler* ConfigHandler::getInstance()
 
 bool ConfigHandler::startupLaunch()
 {
-    bool res = value(QStringLiteral("startupLaunch")).toBool();
-    if (res != verifyLaunchFile()) {
-        setStartupLaunch(res);
-    }
-    return res;
+    // Reading never writes the launch entry. It used to re-sync it here,
+    // which meant merely opening the settings of a second copy (a portable
+    // or test build) repointed autostart at that copy.
+    return value(QStringLiteral("startupLaunch")).toBool();
 }
 
 void ConfigHandler::setStartupLaunch(const bool start)
 {
-    if (start == value(QStringLiteral("startupLaunch")).toBool()) {
+    // The launch entry is checked too: with the key absent the stored value
+    // already reads as the default, and ticking the box to match it must
+    // still create the entry
+    if (start == value(QStringLiteral("startupLaunch")).toBool() &&
+        start == verifyLaunchFile()) {
         return;
     }
     setValue(QStringLiteral("startupLaunch"), start);
+    writeLaunchEntry(start);
+}
+
+#if defined(Q_OS_WIN) && !defined(USE_PORTABLE_CONFIG)
+void ConfigHandler::applyDefaultStartupLaunch()
+{
+    // setStartupLaunch() cannot do this: an absent key already reads as the
+    // default, so it would see no change and never touch the registry.
+    // Writing the key makes this a one-time step, so a user who later turns
+    // autostart off elsewhere is not overridden on the next start.
+    // Installed builds only: a portable copy would point the Run entry at
+    // wherever that copy happens to be.
+    const QString key = QStringLiteral("startupLaunch");
+    if (m_settings.contains(key)) {
+        return;
+    }
+    const bool start = value(key).toBool();
+    setValue(key, start);
+    if (start != verifyLaunchFile()) {
+        writeLaunchEntry(start);
+    }
+}
+#endif
+
+void ConfigHandler::writeLaunchEntry(bool start)
+{
 #if defined(Q_OS_MACOS)
     /* TODO - there should be more correct way via API, but didn't find it
      without extra dependencies, there should be something like that:
@@ -508,9 +545,13 @@ ConfigHandler::CaptureRegionMode ConfigHandler::captureRegionMode()
     QString key = QStringLiteral("captureRegionMode");
     if (!m_settings.contains(key)) {
         // Configs written before this key existed only have the
-        // captureActiveMonitor bool
-        return captureActiveMonitor() ? RegionActiveMonitor
-                                      : RegionSelectMonitor;
+        // captureActiveMonitor bool, and a user who set it keeps what they
+        // chose. Someone who never chose either gets the current default.
+        if (m_settings.contains(QStringLiteral("captureActiveMonitor"))) {
+            return captureActiveMonitor() ? RegionActiveMonitor
+                                          : RegionSelectMonitor;
+        }
+        return static_cast<CaptureRegionMode>(value(key).toInt());
     }
     return static_cast<CaptureRegionMode>(value(key).toInt());
 }

@@ -4,6 +4,9 @@
 #include "generalconf.h"
 #include "utils/confighandler.h"
 #include "utils/fuzzymatch.h"
+#if defined(Q_OS_WIN)
+#include "utils/screenclipprotocol.h"
+#endif
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -21,15 +24,37 @@
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QStringDecoder>
+#include <QStyle>
 #include <QVBoxLayout>
 
-GeneralConf::GeneralConf(QWidget* parent)
+GeneralConf::GeneralConf(Page page, QWidget* parent)
   : QWidget(parent)
-  , m_historyConfirmationToDelete(nullptr)
-  , m_undoLimit(nullptr)
+  , m_page(page)
 {
     m_layout = new QVBoxLayout(this);
     m_layout->setAlignment(Qt::AlignTop);
+
+    if (page == Page::General) {
+        // Only what most people ever change. Everything else lives on the
+        // Advanced tab, which is also where the search box is: a short page
+        // needs no search.
+        initScrollArea();
+        initAutostart();
+#if !defined(Q_OS_MACOS)
+        initCaptureRegionMode();
+#endif
+        initAutoOpenInEditor();
+        initCopyOnDoubleClick();
+        // Also builds the Save Path group
+        initSaveAfterCopy();
+        initShowQuitPrompt();
+#if !defined(DISABLE_UPDATE_CHECKER)
+        initCheckForUpdates();
+#endif
+        m_layout->addStretch();
+        updateComponents();
+        return;
+    }
 
     // Above the scroll area so it stays put while the results scroll
     initSearchBox();
@@ -38,36 +63,28 @@ GeneralConf::GeneralConf(QWidget* parent)
     // It must be initialized before the checkboxes.
     initScrollArea();
 
-    // The first five are pinned to the top of the page by request; the rest
-    // follow in the order they have always been in.
-    initAutostart();
-    initAutoOpenInEditor();
     initShowTrayIcon();
-#if !defined(Q_OS_MACOS)
-    initCaptureRegionMode();
-#endif
     initShowHelp();
-
+    initShowToolLabels();
+    initShowEditorHint();
     initAutoCloseIdleDaemon();
     initShowDesktopNotification();
     initShowAbortNotification();
-#if !defined(DISABLE_UPDATE_CHECKER)
-    initCheckForUpdates();
-#endif
     initShowStartupLaunchMessage();
-    initShowQuitPrompt();
     initAllowMultipleGuiInstances();
     initSaveLastRegion();
     initShowSidePanelButton();
     initUseJpgForClipboard();
-    initCopyOnDoubleClick();
-    initSaveAfterCopy();
     initCopyPathAfterSave();
     initAntialiasingPinZoom();
-    initUndoLimit();
     initInsecurePixelate();
+    initReverseArrow();
+    initShowMagnifier();
+    initSquareMagnifier();
+    initPredefinedColorPaletteLarge();
 #if defined(Q_OS_WIN)
     initShowWelcomeMessage();
+    initScreenClipProtocol();
 #endif
 #if defined(Q_OS_MACOS)
     initUseNativeFullscreen();
@@ -82,16 +99,12 @@ GeneralConf::GeneralConf(QWidget* parent)
     initUploadHistoryMax();
     initUploadClientSecret();
 #endif
-    initPredefinedColorPaletteLarge();
+    initUndoLimit();
     initShowSelectionGeometry();
+    initJpegQuality();
 
     m_layout->addStretch();
 
-    initShowMagnifier();
-    initShowEditorHint();
-    initSquareMagnifier();
-    initJpegQuality();
-    initReverseArrow();
     // this has to be at the end
     initConfigButtons();
     // Every row must exist before the index can be built from the layouts
@@ -99,64 +112,90 @@ GeneralConf::GeneralConf(QWidget* parent)
     updateComponents();
 }
 
+void GeneralConf::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+#if defined(Q_OS_WIN)
+    // The choice is made in Windows Settings, so the row is stale whenever
+    // the user comes back from there
+    if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
+        updateScreenClipRow();
+    }
+#endif
+}
+
 void GeneralConf::_updateComponents(bool allowEmptySavePath)
 {
     ConfigHandler config;
-    m_helpMessage->setChecked(config.showHelp());
-    m_sidePanelButton->setChecked(config.showSidePanelButton());
-    m_sysNotifications->setChecked(config.showDesktopNotification());
-    m_abortNotifications->setChecked(config.showAbortNotification());
-    m_autostart->setChecked(config.startupLaunch());
-    m_saveAfterCopy->setChecked(config.saveAfterCopy());
-    m_copyPathAfterSave->setChecked(config.copyPathAfterSave());
-    m_antialiasingPinZoom->setChecked(config.antialiasingPinZoom());
-    m_useJpgForClipboard->setChecked(config.useJpgForClipboard());
-    m_copyOnDoubleClick->setChecked(config.copyOnDoubleClick());
+    // Each tab builds only its own rows, so any of these may be absent
+    const auto check = [](QCheckBox* box, bool value) {
+        if (box) {
+            box->setChecked(value);
+        }
+    };
+    check(m_helpMessage, config.showHelp());
+    check(m_sidePanelButton, config.showSidePanelButton());
+    check(m_sysNotifications, config.showDesktopNotification());
+    check(m_abortNotifications, config.showAbortNotification());
+    check(m_autostart, config.startupLaunch());
+    check(m_saveAfterCopy, config.saveAfterCopy());
+    check(m_copyPathAfterSave, config.copyPathAfterSave());
+    check(m_antialiasingPinZoom, config.antialiasingPinZoom());
+    check(m_useJpgForClipboard, config.useJpgForClipboard());
+    check(m_copyOnDoubleClick, config.copyOnDoubleClick());
+#if defined(Q_OS_WIN)
+    updateScreenClipRow();
+#endif
 #ifdef ENABLE_IMGUR
-    m_uploadWithoutConfirmation->setChecked(config.uploadWithoutConfirmation());
-    m_copyURLAfterUpload->setChecked(config.copyURLAfterUpload());
-    m_historyConfirmationToDelete->setChecked(
-      config.historyConfirmationToDelete());
+    check(m_uploadWithoutConfirmation, config.uploadWithoutConfirmation());
+    check(m_copyURLAfterUpload, config.copyURLAfterUpload());
+    check(m_historyConfirmationToDelete, config.historyConfirmationToDelete());
 
-    m_uploadHistoryMax->setValue(config.uploadHistoryMax());
+    if (m_uploadHistoryMax) {
+        m_uploadHistoryMax->setValue(config.uploadHistoryMax());
+    }
 #endif
 #if !defined(DISABLE_UPDATE_CHECKER)
-    m_checkForUpdates->setChecked(config.checkForUpdates());
+    check(m_checkForUpdates, config.checkForUpdates());
 #endif
-    m_allowMultipleGuiInstances->setChecked(config.allowMultipleGuiInstances());
-    m_autoOpenInEditor->setChecked(config.autoOpenInEditor());
-    m_showMagnifier->setChecked(config.showMagnifier());
-    m_showEditorHint->setChecked(config.showEditorHint());
-    m_squareMagnifier->setChecked(config.squareMagnifier());
-    m_saveLastRegion->setChecked(config.saveLastRegion());
-    m_reverseArrow->setChecked(config.reverseArrow());
-    m_autoCloseIdleDaemon->setChecked(config.autoCloseIdleDaemon());
-    m_predefinedColorPaletteLarge->setChecked(
-      config.predefinedColorPaletteLarge());
-    m_showStartupLaunchMessage->setChecked(config.showStartupLaunchMessage());
-    m_showQuitPrompt->setChecked(config.showQuitPrompt());
-    m_screenshotPathFixedCheck->setChecked(config.savePathFixed());
-    m_undoLimit->setValue(config.undoLimit());
+    check(m_allowMultipleGuiInstances, config.allowMultipleGuiInstances());
+    check(m_autoOpenInEditor, config.autoOpenInEditor());
+    check(m_showMagnifier, config.showMagnifier());
+    check(m_showEditorHint, config.showEditorHint());
+    check(m_showToolLabels, config.showToolLabels());
+    check(m_squareMagnifier, config.squareMagnifier());
+    check(m_saveLastRegion, config.saveLastRegion());
+    check(m_reverseArrow, config.reverseArrow());
+    check(m_autoCloseIdleDaemon, config.autoCloseIdleDaemon());
+    check(m_predefinedColorPaletteLarge, config.predefinedColorPaletteLarge());
+    check(m_showStartupLaunchMessage, config.showStartupLaunchMessage());
+    check(m_showQuitPrompt, config.showQuitPrompt());
+    check(m_screenshotPathFixedCheck, config.savePathFixed());
+    if (m_undoLimit) {
+        m_undoLimit->setValue(config.undoLimit());
+    }
 
-    if (allowEmptySavePath || !config.savePath().isEmpty()) {
+    if (m_savePath && (allowEmptySavePath || !config.savePath().isEmpty())) {
         m_savePath->setText(config.savePath());
     }
 
-    m_showTray->setChecked(!config.disabledTrayIcon());
+    check(m_showTray, !config.disabledTrayIcon());
 
 #if !defined(Q_OS_MACOS)
-    int regionModeIndex = m_captureRegionMode->findData(
-      static_cast<int>(config.captureRegionMode()));
-    m_captureRegionMode->setCurrentIndex(qMax(0, regionModeIndex));
+    if (m_captureRegionMode) {
+        int regionModeIndex = m_captureRegionMode->findData(
+          static_cast<int>(config.captureRegionMode()));
+        m_captureRegionMode->setCurrentIndex(qMax(0, regionModeIndex));
+    }
 #endif
 #if defined(Q_OS_WIN)
-    m_showWelcomeMessage->setChecked(config.showWelcomeMessage());
+    check(m_showWelcomeMessage, config.showWelcomeMessage());
 #endif
 #if defined(Q_OS_MACOS)
-    m_useNativeFullscreen->setChecked(config.useNativeFullscreen());
+    check(m_useNativeFullscreen, config.useNativeFullscreen());
 #endif
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
-    m_useX11LegacyScreenshot->setChecked(config.useX11LegacyScreenshot());
+    check(m_useX11LegacyScreenshot, config.useX11LegacyScreenshot());
 #endif
 }
 
@@ -267,8 +306,10 @@ void GeneralConf::resetConfiguration()
       tr("Are you sure you want to reset the configuration?"),
       QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
-        m_savePath->setText(
-          QStandardPaths::writableLocation(QStandardPaths::PicturesLocation));
+        if (m_savePath) {
+            m_savePath->setText(QStandardPaths::writableLocation(
+              QStandardPaths::PicturesLocation));
+        }
         ConfigHandler().setDefaultSettings();
         _updateComponents(true);
     }
@@ -930,6 +971,18 @@ void GeneralConf::initShowEditorHint()
     });
 }
 
+void GeneralConf::initShowToolLabels()
+{
+    m_showToolLabels = new QCheckBox(tr("Show tool names"), this);
+    m_showToolLabels->setToolTip(
+      tr("Show each tool's name under its button on the capture overlay and "
+         "in the editor"));
+    m_scrollAreaLayout->addWidget(m_showToolLabels);
+    connect(m_showToolLabels, &QCheckBox::clicked, [](bool checked) {
+        ConfigHandler().setShowToolLabels(checked);
+    });
+}
+
 void GeneralConf::initSquareMagnifier()
 {
     m_squareMagnifier = new QCheckBox(tr("Square shaped magnifier"), this);
@@ -1095,6 +1148,98 @@ void GeneralConf::initShowWelcomeMessage()
     connect(m_showWelcomeMessage, &QCheckBox::clicked, [](bool checked) {
         ConfigHandler().setShowWelcomeMessage(checked);
     });
+}
+
+void GeneralConf::initScreenClipProtocol()
+{
+    auto* rowLayout = new QHBoxLayout();
+    m_screenClipStatus = new QLabel(this);
+    m_screenClipStatus->setWordWrap(true);
+    m_screenClipStatus->setToolTip(
+      tr("Windows opens ms-screenclip: for its own screen capture, including "
+         "the Print Screen key. Registering lists Phramer as an MS-SCREENCLIP "
+         "app in Windows Settings, where you choose it. Registering and "
+         "unregistering need administrator approval."));
+    m_screenClipSettingsButton = new QPushButton(tr("Windows Settings"), this);
+    m_screenClipSettingsButton->setToolTip(
+      tr("Open Settings > Default apps on Phramer, to choose it for "
+         "MS-SCREENCLIP"));
+    m_screenClipButton = new QPushButton(this);
+    // The shield tells the user a UAC prompt follows, as Windows does
+    m_screenClipButton->setIcon(style()->standardIcon(QStyle::SP_VistaShield));
+    rowLayout->addWidget(m_screenClipStatus, 1);
+    rowLayout->addWidget(m_screenClipSettingsButton);
+    rowLayout->addWidget(m_screenClipButton);
+    m_scrollAreaLayout->addLayout(rowLayout);
+
+    connect(m_screenClipSettingsButton, &QPushButton::clicked, this, []() {
+        ScreenClipProtocol::openDefaultAppsSettings();
+    });
+    connect(m_screenClipButton,
+            &QPushButton::clicked,
+            this,
+            &GeneralConf::toggleScreenClipRegistration);
+    updateScreenClipRow();
+}
+
+void GeneralConf::updateScreenClipRow()
+{
+    if (!m_screenClipButton) {
+        return;
+    }
+    m_screenClipButton->setEnabled(true);
+    // Another Phramer install counts too: its registration is still
+    // Phramer's to remove, and replacing it would need removing first
+    const bool registered = ScreenClipProtocol::isRegisteredByPhramer();
+    if (!registered) {
+        m_screenClipStatus->setText(
+          tr("Phramer is not registered as MS-SCREENCLIP"));
+    } else if (!ScreenClipProtocol::isRegistered()) {
+        m_screenClipStatus->setText(
+          tr("Another copy of Phramer is registered as MS-SCREENCLIP"));
+    } else if (ScreenClipProtocol::isDefault()) {
+        m_screenClipStatus->setText(
+          tr("Phramer is registered and chosen for MS-SCREENCLIP"));
+    } else {
+        m_screenClipStatus->setText(
+          tr("Phramer is registered as MS-SCREENCLIP. Choose it in Windows "
+             "Settings to finish."));
+    }
+    m_screenClipButton->setText(registered ? tr("Unregister") : tr("Register"));
+    m_screenClipSettingsButton->setVisible(registered);
+}
+
+void GeneralConf::toggleScreenClipRegistration()
+{
+    const bool unregister = ScreenClipProtocol::isRegisteredByPhramer();
+    m_screenClipButton->setEnabled(false);
+    m_screenClipStatus->setText(tr("Waiting for administrator approval..."));
+    // The UAC prompt blocks this thread, so paint the message first
+    m_screenClipStatus->repaint();
+
+    const ScreenClipProtocol::Result result =
+      unregister ? ScreenClipProtocol::unregisterElevated()
+                 : ScreenClipProtocol::registerElevated();
+    updateScreenClipRow();
+    if (result == ScreenClipProtocol::Result::Failed) {
+        window()->raise();
+        window()->activateWindow();
+        QMessageBox::warning(
+          this,
+          tr("MS-SCREENCLIP"),
+          unregister ? tr("Phramer could not be unregistered as MS-SCREENCLIP.")
+                     : tr("Phramer could not be registered as MS-SCREENCLIP."));
+        return;
+    }
+    // Only the user can make the choice, so hand them the page for it
+    if (!unregister && result == ScreenClipProtocol::Result::Succeeded &&
+        !ScreenClipProtocol::isDefault()) {
+        ScreenClipProtocol::openDefaultAppsSettings();
+        return;
+    }
+    // UAC takes focus away
+    window()->raise();
+    window()->activateWindow();
 }
 #endif
 

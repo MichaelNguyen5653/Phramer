@@ -177,6 +177,9 @@ void FlameshotDaemon::start()
         m_instance = new FlameshotDaemon();
         // Tray icon needs FlameshotDaemon::instance() to be non-null
         m_instance->initTrayIcon();
+#if defined(Q_OS_WIN) && !defined(USE_PORTABLE_CONFIG)
+        ConfigHandler().applyDefaultStartupLaunch();
+#endif
         qApp->setQuitOnLastWindowClosed(false);
     }
 }
@@ -201,6 +204,24 @@ void FlameshotDaemon::createPin(const QPixmap& capture, QRect geometry)
     QDBusMessage m = createMethodCall(QStringLiteral("attachPin"));
     m << data;
     call(m);
+#endif
+}
+
+bool FlameshotDaemon::requestGui()
+{
+#if defined(USE_KDSINGLEAPPLICATION) &&                                        \
+  (defined(Q_OS_MACOS) || defined(Q_OS_WIN))
+    auto kdsa = KDSingleApplication(QStringLiteral("com.phramer.Phramer"));
+    // Primary means no daemon holds the lock, so there is nobody to ask
+    if (kdsa.isPrimaryInstance()) {
+        return false;
+    }
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::WriteOnly);
+    stream << QStringLiteral("gui");
+    return kdsa.sendMessage(data);
+#else
+    return false;
 #endif
 }
 
@@ -769,6 +790,11 @@ void FlameshotDaemon::messageReceivedFromSecondaryInstance(
             qWarning() << "Received \"attachScreenshotToClipboard\" from "
                           "second instance, but pixmap is empty!";
         }
+    } else if (methodCall == QStringLiteral("gui")) {
+        // Deferred: the message is delivered from inside the IPC socket's
+        // handler, and gui() can wait on modal dialogs
+        QTimer::singleShot(
+          0, Flameshot::instance(), []() { Flameshot::instance()->gui(); });
     } else if (methodCall == (QStringLiteral("attachTextToClipboard"))) {
         QString text;
         QString notification;

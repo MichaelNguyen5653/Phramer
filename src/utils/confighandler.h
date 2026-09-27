@@ -148,6 +148,7 @@ public:
     CONFIG_GETTER_SETTER(buttons, setButtons, QList<CaptureTool::Type>)
     CONFIG_GETTER_SETTER(showMagnifier, setShowMagnifier, bool)
     CONFIG_GETTER_SETTER(showEditorHint, setShowEditorHint, bool)
+    CONFIG_GETTER_SETTER(showToolLabels, setShowToolLabels, bool)
     CONFIG_GETTER_SETTER(squareMagnifier, setSquareMagnifier, bool)
     CONFIG_GETTER_SETTER(copyOnDoubleClick, setCopyOnDoubleClick, bool)
     CONFIG_GETTER_SETTER(uploadClientSecret, setUploadClientSecret, QString)
@@ -192,6 +193,11 @@ public:
     // SPECIAL CASES
     bool startupLaunch();
     void setStartupLaunch(const bool);
+#if defined(Q_OS_WIN) && !defined(USE_PORTABLE_CONFIG)
+    // Brings the Run entry in line with the startupLaunch default for a user
+    // who has never set it. Called once when the daemon starts.
+    void applyDefaultStartupLaunch();
+#endif
     void setAllTheButtons();
     void setToolSize(CaptureTool::Type toolType, int size);
     int toolSize(CaptureTool::Type toolType);
@@ -235,6 +241,8 @@ signals:
     void fileChanged() const;
 
 private:
+    // Platform side of setStartupLaunch: registry, login item or .desktop
+    void writeLaunchEntry(bool start);
     mutable QSettings m_settings;
 
     static bool m_hasError, m_errorCheckPending, m_skipNextErrorCheck;

@@ -51,5 +51,7 @@ IF (WIN32)
     PRIVATE winlnkfileparse.cpp
             printscreenkey.h
             printscreenkey.cpp
+            screenclipprotocol.h
+            screenclipprotocol.cpp
   )
 ENDIF()

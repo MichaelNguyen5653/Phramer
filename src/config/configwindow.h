@@ -36,6 +36,9 @@ private:
     GeneralConf* m_generalConfig;
     QWidget* m_generalConfigTab;
 
+    GeneralConf* m_advancedConfig;
+    QWidget* m_advancedConfigTab;
+
     VisualsEditor* m_visuals;
     QWidget* m_visualsTab;
 

@@ -430,6 +430,7 @@ void CaptureWidget::initButtons()
     for (CaptureTool::Type t : allButtonTypes) {
         auto* b = new CaptureToolButton(t, this);
         b->setColor(m_uiColor);
+        b->enableNameLabel();
         b->hide();
         // must be enabled for SelectionWidget's eventFilter to work correctly
         b->setAttribute(Qt::WA_NoMousePropagation);

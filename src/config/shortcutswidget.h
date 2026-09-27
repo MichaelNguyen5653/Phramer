@@ -50,11 +50,5 @@ private:
     void checkPrintScreenForcesSnipping();
     bool isPrintScreenKeyForSnippingDisabled();
     bool disablePrintScreenKeyForSnipping();
-
-    void initMsScreenclipCheckbox();
-    bool isMsScreenclipRegistered();
-    bool registerMsScreenclip();
-    bool unregisterMsScreenclip();
-    QCheckBox* m_registerMsScreenclip;
 #endif
 };

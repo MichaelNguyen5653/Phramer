@@ -265,7 +265,9 @@ void ButtonHandler::updateBlockedSides()
         screenRegion += rect;
     }
 
-    const int EXTENSION = m_separator * 2 + m_buttonBaseSize;
+    // One cell plus the gap to the selection, so a row of labelled buttons
+    // counts as not fitting when only the bare buttons would
+    const int EXTENSION = m_buttonExtendedSize + m_separator;
     // Right
     QPoint pointA(m_selection.right() + EXTENSION, m_selection.bottom());
     QPoint pointB(pointA.x(), m_selection.top());
@@ -378,6 +380,18 @@ void ButtonHandler::setButtons(const QVector<CaptureToolButton*>& v)
     m_vectorButtons = v;
     m_buttonBaseSize = GlobalValues::buttonBaseSize();
     m_buttonExtendedSize = m_buttonBaseSize + m_separator;
+
+    // Names under the buttons need a taller cell, and a wide name needs the
+    // neighbours pushed apart. One pitch serves both axes, as before.
+    QSize label;
+    for (const CaptureToolButton* b : m_vectorButtons) {
+        label = label.expandedTo(b->labelSize());
+    }
+    if (!label.isEmpty()) {
+        m_buttonExtendedSize =
+          qMax(m_buttonBaseSize + m_separator + label.height() + 2,
+               label.width() + m_separator / 2);
+    }
 }
 
 bool ButtonHandler::contains(const QPoint& p) const

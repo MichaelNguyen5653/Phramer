@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "widgets/editor/editorwindow.h"
+#include "widgets/editor/editortheme.h"
 
 #include "core/flameshotdaemon.h"
 #include "core/qguiappcurrentscreen.h"
@@ -15,6 +16,9 @@
 #include "utils/filenamehandler.h"
 #include "utils/globalvalues.h"
 #include "utils/pathinfo.h"
+#if defined(Q_OS_WIN)
+#include "utils/printscreenkey.h"
+#endif
 #include "utils/screenshotsaver.h"
 #include "widgets/editor/editorcanvas.h"
 #include "widgets/editor/editorfilmstrip.h"
@@ -27,12 +31,15 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPixmap>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
@@ -43,6 +50,7 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QStyle>
+#include <QStyleHints>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -168,11 +176,15 @@ EditorWindow::EditorWindow(QWidget* parent)
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowTitle(tr("Phramer Editor"));
     setWindowIcon(GlobalValues::appIcon());
-    resize(1000, 720);
+    // The style sheet is scoped to this name so dialogs keep the platform look
+    setObjectName(QStringLiteral("phramerEditor"));
+    // Wide enough for the labelled toolbar without an overflow arrow
+    resize(1240, 760);
 
     m_pages = new QStackedWidget(this);
 
     m_filmstrip = new EditorFilmstrip(this);
+    m_filmstrip->setObjectName(QStringLiteral("editorFilmstrip"));
     connect(m_filmstrip,
             &EditorFilmstrip::imageActivated,
             this,
@@ -186,12 +198,19 @@ EditorWindow::EditorWindow(QWidget* parent)
     auto* layout = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
+    buildEmptyState();
+    layout->addWidget(m_emptyState, 1);
     layout->addWidget(m_pages, 1);
     layout->addWidget(m_filmstrip);
     setCentralWidget(central);
 
     buildToolBar();
     buildStatusBar();
+    applyTheme();
+    connect(QGuiApplication::styleHints(),
+            &QStyleHints::colorSchemeChanged,
+            this,
+            &EditorWindow::applyTheme);
 
     m_thumbnailTimer = new QTimer(this);
     m_thumbnailTimer->setSingleShot(true);
@@ -206,6 +225,7 @@ EditorWindow::EditorWindow(QWidget* parent)
     updateNavigationState();
     updateUndoState();
     updateColorSwatch();
+    updateEmptyState();
 }
 
 EditorWindow::~EditorWindow()
@@ -213,6 +233,97 @@ EditorWindow::~EditorWindow()
     if (s_instance == this) {
         s_instance = nullptr;
     }
+}
+
+void EditorWindow::openEmpty()
+{
+    if (s_instance.isNull()) {
+        s_instance = new EditorWindow();
+    }
+    s_instance->updateEmptyState();
+    s_instance->show();
+    s_instance->raise();
+    s_instance->activateWindow();
+}
+
+void EditorWindow::buildEmptyState()
+{
+    m_emptyState = new QWidget(this);
+    auto* layout = new QVBoxLayout(m_emptyState);
+    layout->setSpacing(10);
+    layout->addStretch(1);
+
+    auto* icon = new QLabel(m_emptyState);
+    icon->setPixmap(GlobalValues::appIcon().pixmap(72, 72));
+    icon->setAlignment(Qt::AlignHCenter);
+    layout->addWidget(icon);
+
+    auto* title = new QLabel(
+      tr("Perform a capture to load an image into the editor"), m_emptyState);
+    QFont font = title->font();
+    font.setPointSizeF(font.pointSizeF() * 1.35);
+    font.setWeight(QFont::DemiBold);
+    title->setFont(font);
+    title->setAlignment(Qt::AlignHCenter);
+    layout->addWidget(title);
+
+    m_emptyHint = new QLabel(m_emptyState);
+    m_emptyHint->setAlignment(Qt::AlignHCenter);
+    m_emptyHint->setWordWrap(true);
+    m_emptyHint->setTextFormat(Qt::RichText);
+    layout->addWidget(m_emptyHint);
+    layout->addStretch(1);
+}
+
+void EditorWindow::updateEmptyState()
+{
+    const bool empty = m_canvases.isEmpty();
+    m_emptyState->setVisible(empty);
+    m_pages->setVisible(!empty);
+    m_filmstrip->setVisible(!empty);
+    // Nothing on the toolbar has anything to act on without an image
+    if (m_toolBar) {
+        m_toolBar->setEnabled(!empty);
+    }
+    if (!empty) {
+        return;
+    }
+
+    ConfigHandler config;
+    const auto keyText = [](const QString& stored) {
+        return QKeySequence(stored).toString(QKeySequence::NativeText);
+    };
+    const QString capture = keyText(config.shortcut("TAKE_SCREENSHOT"));
+    QStringList keys;
+    if (!capture.isEmpty()) {
+        keys << QStringLiteral("<b>%1</b>").arg(capture.toHtmlEscaped());
+    }
+#if defined(Q_OS_WIN)
+    // Only when Phramer has taken Print Screen over from Windows; otherwise
+    // that key still opens the Windows snipping tool
+    const QString printScreen =
+      QKeySequence(Qt::Key_Print).toString(QKeySequence::NativeText);
+    if (PrintScreenKey::isSnippingDisabled() && capture != printScreen) {
+        keys << QStringLiteral("<b>%1</b>").arg(printScreen.toHtmlEscaped());
+    }
+#endif
+
+    QString first = keys.isEmpty()
+                      ? tr("Take a capture from the tray icon")
+                      : tr("Press %1 to capture")
+                          .arg(keys.join(QStringLiteral(" %1 ").arg(tr("or"))));
+    QString second;
+    if (config.autoOpenInEditor()) {
+        second = tr("It opens here automatically.");
+    } else {
+        const QString editorKey =
+          keyText(config.shortcut("TYPE_OPEN_IN_EDITOR"));
+        second = editorKey.isEmpty()
+                   ? tr("Then pick Editor on the capture toolbar.")
+                   : tr("Then pick Editor (<b>%1</b>) on the capture toolbar.")
+                       .arg(editorKey.toHtmlEscaped());
+    }
+    m_emptyHint->setText(first + QStringLiteral(". ") + second);
 }
 
 bool EditorWindow::isOpen()
@@ -276,6 +387,8 @@ void EditorWindow::addImage(const QPixmap& image,
     // The canvas is fixed to the image size; the scroll area handles captures
     // larger than the window
     auto* scroll = new QScrollArea(m_pages);
+    scroll->setObjectName(QStringLiteral("editorPage"));
+    scroll->setFrameShape(QFrame::NoFrame);
     scroll->setAlignment(Qt::AlignCenter);
     scroll->setWidget(canvas);
     scroll->setWidgetResizable(false);
@@ -294,6 +407,7 @@ void EditorWindow::addImage(const QPixmap& image,
     }
 
     setCurrentIndex(m_canvases.size() - 1);
+    updateEmptyState();
 }
 
 void EditorWindow::resizeToFit(EditorCanvas* canvas)
@@ -323,8 +437,16 @@ void EditorWindow::resizeToFit(EditorCanvas* canvas)
 void EditorWindow::buildToolBar()
 {
     auto* bar = addToolBar(tr("Tools"));
+    m_toolBar = bar;
+    bar->setObjectName(QStringLiteral("editorToolBar"));
     bar->setMovable(false);
-    bar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    bar->setIconSize(QSize(20, 20));
+    // Names under the icons, the same one-word names the capture overlay
+    // shows. applyTheme() re-picks the icons from the "phramerIcon" and
+    // "phramerTool" properties set on each action below.
+    bar->setToolButtonStyle(ConfigHandler().showToolLabels()
+                              ? Qt::ToolButtonTextUnderIcon
+                              : Qt::ToolButtonIconOnly);
 
     // Tool icons come in a light and a dark variant; pick the one that
     // contrasts with whatever palette the window is actually using
@@ -339,6 +461,13 @@ void EditorWindow::buildToolBar()
 
     auto* selectAction =
       bar->addAction(QIcon(iconDir + "pan-tool.svg"), tr("Select and move"));
+    // The overlay's hand tool, but in the editor it is also how objects
+    // are picked, so it is called Select here
+    selectAction->setIconText(
+      ToolFactory::labelWithShortcut(CaptureTool::TYPE_MOVE_OBJECT,
+                                     shortcutFor(CaptureTool::TYPE_MOVE_OBJECT),
+                                     tr("Select")));
+    selectAction->setProperty("phramerIcon", QStringLiteral("pan-tool.svg"));
     selectAction->setCheckable(true);
     selectAction->setChecked(true);
     selectAction->setData(static_cast<int>(CaptureTool::NONE));
@@ -356,6 +485,10 @@ void EditorWindow::buildToolBar()
     // setting for the capture overlay's selection loupe, and two different
     // features under one word makes every bug report ambiguous.
     m_zoomAction = bar->addAction(QIcon(iconDir + "magnify.svg"), tr("Zoom"));
+    m_zoomAction->setIconText(
+      tr("Zoom (%1)")
+        .arg(QKeySequence(Qt::Key_Z).toString(QKeySequence::NativeText)));
+    m_zoomAction->setProperty("phramerIcon", QStringLiteral("magnify.svg"));
     m_zoomAction->setCheckable(true);
     m_zoomAction->setData(ZoomActionData);
     m_zoomAction->setShortcut(QKeySequence(Qt::Key_Z));
@@ -394,6 +527,8 @@ void EditorWindow::buildToolBar()
     // A view toggle, so it stays out of m_toolGroup and works alongside any
     // tool. Off for every new window, and one state for all open images.
     m_gridAction = bar->addAction(QIcon(iconDir + "grid.svg"), tr("Grid"));
+    m_gridAction->setIconText(tr("Grid"));
+    m_gridAction->setProperty("phramerIcon", QStringLiteral("grid.svg"));
     m_gridAction->setCheckable(true);
     m_gridAction->setChecked(false);
     m_gridAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Apostrophe));
@@ -413,6 +548,15 @@ void EditorWindow::buildToolBar()
         }
         QAction* action =
           bar->addAction(prototype->icon(background, true), prototype->name());
+        // The shape button prefers a key of its own, and otherwise lists
+        // the keys of the three tools it absorbed
+        QString key =
+          type == CaptureTool::TYPE_SHAPE ? shortcutFor(type) : QString();
+        if (key.isEmpty()) {
+            key = editorShortcutHint(type);
+        }
+        action->setIconText(ToolFactory::labelWithShortcut(type, key));
+        action->setProperty("phramerTool", static_cast<int>(type));
         action->setCheckable(true);
         action->setData(static_cast<int>(type));
         action->setToolTip(
@@ -430,10 +574,15 @@ void EditorWindow::buildToolBar()
         delete prototype;
     }
 
-    bar->addSeparator();
+    // Drawing on the left, everything that acts on the image on the right
+    auto* spacer = new QWidget(bar);
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    bar->addWidget(spacer);
 
     m_undoAction =
       bar->addAction(QIcon(iconDir + "undo-variant.svg"), tr("Undo"));
+    m_undoAction->setProperty("phramerIcon",
+                              QStringLiteral("undo-variant.svg"));
     m_undoAction->setShortcut(QKeySequence::Undo);
     connect(m_undoAction, &QAction::triggered, this, [this]() {
         if (EditorCanvas* canvas = currentCanvas()) {
@@ -443,6 +592,8 @@ void EditorWindow::buildToolBar()
 
     m_redoAction =
       bar->addAction(QIcon(iconDir + "redo-variant.svg"), tr("Redo"));
+    m_redoAction->setProperty("phramerIcon",
+                              QStringLiteral("redo-variant.svg"));
     m_redoAction->setShortcut(QKeySequence::Redo);
     connect(m_redoAction, &QAction::triggered, this, [this]() {
         if (EditorCanvas* canvas = currentCanvas()) {
@@ -458,7 +609,7 @@ void EditorWindow::buildToolBar()
       m_colorAction, &QAction::triggered, this, &EditorWindow::chooseColor);
 
     auto* sizeLabel = new QLabel(tr("Size"), bar);
-    sizeLabel->setContentsMargins(8, 0, 4, 0);
+    sizeLabel->setContentsMargins(6, 0, 4, 0);
     bar->addWidget(sizeLabel);
     m_sizeBox = new QSpinBox(bar);
     m_sizeBox->setRange(EditorCanvas::MinToolSize, EditorCanvas::MaxToolSize);
@@ -475,20 +626,38 @@ void EditorWindow::buildToolBar()
 
     QAction* copyAction =
       bar->addAction(QIcon(iconDir + "content-copy.svg"), tr("Copy"));
+    copyAction->setProperty("phramerIcon", QStringLiteral("content-copy.svg"));
     copyAction->setToolTip(tr("Copy the current image to the clipboard"));
     copyAction->setShortcut(QKeySequence::Copy);
     connect(copyAction, &QAction::triggered, this, &EditorWindow::copyCurrent);
 
-    QAction* saveAction =
-      bar->addAction(QIcon(iconDir + "content-save.svg"), tr("Save"));
+    // Save All is the button: a session usually holds several captures.
+    // Saving just the image on screen is in its drop-down, and keeps Ctrl+S.
+    const QKeySequence saveAllKey(Qt::CTRL | Qt::SHIFT | Qt::Key_S);
+    QAction* saveAllAction =
+      bar->addAction(QIcon(iconDir + "content-save.svg"), tr("Save All"));
+    saveAllAction->setProperty("phramerIcon",
+                               QStringLiteral("content-save.svg"));
+    saveAllAction->setShortcut(saveAllKey);
+    saveAllAction->setToolTip(
+      withShortcut(tr("Save every image in this session to one folder"),
+                   saveAllKey.toString(QKeySequence::NativeText)));
+    connect(saveAllAction, &QAction::triggered, this, &EditorWindow::saveAll);
+
+    auto* saveAction = new QAction(tr("Save This Image"), this);
     saveAction->setToolTip(tr("Save the current image"));
     saveAction->setShortcut(QKeySequence::Save);
     connect(saveAction, &QAction::triggered, this, &EditorWindow::saveCurrent);
-
-    QAction* saveAllAction = bar->addAction(tr("Save All"));
-    saveAllAction->setToolTip(
-      tr("Save every image in this session to one folder"));
-    connect(saveAllAction, &QAction::triggered, this, &EditorWindow::saveAll);
+    // A menu that is not open does not deliver shortcuts, so the window
+    // carries the action as well
+    addAction(saveAction);
+    if (auto* saveButton =
+          qobject_cast<QToolButton*>(bar->widgetForAction(saveAllAction))) {
+        auto* saveMenu = new QMenu(saveButton);
+        saveMenu->addAction(saveAction);
+        saveButton->setMenu(saveMenu);
+        saveButton->setPopupMode(QToolButton::MenuButtonPopup);
+    }
 
     // Separated from Save so a destructive button is not adjacent to the one
     // people reach for most. No shortcut on purpose: Delete already removes
@@ -497,6 +666,8 @@ void EditorWindow::buildToolBar()
     bar->addSeparator();
     QAction* removeAction =
       bar->addAction(QIcon(iconDir + "delete.svg"), tr("Remove Image"));
+    removeAction->setIconText(tr("Remove"));
+    removeAction->setProperty("phramerIcon", QStringLiteral("delete.svg"));
     removeAction->setToolTip(
       tr("Remove the current image from this editor session"));
     connect(removeAction,
@@ -507,6 +678,9 @@ void EditorWindow::buildToolBar()
 #if defined(Q_OS_WIN)
     bar->addSeparator();
     QAction* ocrAction = bar->addAction(QIcon(iconDir + "ocr.svg"), tr("OCR"));
+    ocrAction->setProperty("phramerIcon", QStringLiteral("ocr.svg"));
+    ocrAction->setIconText(ToolFactory::labelWithShortcut(
+      CaptureTool::TYPE_OCR, shortcutFor(CaptureTool::TYPE_OCR)));
     ocrAction->setToolTip(
       withShortcut(tr("Extract text from the current image"),
                    shortcutFor(CaptureTool::TYPE_OCR)));
@@ -560,10 +734,13 @@ void EditorWindow::attachOptionsMenu(QToolBar* bar,
     // have to go through the menu
     button->setPopupMode(QToolButton::MenuButtonPopup);
 
-    const auto refreshIcon = [action, type, background]() {
+    Q_UNUSED(background)
+    // Reads the current background rather than capturing one, so a picker
+    // opened after Windows switched theme still gets the right icon set
+    const auto refreshIcon = [this, action, type]() {
         CaptureTool* tool = ToolFactory().CreateTool(type, nullptr);
         if (tool) {
-            action->setIcon(tool->icon(background, true));
+            action->setIcon(tool->icon(m_toolbarBackground, true));
             delete tool;
         }
     };
@@ -578,6 +755,8 @@ void EditorWindow::attachOptionsMenu(QToolBar* bar,
 
 void EditorWindow::buildStatusBar()
 {
+    statusBar()->setObjectName(QStringLiteral("editorStatus"));
+    statusBar()->setSizeGripEnabled(false);
     auto* container = new QWidget(this);
     auto* layout = new QHBoxLayout(container);
     layout->setContentsMargins(6, 0, 6, 0);
@@ -941,11 +1120,78 @@ void EditorWindow::updateUndoState()
     m_redoAction->setEnabled(canvas && canvas->undoStack()->canRedo());
 }
 
+void EditorWindow::applyTheme()
+{
+    const EditorTheme theme = EditorTheme::current();
+    setPalette(theme.palette(QGuiApplication::palette()));
+    setStyleSheet(theme.styleSheet());
+    m_toolbarBackground = theme.window;
+    refreshToolbarIcons();
+    updateColorSwatch();
+}
+
+void EditorWindow::refreshToolbarIcons()
+{
+    if (!m_toolBar) {
+        return;
+    }
+    const QString iconDir = ColorUtils::colorIsDark(m_toolbarBackground)
+                              ? PathInfo::whiteIconPath()
+                              : PathInfo::blackIconPath();
+    for (QAction* action : m_toolBar->actions()) {
+        const QVariant file = action->property("phramerIcon");
+        if (file.isValid()) {
+            action->setIcon(QIcon(iconDir + file.toString()));
+            continue;
+        }
+        const QVariant type = action->property("phramerTool");
+        if (!type.isValid()) {
+            continue;
+        }
+        CaptureTool* tool = ToolFactory().CreateTool(
+          static_cast<CaptureTool::Type>(type.toInt()), nullptr);
+        if (tool) {
+            action->setIcon(tool->icon(m_toolbarBackground, true));
+            delete tool;
+        }
+    }
+}
+
+void EditorWindow::showEvent(QShowEvent* event)
+{
+    QMainWindow::showEvent(event);
+    if (m_fadedIn) {
+        return;
+    }
+    m_fadedIn = true;
+    // A short fade rather than the window popping in fully drawn. Short
+    // enough that it never delays the first click.
+    setWindowOpacity(0.0);
+    auto* fade = new QPropertyAnimation(this, "windowOpacity", this);
+    fade->setDuration(160);
+    fade->setStartValue(0.0);
+    fade->setEndValue(1.0);
+    fade->setEasingCurve(QEasingCurve::OutCubic);
+    fade->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
 void EditorWindow::updateColorSwatch()
 {
     const QColor color = ConfigHandler().drawColor();
-    QPixmap swatch(20, 20);
-    swatch.fill(color);
+    const qreal ratio = devicePixelRatioF();
+    QPixmap swatch(QSize(20, 20) * ratio);
+    swatch.setDevicePixelRatio(ratio);
+    swatch.fill(Qt::transparent);
+    QPainter painter(&swatch);
+    painter.setRenderHint(QPainter::Antialiasing);
+    // A hairline rim so a swatch that matches the toolbar still shows
+    const QColor rim = ColorUtils::colorIsDark(m_toolbarBackground)
+                         ? QColor(255, 255, 255, 90)
+                         : QColor(0, 0, 0, 70);
+    painter.setPen(QPen(rim, 1));
+    painter.setBrush(color);
+    painter.drawEllipse(QRectF(2.5, 2.5, 15, 15));
+    painter.end();
     m_colorAction->setIcon(QIcon(swatch));
 }
 

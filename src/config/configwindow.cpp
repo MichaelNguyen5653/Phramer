@@ -54,7 +54,7 @@ ConfigWindow::ConfigWindow(QWidget* parent)
       isDark ? PathInfo::whiteIconPath() : PathInfo::blackIconPath();
 
     // general
-    m_generalConfig = new GeneralConf();
+    m_generalConfig = new GeneralConf(GeneralConf::Page::General);
     m_generalConfigTab = new QWidget();
     auto* generalConfigLayout = new QVBoxLayout(m_generalConfigTab);
     m_generalConfigTab->setLayout(generalConfigLayout);
@@ -90,6 +90,15 @@ ConfigWindow::ConfigWindow(QWidget* parent)
     m_tabWidget->addTab(
       m_shortcutsTab, QIcon(modifier + "shortcut.svg"), tr("Shortcuts"));
 
+    // advanced: every setting that is not on General, with its own search
+    m_advancedConfig = new GeneralConf(GeneralConf::Page::Advanced);
+    m_advancedConfigTab = new QWidget();
+    auto* advancedConfigLayout = new QVBoxLayout(m_advancedConfigTab);
+    m_advancedConfigTab->setLayout(advancedConfigLayout);
+    advancedConfigLayout->addWidget(m_advancedConfig);
+    m_tabWidget->addTab(
+      m_advancedConfigTab, QIcon(modifier + "config.svg"), tr("Advanced"));
+
     // connect update sigslots
     connect(this,
             &ConfigWindow::updateChildren,
@@ -103,11 +112,16 @@ ConfigWindow::ConfigWindow(QWidget* parent)
             &ConfigWindow::updateChildren,
             m_generalConfig,
             &GeneralConf::updateComponents);
+    connect(this,
+            &ConfigWindow::updateChildren,
+            m_advancedConfig,
+            &GeneralConf::updateComponents);
 
     // Error indicator (this must come last)
     initErrorIndicator(m_visualsTab, m_visuals);
     initErrorIndicator(m_filenameEditorTab, m_filenameEditor);
     initErrorIndicator(m_generalConfigTab, m_generalConfig);
+    initErrorIndicator(m_advancedConfigTab, m_advancedConfig);
     initErrorIndicator(m_shortcutsTab, m_shortcuts);
 }
 

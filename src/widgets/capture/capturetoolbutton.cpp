@@ -9,6 +9,7 @@
 
 #include <QApplication>
 #include <QIcon>
+#include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPropertyAnimation>
@@ -29,6 +30,7 @@ CaptureToolButton::CaptureToolButton(const CaptureTool::Type t, QWidget* parent)
 
 CaptureToolButton::~CaptureToolButton()
 {
+    delete m_label;
     if (m_tool) {
         delete m_tool;
         m_tool = nullptr;
@@ -74,6 +76,76 @@ void CaptureToolButton::initButton()
     m_emergeAnimation->setStartValue(QSize(0, 0));
     m_emergeAnimation->setEndValue(
       QSize(GlobalValues::buttonBaseSize(), GlobalValues::buttonBaseSize()));
+}
+
+void CaptureToolButton::enableNameLabel()
+{
+    if (m_label || !parentWidget() || !ConfigHandler().showToolLabels()) {
+        return;
+    }
+    const QString text = ToolFactory::labelWithShortcut(
+      m_buttonType,
+      ConfigHandler().shortcut(QVariant::fromValue(m_buttonType).toString()));
+    if (text.isEmpty()) {
+        return;
+    }
+    m_label = new QLabel(text, parentWidget());
+    // Clicks must reach the overlay underneath: a label sits outside the
+    // selection, where a press starts a new one
+    m_label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_label->setAlignment(Qt::AlignCenter);
+    QFont font = m_label->font();
+    font.setPointSizeF(font.pointSizeF() * 0.8);
+    font.setWeight(QFont::DemiBold);
+    m_label->setFont(font);
+    // A dark pill, independent of the UI colour, so the name reads on any
+    // screenshot underneath
+    m_label->setStyleSheet(
+      QStringLiteral("QLabel { color: white; background: rgba(24, 24, 27, 205);"
+                     " border-radius: 6px; padding: 0px 5px; }"));
+    m_label->adjustSize();
+    m_label->hide();
+}
+
+QSize CaptureToolButton::labelSize() const
+{
+    return m_label ? m_label->size() : QSize();
+}
+
+void CaptureToolButton::placeLabel()
+{
+    if (!m_label) {
+        return;
+    }
+    // Placed from the base size rather than size(): while the emerge
+    // animation runs the button is still growing from nothing
+    const int base = GlobalValues::buttonBaseSize();
+    m_label->move(pos().x() + (base - m_label->width()) / 2,
+                  pos().y() + base + 2);
+}
+
+void CaptureToolButton::moveEvent(QMoveEvent* e)
+{
+    CaptureButton::moveEvent(e);
+    placeLabel();
+}
+
+void CaptureToolButton::showEvent(QShowEvent* e)
+{
+    CaptureButton::showEvent(e);
+    if (m_label) {
+        placeLabel();
+        m_label->show();
+        m_label->raise();
+    }
+}
+
+void CaptureToolButton::hideEvent(QHideEvent* e)
+{
+    CaptureButton::hideEvent(e);
+    if (m_label) {
+        m_label->hide();
+    }
 }
 
 void CaptureToolButton::updateIcon()

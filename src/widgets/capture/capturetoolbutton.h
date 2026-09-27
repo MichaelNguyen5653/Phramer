@@ -7,7 +7,10 @@
 #include "tools/capturetool.h"
 
 #include <QMap>
+#include <QPointer>
 #include <QVector>
+
+class QLabel;
 
 class QWidget;
 class QPropertyAnimation;
@@ -32,8 +35,19 @@ public:
     void setColor(const QColor& c);
     void animatedShow();
 
+    // Adds the tool's name under the button when the setting is on. Only the
+    // capture overlay asks: the settings page shows these buttons as colour
+    // previews, where a name would be noise.
+    void enableNameLabel();
+    // Size of the name label, or empty when there is none. ButtonHandler
+    // spaces the buttons to fit it.
+    QSize labelSize() const;
+
 protected:
     void mousePressEvent(QMouseEvent* e) override;
+    void moveEvent(QMoveEvent* e) override;
+    void showEvent(QShowEvent* e) override;
+    void hideEvent(QHideEvent* e) override;
     static QList<CaptureTool::Type> iterableButtonTypes;
 
     CaptureTool* m_tool;
@@ -47,6 +61,11 @@ private:
     CaptureTool::Type m_buttonType;
 
     QPropertyAnimation* m_emergeAnimation;
+    // A sibling rather than a child: the button is masked to a circle, which
+    // would clip anything drawn below it
+    QPointer<QLabel> m_label;
+
+    void placeLabel();
 
     static QColor m_mainColor;
 

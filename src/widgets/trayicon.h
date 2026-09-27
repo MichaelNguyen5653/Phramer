@@ -39,6 +39,7 @@ private:
 #endif
     QAction* m_captureAction;
     QAction* m_launcherAction;
+    QAction* m_whatsNewAction{ nullptr };
     QAction* m_infoAction;
 #if !defined(DISABLE_UPDATE_CHECKER)
     QAction* m_appUpdates;

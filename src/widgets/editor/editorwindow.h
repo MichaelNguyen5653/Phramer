@@ -49,6 +49,9 @@ public:
                            const QList<QPointer<CaptureTool>>& objects = {},
                            const QPoint& offset = QPoint());
     static bool isOpen();
+    // Opens the window with no image, showing how to capture one. For the
+    // welcome's "Take me to Phramer".
+    static void openEmpty();
 
     void addImage(const QPixmap& image,
                   const QList<QPointer<CaptureTool>>& objects = {},
@@ -62,6 +65,8 @@ protected:
     // annotation would swap to the pencil mid-word; an unhandled key event
     // only reaches this window because the focused widget did not want it.
     void keyPressEvent(QKeyEvent* event) override;
+    // Fades the window in the first time it appears
+    void showEvent(QShowEvent* event) override;
 
 private slots:
     void copyCurrent();
@@ -91,6 +96,14 @@ private:
     // so a capture that would fit does not start out scrolled
     void resizeToFit(EditorCanvas* canvas);
     void buildToolBar();
+    // Applies the light or dark look to match Windows, and re-picks every
+    // toolbar icon for it. Runs again whenever Windows switches.
+    void applyTheme();
+    void refreshToolbarIcons();
+    void buildEmptyState();
+    // Swaps between the empty state and the canvas, and rewrites the hint
+    // from the current shortcut settings
+    void updateEmptyState();
     // Turns a toolbar entry into a split button whose arrow opens the tool's
     // variant picker
     void attachOptionsMenu(QToolBar* bar,
@@ -132,6 +145,11 @@ private:
     // exclusive with drawing, but places no object
     QAction* m_zoomAction{ nullptr };
     QAction* m_gridAction{ nullptr };
+    QToolBar* m_toolBar{ nullptr };
+    // Shown in place of the canvas while the session holds no image
+    QWidget* m_emptyState{ nullptr };
+    QLabel* m_emptyHint{ nullptr };
+    bool m_fadedIn{ false };
     // Window background the tool icons were chosen against, kept so an icon
     // can be rebuilt later without re-deriving it
     QColor m_toolbarBackground;

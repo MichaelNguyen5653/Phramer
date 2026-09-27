@@ -27,6 +27,9 @@ public:
     static void start();
     static FlameshotDaemon* instance();
     static void createPin(const QPixmap& capture, QRect geometry);
+    // Asks the running daemon to start a capture, exactly as its own hotkey
+    // would. Returns false when there is no daemon to ask.
+    static bool requestGui();
     static void copyToClipboard(const QPixmap& capture);
     static void copyToClipboard(const QString& text,
                                 const QString& notification = "");

@@ -20,7 +20,14 @@ class GeneralConf : public QWidget
 {
     Q_OBJECT
 public:
-    explicit GeneralConf(QWidget* parent = nullptr);
+    // The same class builds both tabs so every setting keeps one
+    // implementation; the page only decides which rows are created
+    enum class Page
+    {
+        General,
+        Advanced
+    };
+    explicit GeneralConf(Page page, QWidget* parent = nullptr);
     enum xywh_position
     {
         xywh_none = 0,
@@ -33,6 +40,9 @@ public:
 
 public slots:
     void updateComponents();
+
+protected:
+    void changeEvent(QEvent* event) override;
 
 private slots:
     void showHelpChanged(bool checked);
@@ -101,6 +111,7 @@ private:
     void initShowHelp();
     void initShowMagnifier();
     void initShowEditorHint();
+    void initShowToolLabels();
     void initShowQuitPrompt();
     void initShowSidePanelButton();
     void initShowStartupLaunchMessage();
@@ -121,6 +132,10 @@ private:
 #endif
 #if defined(Q_OS_WIN)
     void initShowWelcomeMessage();
+    void initScreenClipProtocol();
+    // Status text and button for whatever the registry says right now
+    void updateScreenClipRow();
+    void toggleScreenClipRegistration();
 #endif
 #if defined(Q_OS_MACOS)
     void initUseNativeFullscreen();
@@ -141,64 +156,69 @@ private:
     };
 
     // class members
-    QVBoxLayout* m_layout;
-    QLineEdit* m_searchBox;
+    Page m_page;
+    QVBoxLayout* m_layout{ nullptr };
+    QLineEdit* m_searchBox{ nullptr };
     QVector<SearchRow> m_searchRows;
-    QVBoxLayout* m_scrollAreaLayout;
-    QScrollArea* m_scrollArea;
-    QCheckBox* m_sysNotifications;
-    QCheckBox* m_abortNotifications;
-    QCheckBox* m_showTray;
-    QCheckBox* m_helpMessage;
-    QCheckBox* m_sidePanelButton;
+    QVBoxLayout* m_scrollAreaLayout{ nullptr };
+    QScrollArea* m_scrollArea{ nullptr };
+    QCheckBox* m_sysNotifications{ nullptr };
+    QCheckBox* m_abortNotifications{ nullptr };
+    QCheckBox* m_showTray{ nullptr };
+    QCheckBox* m_helpMessage{ nullptr };
+    QCheckBox* m_sidePanelButton{ nullptr };
 #if !defined(DISABLE_UPDATE_CHECKER)
-    QCheckBox* m_checkForUpdates;
+    QCheckBox* m_checkForUpdates{ nullptr };
 #endif
-    QCheckBox* m_allowMultipleGuiInstances;
-    QCheckBox* m_autoOpenInEditor;
-    QCheckBox* m_autoCloseIdleDaemon;
-    QCheckBox* m_autostart;
-    QCheckBox* m_showStartupLaunchMessage;
-    QCheckBox* m_showQuitPrompt;
-    QCheckBox* m_copyURLAfterUpload;
-    QCheckBox* m_copyPathAfterSave;
-    QCheckBox* m_antialiasingPinZoom;
-    QCheckBox* m_saveLastRegion;
-    QCheckBox* m_uploadWithoutConfirmation;
-    QPushButton* m_importButton;
-    QPushButton* m_exportButton;
-    QPushButton* m_resetButton;
-    QCheckBox* m_saveAfterCopy;
-    QLineEdit* m_savePath;
-    QLineEdit* m_uploadClientKey;
-    QPushButton* m_changeSaveButton;
-    QCheckBox* m_screenshotPathFixedCheck;
-    QCheckBox* m_historyConfirmationToDelete;
-    QCheckBox* m_useJpgForClipboard;
-    QSpinBox* m_uploadHistoryMax;
-    QSpinBox* m_undoLimit;
-    QComboBox* m_setSaveAsFileExtension;
-    QCheckBox* m_predefinedColorPaletteLarge;
-    QCheckBox* m_showMagnifier;
-    QCheckBox* m_showEditorHint;
-    QCheckBox* m_squareMagnifier;
-    QCheckBox* m_copyOnDoubleClick;
-    QCheckBox* m_showSelectionGeometry;
-    QComboBox* m_selectGeometryLocation;
-    QSpinBox* m_xywhTimeout;
-    QSpinBox* m_jpegQuality;
-    QCheckBox* m_reverseArrow;
-    QCheckBox* m_insecurePixelate;
+    QCheckBox* m_allowMultipleGuiInstances{ nullptr };
+    QCheckBox* m_autoOpenInEditor{ nullptr };
+    QCheckBox* m_autoCloseIdleDaemon{ nullptr };
+    QCheckBox* m_autostart{ nullptr };
+    QCheckBox* m_showStartupLaunchMessage{ nullptr };
+    QCheckBox* m_showQuitPrompt{ nullptr };
+    QCheckBox* m_copyURLAfterUpload{ nullptr };
+    QCheckBox* m_copyPathAfterSave{ nullptr };
+    QCheckBox* m_antialiasingPinZoom{ nullptr };
+    QCheckBox* m_saveLastRegion{ nullptr };
+    QCheckBox* m_uploadWithoutConfirmation{ nullptr };
+    QPushButton* m_importButton{ nullptr };
+    QPushButton* m_exportButton{ nullptr };
+    QPushButton* m_resetButton{ nullptr };
+    QCheckBox* m_saveAfterCopy{ nullptr };
+    QLineEdit* m_savePath{ nullptr };
+    QLineEdit* m_uploadClientKey{ nullptr };
+    QPushButton* m_changeSaveButton{ nullptr };
+    QCheckBox* m_screenshotPathFixedCheck{ nullptr };
+    QCheckBox* m_historyConfirmationToDelete{ nullptr };
+    QCheckBox* m_useJpgForClipboard{ nullptr };
+    QSpinBox* m_uploadHistoryMax{ nullptr };
+    QSpinBox* m_undoLimit{ nullptr };
+    QComboBox* m_setSaveAsFileExtension{ nullptr };
+    QCheckBox* m_predefinedColorPaletteLarge{ nullptr };
+    QCheckBox* m_showMagnifier{ nullptr };
+    QCheckBox* m_showEditorHint{ nullptr };
+    QCheckBox* m_showToolLabels{ nullptr };
+    QCheckBox* m_squareMagnifier{ nullptr };
+    QCheckBox* m_copyOnDoubleClick{ nullptr };
+    QCheckBox* m_showSelectionGeometry{ nullptr };
+    QComboBox* m_selectGeometryLocation{ nullptr };
+    QSpinBox* m_xywhTimeout{ nullptr };
+    QSpinBox* m_jpegQuality{ nullptr };
+    QCheckBox* m_reverseArrow{ nullptr };
+    QCheckBox* m_insecurePixelate{ nullptr };
 #if !defined(Q_OS_MACOS)
-    QComboBox* m_captureRegionMode;
+    QComboBox* m_captureRegionMode{ nullptr };
 #endif
 #if defined(Q_OS_WIN)
-    QCheckBox* m_showWelcomeMessage;
+    QCheckBox* m_showWelcomeMessage{ nullptr };
+    QLabel* m_screenClipStatus{ nullptr };
+    QPushButton* m_screenClipButton{ nullptr };
+    QPushButton* m_screenClipSettingsButton{ nullptr };
 #endif
 #if defined(Q_OS_MACOS)
-    QCheckBox* m_useNativeFullscreen;
+    QCheckBox* m_useNativeFullscreen{ nullptr };
 #endif
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
-    QCheckBox* m_useX11LegacyScreenshot;
+    QCheckBox* m_useX11LegacyScreenshot{ nullptr };
 #endif
 };

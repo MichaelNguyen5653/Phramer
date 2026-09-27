@@ -19,6 +19,9 @@
 #include "utils/confighandler.h"
 #include "utils/filenamehandler.h"
 #include "utils/pathinfo.h"
+#if defined(Q_OS_WIN)
+#include "utils/screenclipprotocol.h"
+#endif
 #include "utils/valuehandler.h"
 
 #if !(defined(Q_OS_MACOS) || defined(Q_OS_WIN))
@@ -31,6 +34,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QLibraryInfo>
 #include <QNetworkProxyFactory>
 #include <QProcess>
@@ -64,6 +68,29 @@ static int setup_unix_signal_handlers()
         return 2;
 
     return 0;
+}
+#endif
+
+#if defined(Q_OS_WIN)
+// Set on a daemon started by a bare "gui" that found none running, so the
+// new daemon takes the capture that was asked for
+constexpr char CaptureOnStartEnv[] = "PHRAMER_CAPTURE_ON_START";
+
+bool launchDaemonWithCapture()
+{
+    // Always the GUI binary: this may be phramer-cli.exe
+    const QFileInfo self(QCoreApplication::applicationFilePath());
+    QString name = self.completeBaseName();
+    if (name.endsWith(QStringLiteral("-cli"))) {
+        name.chop(4);
+    }
+    QProcess daemon;
+    daemon.setProgram(self.dir().filePath(name + QStringLiteral(".exe")));
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QString::fromLatin1(CaptureOnStartEnv),
+                       QStringLiteral("1"));
+    daemon.setProcessEnvironment(environment);
+    return daemon.startDetached();
 }
 #endif
 
@@ -248,6 +275,21 @@ static void migrateLegacyConfig()
 
 int main(int argc, char* argv[])
 {
+#if defined(Q_OS_WIN)
+    // The elevated copy started to register or unregister ms-screenclip.
+    // Handled before anything else: it must not touch the config, take the
+    // single-instance lock or show a window, only write the key and exit.
+    if (argc == 2 &&
+        qstrcmp(argv[1], ScreenClipProtocol::RegisterArgument) == 0) {
+        QCoreApplication app(argc, argv);
+        return ScreenClipProtocol::writeRegistration() ? 0 : 1;
+    }
+    if (argc == 2 &&
+        qstrcmp(argv[1], ScreenClipProtocol::UnregisterArgument) == 0) {
+        QCoreApplication app(argc, argv);
+        return ScreenClipProtocol::removeRegistration() ? 0 : 1;
+    }
+#endif
 
     QTranslator translator, qtTranslator;
 
@@ -297,6 +339,15 @@ int main(int argc, char* argv[])
                   &KDSingleApplication::messageReceived,
                   FlameshotDaemon::instance(),
                   &FlameshotDaemon::messageReceivedFromSecondaryInstance);
+            }
+#endif
+
+#if defined(Q_OS_WIN)
+            if (qEnvironmentVariableIsSet(CaptureOnStartEnv)) {
+                // Unset first, so nothing this daemon starts later, such as
+                // a restart, inherits it
+                qunsetenv(CaptureOnStartEnv);
+                QTimer::singleShot(0, c, [c]() { c->gui(); });
             }
 #endif
 
@@ -586,6 +637,20 @@ int main(int argc, char* argv[])
                 req.addSaveTask();
             }
         }
+#if defined(Q_OS_WIN)
+        // A bare "gui" is how Print Screen arrives once Phramer is chosen for
+        // ms-screenclip. Captured in this short-lived process, the editor,
+        // the clipboard and pins would all go when the process exits, so the
+        // daemon takes it instead, as its own hotkey would, and is started
+        // for it if it is not running. Options that print to this process's
+        // stdout or change the request keep the capture here.
+        if (req.tasks() == CaptureRequest::NO_TASK && delay == 0 &&
+            region.isEmpty() && !useLastRegion &&
+            (FlameshotDaemon::requestGui() || launchDaemonWithCapture())) {
+            delete qApp;
+            return 0;
+        }
+#endif
         int guiExitCode = requestCaptureAndWait(req);
         delete qApp;
         return guiExitCode;

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2017-2019 Alejandro Sirgo Rica & Contributors
 
 #include "toolfactory.h"
+
 #include "tools/accept/accepttool.h"
 #include "tools/arrow/arrowtool.h"
 #include "tools/circle/circletool.h"
@@ -9,6 +10,7 @@
 #include "tools/copy/copytool.h"
 #include "tools/editor/openineditortool.h"
 #include "tools/exit/exittool.h"
+#include <QKeySequence>
 #ifdef ENABLE_IMGUR
 #include "tools/imgupload/imguploadertool.h"
 #endif
@@ -81,4 +83,95 @@ CaptureTool* ToolFactory::CreateTool(CaptureTool::Type t, QObject* parent)
         default:
             return nullptr;
     }
+}
+
+QString ToolFactory::shortName(CaptureTool::Type t)
+{
+    switch (t) {
+        case CaptureTool::TYPE_PENCIL:
+            return tr("Pencil");
+        case CaptureTool::TYPE_DRAWER:
+            return tr("Line");
+        case CaptureTool::TYPE_ARROW:
+            return tr("Arrow");
+        case CaptureTool::TYPE_SELECTION:
+            return tr("Outline");
+        case CaptureTool::TYPE_RECTANGLE:
+            return tr("Box");
+        case CaptureTool::TYPE_CIRCLE:
+            return tr("Circle");
+        case CaptureTool::TYPE_MARKER:
+            return tr("Marker");
+        case CaptureTool::TYPE_MOVESELECTION:
+            return tr("Move");
+        case CaptureTool::TYPE_UNDO:
+            return tr("Undo");
+        case CaptureTool::TYPE_COPY:
+            return tr("Copy");
+        case CaptureTool::TYPE_SAVE:
+            return tr("Save");
+        case CaptureTool::TYPE_EXIT:
+            return tr("Close");
+#ifdef ENABLE_IMGUR
+        case CaptureTool::TYPE_IMAGEUPLOADER:
+            return tr("Upload");
+#endif
+        case CaptureTool::TYPE_OPEN_APP:
+            return tr("Open");
+        case CaptureTool::TYPE_PIXELATE:
+            return tr("Blur");
+        case CaptureTool::TYPE_REDO:
+            return tr("Redo");
+        case CaptureTool::TYPE_PIN:
+            return tr("Pin");
+        case CaptureTool::TYPE_TEXT:
+            return tr("Text");
+        case CaptureTool::TYPE_CIRCLECOUNT:
+            return tr("Number");
+        case CaptureTool::TYPE_SIZEINCREASE:
+            return tr("Bigger");
+        case CaptureTool::TYPE_SIZEDECREASE:
+            return tr("Smaller");
+        case CaptureTool::TYPE_INVERT:
+            return tr("Invert");
+        case CaptureTool::TYPE_ACCEPT:
+            return tr("Done");
+        case CaptureTool::TYPE_CANCEL:
+            return tr("Cancel");
+        case CaptureTool::TYPE_OCR:
+            return tr("OCR");
+        case CaptureTool::TYPE_OPEN_IN_EDITOR:
+            return tr("Editor");
+        case CaptureTool::TYPE_SHAPE:
+            return tr("Shape");
+        case CaptureTool::TYPE_MOVE_OBJECT:
+            return tr("Hand");
+        default:
+            return {};
+    }
+}
+
+QString ToolFactory::labelWithShortcut(CaptureTool::Type t,
+                                       const QString& shortcut,
+                                       const QString& name)
+{
+    const QString base = name.isEmpty() ? shortName(t) : name;
+    if (base.isEmpty() || shortcut.trimmed().isEmpty()) {
+        return base;
+    }
+    QStringList keys;
+    for (const QString& part : shortcut.split(QLatin1Char('/'))) {
+        const QKeySequence sequence(part.trimmed());
+        if (sequence.count() != 1 ||
+            sequence[0].keyboardModifiers() != Qt::NoModifier) {
+            return base;
+        }
+        QString text = sequence.toString(QKeySequence::NativeText);
+        // Same wording the tooltips use
+        if (sequence[0].key() == Qt::Key_Return) {
+            text = tr("Enter");
+        }
+        keys << text;
+    }
+    return QStringLiteral("%1 (%2)").arg(base, keys.join(QLatin1Char('/')));
 }
