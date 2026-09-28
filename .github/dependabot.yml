@@ -1,0 +1,20 @@
+# Dependabot only understands package manifests. The C++ dependencies
+# (FetchContent in CMakeLists.txt), the Qt version, the vcpkg commit in
+# Windows-pack.yml and the clang-format 11 pin are invisible to it and are
+# still bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    assignees:
+      - "MichaelNguyen5653"
+    groups:
+      # Minor and patch bumps land together; each major gets its own PR,
+      # since a new major of an action can change its inputs.
+      actions-minor:
+        update-types:
+          - "minor"
+          - "patch"
