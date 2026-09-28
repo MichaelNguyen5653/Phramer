@@ -373,6 +373,63 @@ private slots:
         QCOMPARE(ocrScoreResult(okResult({ line })), 6);
     }
 
+    // --- ocrTextsAgree ---------------------------------------------------
+
+    void identicalTextAgrees()
+    {
+        QVERIFY(ocrTextsAgree(QStringLiteral("Build failed at step 3"),
+                              QStringLiteral("Build failed at step 3")));
+    }
+
+    void caseAndPunctuationDoNotMatter()
+    {
+        QVERIFY(ocrTextsAgree(QStringLiteral("build failed, at step 3."),
+                              QStringLiteral("Build failed at step 3")));
+    }
+
+    void aFewMisreadWordsStillAgree()
+    {
+        // Recognition errors are the reason the exact text is worth having,
+        // so a handful of them must not reject it
+        QVERIFY(ocrTextsAgree(
+          QStringLiteral("the quick brown fox jumps over tl1e lazy dog today"),
+          QStringLiteral("the quick brown fox jumps over the lazy dog today")));
+    }
+
+    void aWindowBehindTheCaptureDisagrees()
+    {
+        // An occluded window reports text positioned inside the selection,
+        // but it is not what the screenshot shows
+        QVERIFY(!ocrTextsAgree(
+          QStringLiteral("Quarterly budget review agenda"),
+          QStringLiteral("int main(int argc, char** argv) { return 0; }")));
+    }
+
+    void exactTextRunningPastTheSelectionDisagrees()
+    {
+        // Whole lines come back for a selection that clipped them; showing
+        // them would put text outside the capture into the result
+        QVERIFY(!ocrTextsAgree(
+          QStringLiteral("error C2065 undeclared"),
+          QStringLiteral("capturewidget.cpp(212): error C2065: 'foo': "
+                         "undeclared identifier in function bar of class "
+                         "CaptureWidget")));
+    }
+
+    void aFewWordsAreTooFewToCorroborate()
+    {
+        // Short common text matches windows the capture never showed
+        QVERIFY(!ocrTextsAgree(QStringLiteral("OK"), QStringLiteral("OK")));
+        QVERIFY(!ocrTextsAgree(QStringLiteral("Save 2024"),
+                               QStringLiteral("Save 2024")));
+    }
+
+    void nothingRecognizedCannotCorroborate()
+    {
+        QVERIFY(!ocrTextsAgree(QString(), QStringLiteral("anything at all")));
+        QVERIFY(!ocrTextsAgree(QStringLiteral("text"), QString()));
+    }
+
     // --- ocrPlanTiles ----------------------------------------------------
 
     void smallImagesAreASingleTile()

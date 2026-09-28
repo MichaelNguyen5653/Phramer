@@ -38,6 +38,10 @@ constexpr int MaxLines = 500;
 // series of cross-process round trips.
 constexpr int MaxCandidates = 6;
 
+// Physical pixels a line box may extend past the selection and still count
+// as inside it
+constexpr qreal LineBoxTolerance = 3.0;
+
 /**
  * Initializes a COM apartment for the calling thread and releases it again
  * on scope exit. Initialization fails harmlessly when the thread already
@@ -254,6 +258,19 @@ bool readFromWindow(IUIAutomation* automation,
         return false;
     }
 
+    // Never read a password box, whatever it displays: a control that masks
+    // its pixels but not its text provider would otherwise hand the secret
+    // over, and it could match a recognized result by coincidence
+    VARIANT isPassword;
+    VariantInit(&isPassword);
+    if (FAILED(textElement->GetCurrentPropertyValue(UIA_IsPasswordPropertyId,
+                                                    &isPassword)) ||
+        (isPassword.vt == VT_BOOL && isPassword.boolVal != VARIANT_FALSE)) {
+        VariantClear(&isPassword);
+        return false;
+    }
+    VariantClear(&isPassword);
+
     ComPtr<IUIAutomationTextPattern> pattern;
     if (FAILED(textElement->GetCurrentPatternAs(UIA_TextPatternId,
                                                 IID_PPV_ARGS(&pattern))) ||
@@ -273,6 +290,9 @@ bool readFromWindow(IUIAutomation* automation,
     cursor->ExpandToEnclosingUnit(TextUnit_Line);
 
     const QRectF wanted(screenRect);
+    // Providers pad line boxes by a pixel or two past the glyphs
+    const QRectF tolerant = wanted.adjusted(
+      -LineBoxTolerance, -LineBoxTolerance, LineBoxTolerance, LineBoxTolerance);
     QVector<OcrLine> lines;
     QStringList texts;
 
@@ -285,7 +305,10 @@ bool readFromWindow(IUIAutomation* automation,
             break;
         }
 
-        if (bounds.intersects(wanted)) {
+        // Contained, not merely touching: a line the selection clipped holds
+        // words that were never in the capture, and those must not come
+        // back as text. Dropping it lets recognition answer instead.
+        if (!bounds.isNull() && tolerant.contains(bounds)) {
             ScopedBstr text;
             if (SUCCEEDED(cursor->GetText(-1, &text.value))) {
                 const QString line = toQString(text.value)

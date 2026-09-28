@@ -33,12 +33,18 @@ public:
     static void copyToClipboard(const QPixmap& capture);
     static void copyToClipboard(const QString& text,
                                 const QString& notification = "");
+    // Puts a saved file (not its pixels) on the clipboard; see
+    // utils/filehandoff.h
+    static void copyFileToClipboard(const QString& path);
     static bool isThisInstanceHostingWidgets();
 
+    // `savedFile`, when given, is what clicking the notification shows in
+    // Explorer
     void sendTrayNotification(
       const QString& text,
       const QString& title = QStringLiteral("Phramer Info"),
-      const int timeout = 5000);
+      const int timeout = 5000,
+      const QString& savedFile = QString());
 
 #if defined(USE_KDSINGLEAPPLICATION) &&                                        \
   (defined(Q_OS_MACOS) || defined(Q_OS_WIN))
@@ -105,6 +111,7 @@ private:
     void attachScreenshotToClipboard(const QByteArray& screenshot);
     void attachTextToClipboard(const QString& text,
                                const QString& notification);
+    void attachFileToClipboard(const QString& path);
 
     void initTrayIcon();
     void enableTrayIcon(bool enable);
@@ -122,6 +129,9 @@ private:
     TrayIcon* m_trayIcon;
 
 #if !defined(DISABLE_UPDATE_CHECKER)
+    // The file behind the latest tray notification, if it had one: the
+    // tray reports a click, not which message was clicked
+    QString m_notificationFile;
     QString m_appLatestUrl;
     QString m_appLatestVersion;
     bool m_showManualCheckAppUpdateStatus;

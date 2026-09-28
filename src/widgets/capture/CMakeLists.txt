@@ -3,6 +3,7 @@ target_sources(
         flameshot
         PRIVATE buttonhandler.h
         capturebutton.h
+        capturemodebar.h
         capturetoolbutton.h
         capturewidget.h
         colorpicker.h
@@ -17,6 +18,7 @@ target_sources(
         flameshot
         PRIVATE buttonhandler.cpp
         capturebutton.cpp
+        capturemodebar.cpp
         capturetoolbutton.cpp
         capturewidget.cpp
         colorpicker.cpp

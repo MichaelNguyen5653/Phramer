@@ -63,12 +63,14 @@ void SystemNotification::sendMessage(const QString& text,
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     QMetaObject::invokeMethod(
       this,
-      [&]() {
+      // By value: the call is queued, and the caller's strings are gone by
+      // the time it runs
+      [text, title, timeout, savePath]() {
           // The call is queued to avoid recursive static initialization of
           // Flameshot and ConfigHandler.
           if (FlameshotDaemon::instance())
               FlameshotDaemon::instance()->sendTrayNotification(
-                text, title, timeout);
+                text, title, timeout, savePath);
       },
       Qt::QueuedConnection);
 #else

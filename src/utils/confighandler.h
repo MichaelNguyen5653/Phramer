@@ -175,6 +175,7 @@ public:
                          setIgnorePrntScrForcesSnipping,
                          bool)
     CONFIG_GETTER_SETTER(showWelcomeMessage, setShowWelcomeMessage, bool)
+    CONFIG_GETTER_SETTER(videoCaptureEnabled, setVideoCaptureEnabled, bool)
 #endif
 #if !defined(Q_OS_MACOS)
     CONFIG_GETTER_SETTER(captureActiveMonitor, setCaptureActiveMonitor, bool)

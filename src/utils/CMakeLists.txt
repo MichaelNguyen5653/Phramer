@@ -35,6 +35,12 @@ target_sources(
           canvasgeometry.cpp
           hintplacement.h
           hintplacement.cpp
+          filehandoff.h
+          filehandoff.cpp
+          windowsnap.h
+          windowsnap.cpp
+          flowpacking.h
+          flowpacking.cpp
 )
 
 IF (UNIX AND NOT APPLE)
@@ -53,5 +59,8 @@ IF (WIN32)
             printscreenkey.cpp
             screenclipprotocol.h
             screenclipprotocol.cpp
+            snippingtool.h
+            snippingtool.cpp
+            windowsnap_win.cpp
   )
 ENDIF()

@@ -233,7 +233,10 @@ Rules:
 - **OCR** (`TYPE_OCR`, key `O`) — Windows.Media.Ocr via C++/WinRT, behind an
   abstract `OcrEngine` so another platform can supply its own. Preprocessing
   upscales small text and inverts dark backgrounds; a second pass runs at
-  higher resolution when the recognised glyphs are small.
+  higher resolution when the recognised glyphs are small. Text read back
+  from the window through UI Automation replaces the recognised text only when
+  `ocrTextsAgree()` confirms they match: UIA reads whatever is on screen now,
+  including windows hidden behind the one captured.
 - **Highlighter rectangles** — the rectangle tool's fill mode. Highlight
   compositing (multiply at 0.35 painter opacity) lives in
   `tools/highlightstyle.h` and is shared with the marker. **Use the helper**;
@@ -245,6 +248,37 @@ Rules:
 - **First-run welcome** — offers to free the Print Screen key from Windows'
   snipping tool. Registry access is shared in `utils/printscreenkey`.
 - **In-app updates** — see `docs/update-notification-spec.md`.
+- **Window capture** — `utils/windowsnap`. Top-level windows are listed once
+  when the overlay opens (DWM extended frame bounds, physical pixels, topmost
+  first) so they match the frozen screenshot. Before any selection exists the
+  window under the cursor is highlighted; a click without a drag turns it into
+  the selection. Mapping to the overlay goes through `widgetScreenOffset`, never
+  Qt geometry — see [Coordinate Systems](#coordinate-systems).
+- **Copy as file** (`TYPE_COPY_FILE`, Ctrl+Shift+C) — saves to the save path
+  without a dialog, then puts the file on the clipboard as CF_HDROP
+  (`utils/filehandoff`), so Teams and Outlook attach it instead of inlining it.
+- **Show in folder** — clicking a "Capture saved" tray notification, the tray's
+  "Show Last Capture in Folder", or the editor's Save menu. The last saved path
+  is kept in memory only, by design.
+- **Floating editor canvas** — the editor image sits in the middle of a larger
+  workspace (`CanvasGeometry::workspaceMargin`) so annotations can go beside
+  it. Tool coordinates are workspace coordinates with (0,0) at the pixmap
+  corner; the margin is a whole number of physical pixels so the image is
+  never resampled. `rendered()` is the image grown only as far as annotations
+  reach, filled with the workspace colour (the theme's surface colour) so it
+  matches the screen; an unannotated export is the image exactly.
+  Blur and invert run on the image alone (`processOnImage`) and never grow it.
+- **Video handoff** — opt-in (`videoCaptureEnabled`, off by default). Key 2 on
+  the overlay, the tray, or `RECORD_VIDEO` open Snipping Tool's recording
+  overlay (`SnippingTool::startRecording`): the Win+Shift+R link, launched with
+  `TargetApplicationPackageFamilyName` set to Snipping Tool, falling back to
+  starting the app by AUMID. Never launch an `ms-screenclip:` link without that
+  target: Phramer can be the registered handler and would get it back. The
+  documented `capture/video` link needs a package identity; this one does not.
+- **ms-screenclip handler** — registered as `phramer.exe --screenclip "%1"`.
+  `main()` reads the link before the CLI parser and drops anything after it,
+  so a crafted link cannot smuggle in options. A recording link (Win+Shift+R)
+  goes back to Snipping Tool; anything else is a plain `gui` capture.
 
 ## Coding Conventions
 

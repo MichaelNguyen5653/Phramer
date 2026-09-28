@@ -28,6 +28,36 @@
 
 namespace {
 
+// Shapes drawn by dragging. A click on its own, with the hand's usual jitter,
+// would otherwise leave a speck of a shape behind. The number bubble, the
+// pencil and text are meant to be placed with a single click.
+bool needsDrag(CaptureTool::Type type)
+{
+    switch (type) {
+        case CaptureTool::TYPE_RECTANGLE:
+        case CaptureTool::TYPE_CIRCLE:
+        case CaptureTool::TYPE_SHAPE:
+        case CaptureTool::TYPE_SELECTION:
+        case CaptureTool::TYPE_DRAWER:
+        case CaptureTool::TYPE_ARROW:
+        case CaptureTool::TYPE_MARKER:
+        case CaptureTool::TYPE_PIXELATE:
+        case CaptureTool::TYPE_INVERT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Blur and invert change the pixels under them rather than drawing their own.
+// On the workspace there is nothing under them past the image, so they act on
+// the image alone.
+bool readsPixels(CaptureTool::Type type)
+{
+    return type == CaptureTool::TYPE_PIXELATE ||
+           type == CaptureTool::TYPE_INVERT;
+}
+
 /**
  * @brief Whole-object-list snapshot, the editor's undo unit.
  *
@@ -85,16 +115,34 @@ EditorCanvas::EditorCanvas(const QPixmap& image, QWidget* parent)
         }
     }
 
-    // The canvas starts as the image and only ever grows from there. Sizing
-    // from the device-independent size keeps one image pixel one tool pixel on
-    // high-DPI captures, where the pixmap is larger than the space it occupies.
-    m_canvasRect =
-      QRect(QPoint(0, 0), m_original.deviceIndependentSize().toSize());
+    // The image floats in the middle of a workspace with room on every side.
+    // Sizing from the device-independent size keeps one image pixel one tool
+    // pixel on high-DPI captures, where the pixmap is larger than the space it
+    // occupies. The margin is a whole number of physical pixels, so the image
+    // is placed on the pixel grid and copied rather than resampled.
+    const qreal ratio = m_original.devicePixelRatio();
+    const QSize imageSize = m_original.deviceIndependentSize().toSize();
+    const int margin = CanvasGeometry::workspaceMargin(imageSize, ratio);
+    const int physicalMargin = qRound(margin * ratio);
+    m_imageRect = QRect(QPoint(margin, margin), imageSize);
+    m_imagePhysical =
+      QRect(QPoint(physicalMargin, physicalMargin), m_original.size());
+    m_base = QPixmap(m_original.size() +
+                     QSize(physicalMargin * 2, physicalMargin * 2));
+    m_base.setDevicePixelRatio(ratio);
+    m_base.fill(Qt::transparent);
+    {
+        QPainter painter(&m_base);
+        painter.drawPixmap(m_imageRect.topLeft(), m_original);
+    }
+    m_canvasRect = QRect(QPoint(0, 0), m_base.deviceIndependentSize().toSize());
+    m_rendered = m_base;
+    m_exported = m_original;
     updateCanvasSize();
 
-    m_context.screenshot = m_rendered;
-    m_context.origScreenshot = m_original;
-    m_context.selection = QRect(QPoint(0, 0), m_original.size());
+    m_context.screenshot = m_base;
+    m_context.origScreenshot = m_base;
+    m_context.selection = QRect(QPoint(0, 0), m_base.size());
     m_context.color = ConfigHandler().drawColor();
     m_context.toolSize = ConfigHandler().drawThickness();
     m_context.circleCount = 1;
@@ -218,7 +266,7 @@ void EditorCanvas::adoptObjects(const QList<QPointer<CaptureTool>>& objects,
         // copy is only a place to apply the offset.
         QScopedPointer<CaptureTool> local(object->copy(this));
         local->setEditMode(false);
-        local->translate(offset);
+        local->translate(offset + m_imageRect.topLeft());
         m_objects.append(local.data());
     }
     restoreCircleCountState();
@@ -349,8 +397,10 @@ void EditorCanvas::paintGrid(QPainter& painter, const QRect& dirty) const
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, false);
-    const int left = m_canvasRect.left();
-    const int top = m_canvasRect.top();
+    // Counted from the image's corner, not the workspace's, so the lines
+    // measure the image
+    const int left = m_canvasRect.left() - m_imageRect.left();
+    const int top = m_canvasRect.top() - m_imageRect.top();
     const int imageFromX = left + static_cast<int>(area.left() / m_zoom);
     const int imageToX = left + static_cast<int>(area.right() / m_zoom) + 1;
     for (int x = firstLine(imageFromX); x <= imageToX; x += step) {
@@ -384,13 +434,19 @@ void EditorCanvas::paintEvent(QPaintEvent* event)
         painter.setRenderHint(QPainter::SmoothPixmapTransform);
     }
 
+    paintWorkspace(painter);
     painter.drawPixmap(0, 0, m_rendered);
 
     // The in-progress object is drawn on top rather than baked in, so an
     // abandoned drag leaves no trace
     if (m_activeTool && m_mousePressed) {
+        painter.save();
         painter.setRenderHint(QPainter::Antialiasing);
+        if (readsPixels(m_activeTool->type())) {
+            painter.setClipRect(m_imageRect);
+        }
         m_activeTool->process(painter, m_rendered);
+        painter.restore();
     }
 
     if (m_gridVisible) {
@@ -424,6 +480,7 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
         return;
     }
     m_mousePressed = true;
+    m_pressPos = event->pos();
 
     // A click outside an open text box commits it before anything else
     if (m_toolWidget && !m_toolWidget->geometry().contains(event->pos())) {
@@ -435,6 +492,13 @@ void EditorCanvas::mousePressEvent(QMouseEvent* event)
     }
     selectObjectAt(toImage(event->pos()));
     updateCursor();
+    if (m_activeToolType == CaptureTool::NONE) {
+        // Grabbing either way: the annotation under the press, or with
+        // nothing there, the view itself, as a hand tool does in a viewer
+        m_panning = m_selectedIndex < 0;
+        m_panLast = event->globalPosition().toPoint();
+        setCursor(Qt::ClosedHandCursor);
+    }
 }
 
 void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
@@ -456,10 +520,21 @@ void EditorCanvas::mouseDoubleClickEvent(QMouseEvent* event)
 
 void EditorCanvas::wheelEvent(QWheelEvent* event)
 {
-    // Ctrl+wheel zooms from any tool, so the user never has to leave the
-    // pencil to get closer. Zoom mode gives the plain wheel the same job.
+    // Windows delivers the wheel to whatever window is under the pointer,
+    // active or not. An editor in the background must not change zoom or
+    // tool size because the pointer drifted over it.
+    if (window() && !window()->isActiveWindow()) {
+        event->ignore();
+        return;
+    }
+
+    // With no tool picked the wheel zooms at the pointer, the way image
+    // viewers do. Ctrl+wheel zooms from any tool, so the user never has to
+    // leave the pencil to get closer; Zoom mode gives the plain wheel the
+    // same job. A sideways-only scroll still pans.
     const bool ctrlHeld = event->modifiers().testFlag(Qt::ControlModifier);
-    if (ctrlHeld || m_zoomMode) {
+    const bool noTool = m_activeToolType == CaptureTool::NONE;
+    if ((ctrlHeld || m_zoomMode || noTool) && event->angleDelta().y() != 0) {
         if (event->angleDelta().y() != 0) {
             const int notches = event->angleDelta().y() > 0 ? 1 : -1;
             emit zoomRequested(notches, event->position().toPoint());
@@ -468,9 +543,7 @@ void EditorCanvas::wheelEvent(QWheelEvent* event)
         return;
     }
 
-    // In select mode the canvas draws nothing, so the wheel belongs to the
-    // scroll area this widget lives in rather than to a tool
-    if (m_activeToolType == CaptureTool::NONE) {
+    if (noTool) {
         event->ignore();
         return;
     }
@@ -502,6 +575,15 @@ void EditorCanvas::mouseMoveEvent(QMouseEvent* event)
 {
     m_context.mousePos = toImage(event->pos());
     if (!(event->buttons() & Qt::LeftButton)) {
+        return;
+    }
+
+    if (m_panning) {
+        // Screen positions, not widget ones: the widget itself moves as the
+        // view scrolls, which would feed straight back into the delta
+        const QPoint now = event->globalPosition().toPoint();
+        emit panRequested(now - m_panLast);
+        m_panLast = now;
         return;
     }
 
@@ -552,13 +634,31 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
     if (m_colorPicker->isVisible()) {
         m_colorPicker->setNewColor();
         m_colorPicker->hide();
+        // The picker can open mid-drag with the right button, and this
+        // release is that drag's end too
+        m_panning = false;
+        m_mousePressed = false;
+        updateCursor();
+        return;
+    }
+
+    if (m_panning) {
+        m_panning = false;
+        m_mousePressed = false;
         updateCursor();
         return;
     }
 
     if (m_activeTool && m_mousePressed && !m_activeTool->editMode()) {
         m_activeTool->drawEnd(m_context.mousePos);
-        if (m_activeTool->isValid()) {
+        // Measured on screen, like the move threshold, so it means the same
+        // at any zoom
+        const bool clickOnly = (event->pos() - m_pressPos).manhattanLength() <=
+                               MOUSE_DISTANCE_TO_START_MOVING;
+        if (clickOnly && needsDrag(m_activeTool->type())) {
+            releaseActiveTool();
+            update();
+        } else if (m_activeTool->isValid()) {
             pushActiveToolToStack();
         } else if (!m_toolWidget) {
             // Tools with an editor widget, like text, stay alive until the
@@ -577,10 +677,36 @@ void EditorCanvas::mouseReleaseEvent(QMouseEvent* event)
     updateCursor();
 }
 
+QColor EditorCanvas::workspaceColor() const
+{
+    // The theme's surface colour: white in light mode, near-black in dark
+    return palette().color(QPalette::Base);
+}
+
+void EditorCanvas::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+    // Windows switched theme: the workspace colour changed, and with it what
+    // an export puts behind annotations past the image
+    if (event->type() == QEvent::PaletteChange) {
+        renderObjects();
+    }
+}
+
 void EditorCanvas::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
         deleteSelectedObject();
+        event->accept();
+        return;
+    }
+    // Escape steps back one level: out of the picked tool first, and only
+    // then out of the object selection
+    if (event->key() == Qt::Key_Escape &&
+        (m_activeToolType != CaptureTool::NONE || m_zoomMode)) {
+        // An open text box keeps what was typed rather than losing it
+        commitActiveTool();
+        emit selectModeRequested();
         event->accept();
         return;
     }
@@ -702,11 +828,92 @@ void EditorCanvas::releaseActiveTool()
     }
 }
 
+void EditorCanvas::paintWorkspace(QPainter& painter) const
+{
+    // Drawn under the image and the annotations, so it shows only where
+    // nothing has been drawn. The scroll area's backdrop around it marks
+    // where the drawable area ends.
+    painter.save();
+    painter.fillRect(m_canvasRect, workspaceColor());
+    // A soft shadow lifts the image off the workspace; a few widening rings
+    // are enough and cost nothing next to the pixmap itself
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    const bool darkSurface = workspaceColor().lightness() < 128;
+    for (int ring = 1; ring <= 6; ++ring) {
+        const QColor shade(
+          0, 0, 0, darkSurface ? 30 - ring * 4 : 18 - ring * 2);
+        painter.setBrush(shade);
+        painter.drawRoundedRect(
+          QRectF(m_imageRect).adjusted(-ring, -ring + 2, ring, ring + 2),
+          ring,
+          ring);
+    }
+    painter.restore();
+}
+
+void EditorCanvas::processOnImage(const QPointer<CaptureTool>& object,
+                                  QPixmap& workspace)
+{
+    // Run on the image cut out of the workspace, with the object moved into
+    // image coordinates: the pixmap's corner is then the tool's (0,0) again,
+    // which is what these tools assume when they index pixels. Sampling the
+    // transparent workspace instead would darken the image's edge.
+    QPixmap image = workspace.copy(m_imagePhysical);
+    image.setDevicePixelRatio(workspace.devicePixelRatio());
+    QScopedPointer<CaptureTool> local(object->copy(nullptr));
+    local->translate(-m_imageRect.topLeft());
+    {
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+        local->process(painter, image);
+    }
+    QPainter painter(&workspace);
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    painter.drawPixmap(m_imageRect.topLeft(), image);
+}
+
+QPixmap EditorCanvas::exportFrom(const QPixmap& flattened)
+{
+    const qreal ratio = flattened.devicePixelRatio();
+    QVector<QRect> reach;
+    for (const auto& object : m_objects.captureToolObjects()) {
+        if (object.isNull() || readsPixels(object->type())) {
+            continue;
+        }
+        // A freehand stroke's bounds are its points, not its ink
+        const int pad = qMax(2, object->size() / 2 + 2);
+        reach.append(CanvasGeometry::toPhysical(
+          object->boundingRect().adjusted(-pad, -pad, pad, pad), ratio));
+    }
+    const QRect area =
+      CanvasGeometry::exportRect(m_imagePhysical, reach, flattened.rect());
+    QPixmap cropped = flattened.copy(area);
+    cropped.setDevicePixelRatio(ratio);
+    if (area == m_imagePhysical) {
+        return cropped;
+    }
+    // Past the image the workspace is transparent. The export fills it with
+    // the colour the workspace shows, so what is saved is what was on screen;
+    // transparency would turn black wherever the alpha is dropped, which is
+    // most places a capture is pasted.
+    QPixmap backed(cropped.size());
+    backed.setDevicePixelRatio(ratio);
+    backed.fill(workspaceColor());
+    QPainter painter(&backed);
+    painter.drawPixmap(0, 0, cropped);
+    return backed;
+}
+
 void EditorCanvas::renderObjects()
 {
-    QPixmap pixmap = m_original;
+    QPixmap pixmap = m_base;
     for (const auto& object : m_objects.captureToolObjects()) {
         if (object.isNull()) {
+            continue;
+        }
+        if (readsPixels(object->type())) {
+            processOnImage(object, pixmap);
             continue;
         }
         QPainter painter(&pixmap);
@@ -717,6 +924,7 @@ void EditorCanvas::renderObjects()
     // The selection outline is drawn into the working copy, never into what
     // gets saved or copied
     m_rendered = pixmap;
+    m_exported = exportFrom(pixmap);
     m_context.screenshot = pixmap;
 
     auto selected = selectedObject();
@@ -758,10 +966,10 @@ void EditorCanvas::updateCursor()
         setCursor(Qt::IBeamCursor);
     } else if (m_activeToolType != CaptureTool::NONE) {
         setCursor(Qt::CrossCursor);
-    } else if (m_selectedIndex >= 0) {
-        setCursor(Qt::OpenHandCursor);
     } else {
-        setCursor(Qt::ArrowCursor);
+        // With no tool picked a press grabs: the annotation under it, or the
+        // view when there is none. The pointer says so before the press.
+        setCursor(Qt::OpenHandCursor);
     }
 }
 

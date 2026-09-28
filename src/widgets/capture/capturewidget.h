@@ -35,6 +35,7 @@ class QScreen;
 class QShortcut;
 class QNetworkAccessManager;
 class QNetworkReply;
+class CaptureModeBar;
 class ColorPicker;
 class NotifierBox;
 class HoverEventFilter;
@@ -173,6 +174,16 @@ private:
     // mixed-DPI monitors correctly, so the other screens are covered by
     // their own per-screen dimming overlays instead.
     void rebindToScreen(QScreen* screen);
+    // Closes the overlay and hands the recording to Snipping Tool
+    void startVideoCapture();
+    // The photo/video keys, while the mode bar is up. Returns whether the
+    // key was one of them.
+    bool handleCaptureModeKey(QKeyEvent* e);
+    // Window capture: tracks the window under `pos` while there is no
+    // selection, and turns a click on it into one
+    void updateHoverWindow(const QPoint& pos);
+    void drawHoverWindow(QPainter* painter);
+    void selectHoverWindow();
     void createDimOverlays();
     void updateDimOverlayVisibility();
     void destroyDimOverlays();
@@ -263,6 +274,14 @@ private:
     QMap<QScreen*, QPixmap> m_screenPixmaps;
     // Screen this widget is currently bound to
     QScreen* m_activeScreen{ nullptr };
+    CaptureModeBar* m_modeBar{ nullptr };
+    // Window capture: the windows on screen when the capture started, in
+    // physical pixels and topmost first; the one under the mouse, in overlay
+    // coordinates; and whether the current press may still become a click
+    // on it
+    QVector<QRect> m_windowRects;
+    QRect m_hoverWindow;
+    bool m_windowClickPending{ false };
     // Dimming overlays covering the screens this widget is not on
     QMap<QScreen*, QPointer<QWidget>> m_dimOverlays;
 #endif

@@ -6,6 +6,7 @@
 #include "utils/fuzzymatch.h"
 #if defined(Q_OS_WIN)
 #include "utils/screenclipprotocol.h"
+#include "utils/snippingtool.h"
 #endif
 
 #include <QCheckBox>
@@ -13,6 +14,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QImageWriter>
 #include <QLabel>
 #include <QLineEdit>
@@ -25,6 +27,8 @@
 #include <QStandardPaths>
 #include <QStringDecoder>
 #include <QStyle>
+#include <QToolButton>
+#include <QToolTip>
 #include <QVBoxLayout>
 
 GeneralConf::GeneralConf(Page page, QWidget* parent)
@@ -85,6 +89,7 @@ GeneralConf::GeneralConf(Page page, QWidget* parent)
 #if defined(Q_OS_WIN)
     initShowWelcomeMessage();
     initScreenClipProtocol();
+    initVideoCapture();
 #endif
 #if defined(Q_OS_MACOS)
     initUseNativeFullscreen();
@@ -190,6 +195,7 @@ void GeneralConf::_updateComponents(bool allowEmptySavePath)
 #endif
 #if defined(Q_OS_WIN)
     check(m_showWelcomeMessage, config.showWelcomeMessage());
+    check(m_videoCapture, config.videoCaptureEnabled());
 #endif
 #if defined(Q_OS_MACOS)
     check(m_useNativeFullscreen, config.useNativeFullscreen());
@@ -415,6 +421,36 @@ void GeneralConf::buildSearchIndex()
     }
 }
 
+void GeneralConf::addWithHelp(QWidget* setting, const QString& help)
+{
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(6);
+    row->addWidget(setting);
+
+    auto* marker = new QToolButton(this);
+    marker->setText(QStringLiteral("?"));
+    marker->setToolTip(help);
+    marker->setAccessibleName(tr("Help"));
+    marker->setAccessibleDescription(help);
+    marker->setCursor(Qt::WhatsThisCursor);
+    marker->setFixedSize(18, 18);
+    marker->setStyleSheet(QStringLiteral(
+      "QToolButton { border: 1px solid palette(mid); border-radius: 9px;"
+      "  font-size: 11px; font-weight: bold; color: palette(text); }"
+      "QToolButton:hover { border-color: palette(highlight); }"));
+    // Hover alone leaves keyboard and touch users without the text
+    connect(marker, &QToolButton::clicked, marker, [marker, help]() {
+        QToolTip::showText(
+          marker->mapToGlobal(QPoint(0, marker->height())), help, marker);
+    });
+    row->addWidget(marker);
+    row->addStretch(1);
+
+    // A layout row, so the search filter shows and hides both together
+    m_scrollAreaLayout->addLayout(row);
+}
+
 void GeneralConf::applySearchFilter(const QString& query)
 {
     const QString trimmed = query.trimmed();
@@ -453,7 +489,9 @@ void GeneralConf::initShowHelp()
     m_helpMessage = new QCheckBox(tr("Show help message"), this);
     m_helpMessage->setToolTip(tr("Show the help message at the beginning "
                                  "in the capture mode"));
-    m_scrollAreaLayout->addWidget(m_helpMessage);
+    addWithHelp(
+      m_helpMessage,
+      tr("Lists the main keyboard shortcuts on screen when a capture starts."));
 
     connect(
       m_helpMessage, &QCheckBox::clicked, this, &GeneralConf::showHelpChanged);
@@ -465,7 +503,10 @@ void GeneralConf::initSaveLastRegion()
     m_saveLastRegion->setToolTip(
       tr("Use the last region as the default selection for the next screenshot "
          "in GUI mode"));
-    m_scrollAreaLayout->addWidget(m_saveLastRegion);
+    addWithHelp(
+      m_saveLastRegion,
+      tr(
+        "Each new capture starts with your previous selection already drawn."));
 
     connect(m_saveLastRegion,
             &QCheckBox::clicked,
@@ -478,7 +519,9 @@ void GeneralConf::initShowSidePanelButton()
     m_sidePanelButton = new QCheckBox(tr("Show the side panel button"), this);
     m_sidePanelButton->setToolTip(
       tr("Show the side panel toggle button in the capture mode"));
-    m_scrollAreaLayout->addWidget(m_sidePanelButton);
+    addWithHelp(m_sidePanelButton,
+                tr("Adds a button to the capture screen that opens tool "
+                   "settings (colour, size). The Space key does the same."));
 
     connect(m_sidePanelButton,
             &QCheckBox::clicked,
@@ -586,7 +629,9 @@ void GeneralConf::initAllowMultipleGuiInstances()
       tr("Allow multiple phramer GUI instances simultaneously"), this);
     m_allowMultipleGuiInstances->setToolTip(
       tr("This allows you to take screenshots of Phramer itself for example"));
-    m_scrollAreaLayout->addWidget(m_allowMultipleGuiInstances);
+    addWithHelp(m_allowMultipleGuiInstances,
+                tr("Lets a new capture start while one is already open, for "
+                   "example to screenshot Phramer itself."));
     connect(m_allowMultipleGuiInstances,
             &QCheckBox::clicked,
             this,
@@ -612,7 +657,11 @@ void GeneralConf::initAutoCloseIdleDaemon()
       tr("Automatically unload from memory when it is not needed"), this);
     m_autoCloseIdleDaemon->setToolTip(tr(
       "Automatically close daemon (background process) when it is not needed"));
-    m_scrollAreaLayout->addWidget(m_autoCloseIdleDaemon);
+    addWithHelp(
+      m_autoCloseIdleDaemon,
+      tr(
+        "Closes Phramer in the background when nothing needs it. Saves memory, "
+        "but hotkeys and the tray icon stop until Phramer is started again."));
     connect(m_autoCloseIdleDaemon,
             &QCheckBox::clicked,
             this,
@@ -636,9 +685,10 @@ void GeneralConf::initShowStartupLaunchMessage()
       new QCheckBox(tr("Show welcome message on launch"), this);
     ConfigHandler config;
     m_showStartupLaunchMessage->setToolTip(
-      tr("Show the welcome message box in the middle of the screen while "
-         "taking a screenshot"));
-    m_scrollAreaLayout->addWidget(m_showStartupLaunchMessage);
+      tr("Show a tray notification when Phramer starts"));
+    addWithHelp(
+      m_showStartupLaunchMessage,
+      tr("Shows a short tray notification each time Phramer starts."));
 
     connect(m_showStartupLaunchMessage, &QCheckBox::clicked, [](bool checked) {
         ConfigHandler().setShowStartupLaunchMessage(checked);
@@ -903,7 +953,9 @@ void GeneralConf::initAntialiasingPinZoom()
     m_antialiasingPinZoom->setToolTip(
       tr("After zooming the pinned image, should the image get smoothened or "
          "stay pixelated"));
-    m_scrollAreaLayout->addWidget(m_antialiasingPinZoom);
+    addWithHelp(m_antialiasingPinZoom,
+                tr("Smooths a pinned screenshot when you zoom it. Off keeps "
+                   "the pixels sharp."));
     connect(m_antialiasingPinZoom, &QCheckBox::clicked, [](bool checked) {
         ConfigHandler().setAntialiasingPinZoom(checked);
     });
@@ -960,10 +1012,10 @@ void GeneralConf::initShowMagnifier()
 
 void GeneralConf::initShowEditorHint()
 {
-    m_showEditorHint = new QCheckBox(tr("Show the editor keyboard tip"), this);
+    m_showEditorHint = new QCheckBox(tr("Show the keyboard tip"), this);
     m_showEditorHint->setToolTip(
-      tr("Show a tip on the capture overlay naming the key that opens the "
-         "editor"));
+      tr("Show a tip on the capture overlay naming the keys that open the "
+         "editor and the tool settings"));
 
     m_scrollAreaLayout->addWidget(m_showEditorHint);
     connect(m_showEditorHint, &QCheckBox::clicked, [](bool checked) {
@@ -1086,7 +1138,10 @@ void GeneralConf::initInsecurePixelate()
     m_insecurePixelate->setToolTip(
       tr("Draw the pixelation effect in an insecure but more asethetic way."));
     m_insecurePixelate->setChecked(ConfigHandler().insecurePixelate());
-    m_scrollAreaLayout->addWidget(m_insecurePixelate);
+    addWithHelp(
+      m_insecurePixelate,
+      tr("Uses a real blur, which looks nicer but can sometimes be reversed to "
+         "reveal what was hidden. Leave off for anything sensitive."));
 
     connect(m_insecurePixelate,
             &QCheckBox::clicked,
@@ -1136,6 +1191,25 @@ void GeneralConf::setInsecurePixelate(bool checked)
 }
 
 #if defined(Q_OS_WIN)
+void GeneralConf::initVideoCapture()
+{
+    m_videoCapture = new QCheckBox(
+      tr("Enable video capture (uses Windows Snipping Tool)"), this);
+    if (!SnippingTool::isAvailable()) {
+        m_videoCapture->setEnabled(false);
+        m_videoCapture->setText(
+          tr("Enable video capture (Snipping Tool is not installed)"));
+    }
+    addWithHelp(m_videoCapture,
+                tr("Adds a Video mode to the capture screen and a Record "
+                   "Video entry to the tray menu. The recording itself is "
+                   "done by the Windows Snipping Tool; Phramer records "
+                   "nothing."));
+    connect(m_videoCapture, &QCheckBox::clicked, [](bool checked) {
+        ConfigHandler().setVideoCaptureEnabled(checked);
+    });
+}
+
 void GeneralConf::initShowWelcomeMessage()
 {
     m_showWelcomeMessage =
@@ -1143,7 +1217,9 @@ void GeneralConf::initShowWelcomeMessage()
     m_showWelcomeMessage->setToolTip(
       tr("The welcome dialog is shown once after installation and then turns "
          "itself off. Tick this to see it again on the next launch."));
-    m_scrollAreaLayout->addWidget(m_showWelcomeMessage);
+    addWithHelp(m_showWelcomeMessage,
+                tr("Brings back the first-run dialog that offers to hand the "
+                   "Print Screen key to Phramer."));
 
     connect(m_showWelcomeMessage, &QCheckBox::clicked, [](bool checked) {
         ConfigHandler().setShowWelcomeMessage(checked);
@@ -1191,12 +1267,21 @@ void GeneralConf::updateScreenClipRow()
     // Another Phramer install counts too: its registration is still
     // Phramer's to remove, and replacing it would need removing first
     const bool registered = ScreenClipProtocol::isRegisteredByPhramer();
-    if (!registered) {
+    // Windows keeps the user's choice after Phramer leaves the list, and
+    // then asks which app to use at every Print Screen
+    const bool stillChosen = !registered && ScreenClipProtocol::isDefault();
+    if (stillChosen) {
+        m_screenClipStatus->setText(
+          tr("Phramer is not registered, but Windows still sends Print "
+             "Screen to it. Choose Snipping Tool for MS-SCREENCLIP in Windows "
+             "Settings."));
+    } else if (!registered) {
         m_screenClipStatus->setText(
           tr("Phramer is not registered as MS-SCREENCLIP"));
     } else if (!ScreenClipProtocol::isRegistered()) {
         m_screenClipStatus->setText(
-          tr("Another copy of Phramer is registered as MS-SCREENCLIP"));
+          tr("Another copy, or an older build, of Phramer is registered as "
+             "MS-SCREENCLIP. Unregister, then register again."));
     } else if (ScreenClipProtocol::isDefault()) {
         m_screenClipStatus->setText(
           tr("Phramer is registered and chosen for MS-SCREENCLIP"));
@@ -1206,7 +1291,7 @@ void GeneralConf::updateScreenClipRow()
              "Settings to finish."));
     }
     m_screenClipButton->setText(registered ? tr("Unregister") : tr("Register"));
-    m_screenClipSettingsButton->setVisible(registered);
+    m_screenClipSettingsButton->setVisible(registered || stillChosen);
 }
 
 void GeneralConf::toggleScreenClipRegistration()
@@ -1234,6 +1319,23 @@ void GeneralConf::toggleScreenClipRegistration()
     // Only the user can make the choice, so hand them the page for it
     if (!unregister && result == ScreenClipProtocol::Result::Succeeded &&
         !ScreenClipProtocol::isDefault()) {
+        ScreenClipProtocol::openDefaultAppsSettings();
+        return;
+    }
+    // Unregistered while still chosen: Print Screen would ask which app to
+    // use every time until the user picks another, which no program can do
+    // for them
+    if (unregister && result == ScreenClipProtocol::Result::Succeeded &&
+        ScreenClipProtocol::isDefault()) {
+        window()->raise();
+        window()->activateWindow();
+        QMessageBox::information(
+          this,
+          tr("MS-SCREENCLIP"),
+          tr("Phramer is unregistered, but Windows still has it chosen for "
+             "Print Screen, so the key will ask which app to use. Choose "
+             "Snipping Tool for MS-SCREENCLIP in the Windows Settings page "
+             "that opens next, or pick it with Always in that prompt."));
         ScreenClipProtocol::openDefaultAppsSettings();
         return;
     }

@@ -20,3 +20,21 @@
  * Pure function, kept separate so it can be tested without an engine.
  */
 int ocrScoreResult(const OcrResult& result);
+
+/**
+ * @brief Whether text read from a live window matches what was recognized
+ * in the screenshot.
+ *
+ * UI Automation reads whichever window is on screen when OCR runs, not the
+ * frozen pixels, and happily returns text from a window hidden behind the
+ * one captured, or whole lines that run past the selection. Recognition is
+ * the only witness to what the capture actually shows, so exact text is
+ * trusted only when most of its words appear in the recognized text and
+ * most of the recognized words appear in it, and at least three words are
+ * shared -- a word or two matches too many windows. Case and punctuation are
+ * ignored; a few misread words are tolerated, which is the point of
+ * preferring exact text at all.
+ *
+ * Pure function, kept separate so it can be tested without an engine.
+ */
+bool ocrTextsAgree(const QString& recognized, const QString& exact);

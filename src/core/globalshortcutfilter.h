@@ -23,4 +23,8 @@ private:
     quint32 nativeKeycode(Qt::Key key);
     bool registerShortcut(quint32 nativeKey, quint32 nativeMods);
     bool unregisterShortcut(quint32 nativeKey, quint32 nativeMods);
+
+    // When Print Screen last arrived as our own hotkey (GetTickCount64), so
+    // the key-up that follows it does not start a second capture
+    quint64 m_printHotkeyTime = 0;
 };

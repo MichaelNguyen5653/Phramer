@@ -4,10 +4,13 @@
 #include "core/flameshotdaemon.h"
 #include "core/qguiappcurrentscreen.h"
 #include "utils/confighandler.h"
+#include "utils/filehandoff.h"
 #include "utils/globalvalues.h"
+#include "widgets/editor/editorwindow.h"
 #include "widgets/welcometour.h"
 
 #include <QApplication>
+#include <QFile>
 #include <QGuiApplication>
 #include <QMenu>
 #include <QPainter>
@@ -167,6 +170,25 @@ void TrayIcon::initMenu()
     });
 #endif
     });
+#if defined(Q_OS_WIN)
+    m_recordVideoAction = new QAction(tr("&Record Video"), this);
+    connect(m_recordVideoAction,
+            &QAction::triggered,
+            Flameshot::instance(),
+            &Flameshot::recordVideo);
+    // Only offered once the user has opted in, which can change while the
+    // tray is up, so it is decided each time the menu opens
+    connect(m_menu, &QMenu::aboutToShow, this, [this]() {
+        m_recordVideoAction->setVisible(ConfigHandler().videoCaptureEnabled());
+    });
+    m_recordVideoAction->setVisible(ConfigHandler().videoCaptureEnabled());
+#endif
+    // An empty editor, which says how to capture into it. Raises the open
+    // session instead when there is one.
+    auto* editorAction = new QAction(tr("Open &Editor"), this);
+    connect(editorAction, &QAction::triggered, this, []() {
+        EditorWindow::openEmpty();
+    });
     m_launcherAction = new QAction(tr("&Open Launcher"), this);
     connect(m_launcherAction,
             &QAction::triggered,
@@ -245,14 +267,31 @@ void TrayIcon::initMenu()
             &QAction::triggered,
             Flameshot::instance(),
             &Flameshot::openSavePath);
+    auto* showLastAction =
+      new QAction(tr("&Show Last Capture in Folder"), this);
+    connect(showLastAction, &QAction::triggered, this, []() {
+        FileHandoff::showInFolder(FileHandoff::lastSaved());
+    });
+    // Remembered in memory only, so there is nothing to show until this
+    // session has saved something
+    connect(m_menu, &QMenu::aboutToShow, this, [showLastAction]() {
+        const QString last = FileHandoff::lastSaved();
+        showLastAction->setEnabled(!last.isEmpty() && QFile::exists(last));
+    });
+    showLastAction->setEnabled(false);
 
     m_menu->addAction(m_captureAction);
+#if defined(Q_OS_WIN)
+    m_menu->addAction(m_recordVideoAction);
+#endif
+    m_menu->addAction(editorAction);
     m_menu->addAction(m_launcherAction);
     m_menu->addSeparator();
 #ifdef ENABLE_IMGUR
     m_menu->addAction(recentAction);
 #endif
     m_menu->addAction(openSavePathAction);
+    m_menu->addAction(showLastAction);
     m_menu->addSeparator();
     m_menu->addAction(configAction);
     m_menu->addSeparator();

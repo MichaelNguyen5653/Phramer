@@ -21,9 +21,9 @@
  * Windows belonging to this process are skipped, so the capture overlay
  * covering the screen does not hide the window underneath it.
  *
- * Whole lines are returned for every line the rectangle touches, rather
- * than cropping to it: a rough drag over some terminal output should give
- * complete lines, not truncated ones.
+ * Only lines lying wholly inside the rectangle are returned. A line the
+ * selection clipped has words that were never captured, so it is left out
+ * and recognition answers for it instead. Password controls are never read.
  *
  * Returns Status::NoTextFound when there is no provider or no text, which
  * is the normal outcome for images, remote desktop sessions and games.

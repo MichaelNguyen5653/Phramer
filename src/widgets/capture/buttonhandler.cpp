@@ -48,6 +48,12 @@ QVector<QRect> ButtonHandler::occupiedRects() const
     for (const CaptureToolButton* b : m_vectorButtons) {
         if (b->isVisible()) {
             rects.append(b->geometry());
+            // The name under the button is a sibling widget, so it is not
+            // inside the button's geometry but still covers the overlay
+            const QRect label = b->labelGeometry();
+            if (!label.isNull()) {
+                rects.append(label);
+            }
         }
     }
     return rects;

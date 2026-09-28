@@ -25,6 +25,7 @@ class QSpinBox;
 class QStackedWidget;
 class QTimer;
 class QToolBar;
+class QToolButton;
 
 /**
  * @brief The one standalone editor window, holding a session of captures.
@@ -70,6 +71,7 @@ protected:
 
 private slots:
     void copyCurrent();
+    void copyCurrentAsFile();
     void saveCurrent();
     void saveAll();
     void showPrevious();
@@ -106,7 +108,7 @@ private:
     void updateEmptyState();
     // Turns a toolbar entry into a split button whose arrow opens the tool's
     // variant picker
-    void attachOptionsMenu(QToolBar* bar,
+    void attachOptionsMenu(QToolButton* button,
                            QAction* action,
                            CaptureTool::Type type,
                            const QColor& background);
@@ -145,7 +147,11 @@ private:
     // exclusive with drawing, but places no object
     QAction* m_zoomAction{ nullptr };
     QAction* m_gridAction{ nullptr };
+    // Along the top: undo, redo, colour and size, then copy, save, remove
+    // and OCR
     QToolBar* m_toolBar{ nullptr };
+    // Under the picture: the annotation tools, wrapping onto more rows
+    QWidget* m_annotationBar{ nullptr };
     // Shown in place of the canvas while the session holds no image
     QWidget* m_emptyState{ nullptr };
     QLabel* m_emptyHint{ nullptr };

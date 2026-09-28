@@ -3,6 +3,7 @@
 #include "tools/pin/pinwidget.h"
 #include "utils/abstractlogger.h"
 #include "utils/confighandler.h"
+#include "utils/filehandoff.h"
 #include "utils/globalvalues.h"
 #include "utils/screenshotsaver.h"
 #include "widgets/capture/capturewidget.h"
@@ -272,6 +273,25 @@ void FlameshotDaemon::copyToClipboard(const QString& text,
 #endif
 }
 
+void FlameshotDaemon::copyFileToClipboard(const QString& path)
+{
+    if (instance()) {
+        instance()->attachFileToClipboard(path);
+        return;
+    }
+
+#if defined(USE_KDSINGLEAPPLICATION) &&                                        \
+  (defined(Q_OS_MACOS) || defined(Q_OS_WIN))
+    auto kdsa = KDSingleApplication(QStringLiteral("com.phramer.Phramer"));
+    QByteArray data;
+    QDataStream stream(&data, QIODevice::WriteOnly);
+    stream << QStringLiteral("attachFileToClipboard") << path;
+    kdsa.sendMessage(data);
+#else
+    FileHandoff::copyFileToClipboard(path);
+#endif
+}
+
 /**
  * @brief Is this instance of flameshot hosting any windows as a daemon?
  */
@@ -282,10 +302,16 @@ bool FlameshotDaemon::isThisInstanceHostingWidgets()
 
 void FlameshotDaemon::sendTrayNotification(const QString& text,
                                            const QString& title,
-                                           const int timeout)
+                                           const int timeout,
+                                           const QString& savedFile)
 {
     if (m_trayIcon) {
-        m_trayIcon->showMessage(title, text, GlobalValues::appIcon(), timeout);
+        m_notificationFile = savedFile;
+        const QString body =
+          savedFile.isEmpty()
+            ? text
+            : text + QStringLiteral("\n") + tr("Click to show in folder.");
+        m_trayIcon->showMessage(title, body, GlobalValues::appIcon(), timeout);
     }
 }
 
@@ -622,6 +648,18 @@ void FlameshotDaemon::attachScreenshotToClipboard(const QByteArray& screenshot)
     attachScreenshotToClipboard(p);
 }
 
+void FlameshotDaemon::attachFileToClipboard(const QString& path)
+{
+    // The same ownership bookkeeping as the image and text variants, so the
+    // clipboard-changed handler does not read this as another app taking it
+    m_hostingClipboard = true;
+    QClipboard* clipboard = QApplication::clipboard();
+    clipboard->blockSignals(true);
+    m_clipboardSignalBlocked = true;
+    FileHandoff::copyFileToClipboard(path);
+    clipboard->blockSignals(false);
+}
+
 void FlameshotDaemon::attachTextToClipboard(const QString& text,
                                             const QString& notification)
 {
@@ -657,6 +695,12 @@ void FlameshotDaemon::enableTrayIcon(bool enable)
     if (enable) {
         if (m_trayIcon == nullptr) {
             m_trayIcon = new TrayIcon();
+            connect(
+              m_trayIcon, &QSystemTrayIcon::messageClicked, this, [this]() {
+                  if (!m_notificationFile.isEmpty()) {
+                      FileHandoff::showInFolder(m_notificationFile);
+                  }
+              });
         } else {
             m_trayIcon->show();
             return;
@@ -795,6 +839,15 @@ void FlameshotDaemon::messageReceivedFromSecondaryInstance(
         // handler, and gui() can wait on modal dialogs
         QTimer::singleShot(
           0, Flameshot::instance(), []() { Flameshot::instance()->gui(); });
+    } else if (methodCall == QStringLiteral("attachFileToClipboard")) {
+        QString path;
+        stream >> path;
+        if (!path.isEmpty()) {
+            FlameshotDaemon::instance()->attachFileToClipboard(path);
+        } else {
+            qWarning() << "Received \"attachFileToClipboard\" from second "
+                          "instance, but the path is empty!";
+        }
     } else if (methodCall == (QStringLiteral("attachTextToClipboard"))) {
         QString text;
         QString notification;

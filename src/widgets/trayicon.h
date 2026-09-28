@@ -39,6 +39,9 @@ private:
 #endif
     QAction* m_captureAction;
     QAction* m_launcherAction;
+#if defined(Q_OS_WIN)
+    QAction* m_recordVideoAction{ nullptr };
+#endif
     QAction* m_whatsNewAction{ nullptr };
     QAction* m_infoAction;
 #if !defined(DISABLE_UPDATE_CHECKER)

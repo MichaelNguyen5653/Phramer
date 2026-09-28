@@ -13,15 +13,18 @@
 #include "utils/abstractlogger.h"
 #include "utils/colorutils.h"
 #include "utils/confighandler.h"
+#include "utils/filehandoff.h"
 #include "utils/filenamehandler.h"
 #include "utils/globalvalues.h"
 #include "utils/pathinfo.h"
 #if defined(Q_OS_WIN)
 #include "utils/printscreenkey.h"
+#include "utils/screenclipprotocol.h"
 #endif
 #include "utils/screenshotsaver.h"
 #include "widgets/editor/editorcanvas.h"
 #include "widgets/editor/editorfilmstrip.h"
+#include "widgets/editor/flowlayout.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -30,6 +33,7 @@
 #include <QColorDialog>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -56,6 +60,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
+
+#include <memory>
 
 // CaptureTool::Type values are persisted in user configs, so the zoom
 // action carries a sentinel that can never collide with one instead of
@@ -87,6 +93,11 @@ const QVector<CaptureTool::Type>& editorToolTypes()
 }
 
 constexpr int ThumbnailRefreshMs = 250;
+// How much of the workspace around the image a new window shows at first, in
+// device-independent pixels: enough to see there is room to draw there
+constexpr int WorkspacePeek = 48;
+// The least height a new window gives the picture and the room around it
+constexpr int MinDrawingHeight = 360;
 
 // Editor-only keys for the tools that have no configuration entry. The
 // shape button is reached through the rectangle and circle keys instead, so
@@ -194,6 +205,8 @@ EditorWindow::EditorWindow(QWidget* parent)
             this,
             &EditorWindow::onImagesReordered);
 
+    buildToolBar();
+
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -201,12 +214,18 @@ EditorWindow::EditorWindow(QWidget* parent)
     buildEmptyState();
     layout->addWidget(m_emptyState, 1);
     layout->addWidget(m_pages, 1);
+    // Between the picture and the filmstrip rather than in the top bar: the
+    // tool set keeps growing, and a row of its own gives it the full width
+    layout->addWidget(m_annotationBar);
     layout->addWidget(m_filmstrip);
     setCentralWidget(central);
 
-    buildToolBar();
     buildStatusBar();
     applyTheme();
+    // The annotation tools wrap, but the top bar cannot: narrower than this
+    // and it squeezes its labels and hides buttons behind an arrow
+    m_toolBar->ensurePolished();
+    setMinimumWidth(m_toolBar->sizeHint().width());
     connect(QGuiApplication::styleHints(),
             &QStyleHints::colorSchemeChanged,
             this,
@@ -232,6 +251,23 @@ EditorWindow::~EditorWindow()
 {
     if (s_instance == this) {
         s_instance = nullptr;
+    }
+    // Children are destroyed after this body and after every member here,
+    // by which point the window is half gone. A child that signals on its
+    // way out (each canvas's undo stack clears itself and reports it) would
+    // reach a slot that reads freed members and corrupts the heap. So every
+    // child is cut off from this window first, not only the ones known to
+    // signal. Found as children rather than through m_canvases, which
+    // removing the last image empties before it closes the window.
+    const QList<QObject*> children = findChildren<QObject*>();
+    for (QObject* child : children) {
+        QObject::disconnect(child, nullptr, this, nullptr);
+    }
+    // The undo stacks are canvas members, not children, so the search above
+    // does not see them
+    const QList<EditorCanvas*> canvases = findChildren<EditorCanvas*>();
+    for (EditorCanvas* canvas : canvases) {
+        canvas->undoStack()->disconnect(this);
     }
 }
 
@@ -281,9 +317,13 @@ void EditorWindow::updateEmptyState()
     m_emptyState->setVisible(empty);
     m_pages->setVisible(!empty);
     m_filmstrip->setVisible(!empty);
-    // Nothing on the toolbar has anything to act on without an image
+    // Nothing on either bar has anything to act on without an image. The
+    // annotation bar goes with the picture it sits under.
     if (m_toolBar) {
         m_toolBar->setEnabled(!empty);
+    }
+    if (m_annotationBar) {
+        m_annotationBar->setVisible(!empty);
     }
     if (!empty) {
         return;
@@ -299,12 +339,16 @@ void EditorWindow::updateEmptyState()
         keys << QStringLiteral("<b>%1</b>").arg(capture.toHtmlEscaped());
     }
 #if defined(Q_OS_WIN)
-    // Only when Phramer has taken Print Screen over from Windows; otherwise
-    // that key still opens the Windows snipping tool
-    const QString printScreen =
+    // Only when Print Screen reaches Phramer: either Windows' own use of the
+    // key is switched off and Phramer's hotkey has it, or the user registered
+    // Phramer for ms-screenclip and picked it in Settings. Otherwise the key
+    // still opens the Windows Snipping Tool.
+    const QString printKey =
       QKeySequence(Qt::Key_Print).toString(QKeySequence::NativeText);
-    if (PrintScreenKey::isSnippingDisabled() && capture != printScreen) {
-        keys << QStringLiteral("<b>%1</b>").arg(printScreen.toHtmlEscaped());
+    if ((PrintScreenKey::isSnippingDisabled() ||
+         ScreenClipProtocol::isDefault()) &&
+        capture != printKey) {
+        keys << QStringLiteral("<b>%1</b>").arg(tr("Print Screen"));
     }
 #endif
 
@@ -361,12 +405,21 @@ void EditorWindow::addImage(const QPixmap& image,
             &EditorCanvas::contentChanged,
             this,
             &EditorWindow::onCanvasContentChanged);
+    // contentChanged alone is not enough: an undo repaints from inside the
+    // command, before the stack moves its index, so Undo and Redo would be
+    // enabled for the state before the step
+    connect(canvas->undoStack(), &QUndoStack::indexChanged, this, [this]() {
+        updateUndoState();
+    });
     connect(
       canvas, &EditorCanvas::zoomChanged, this, &EditorWindow::onZoomChanged);
     connect(canvas,
             &EditorCanvas::zoomRequested,
             this,
             &EditorWindow::zoomCurrentCanvas);
+    connect(canvas, &EditorCanvas::selectModeRequested, this, [this]() {
+        selectToolAction(m_selectAction);
+    });
     // The canvas has its own right-click colour picker, so the toolbar
     // swatch cannot assume it is the only thing that sets the colour
     connect(canvas, &EditorCanvas::drawColorChanged, this, [this]() {
@@ -384,8 +437,8 @@ void EditorWindow::addImage(const QPixmap& image,
           m_sizeBox->setValue(size);
           m_sizeBox->blockSignals(false);
       });
-    // The canvas is fixed to the image size; the scroll area handles captures
-    // larger than the window
+    // The canvas is the workspace, larger than the image; the scroll area
+    // moves around it
     auto* scroll = new QScrollArea(m_pages);
     scroll->setObjectName(QStringLiteral("editorPage"));
     scroll->setFrameShape(QFrame::NoFrame);
@@ -393,6 +446,28 @@ void EditorWindow::addImage(const QPixmap& image,
     scroll->setWidget(canvas);
     scroll->setWidgetResizable(false);
     scroll->setBackgroundRole(QPalette::Dark);
+    // Dragging empty space with no tool picked moves the view. Dragging
+    // right shows what is to the left, so the bars move against the pointer.
+    connect(canvas, &EditorCanvas::panRequested, scroll, [scroll](QPoint d) {
+        scroll->horizontalScrollBar()->setValue(
+          scroll->horizontalScrollBar()->value() - d.x());
+        scroll->verticalScrollBar()->setValue(
+          scroll->verticalScrollBar()->value() - d.y());
+    });
+    // Opens on the image, which sits in the middle of the workspace, rather
+    // than on the workspace's empty top-left corner. Once per scroll bar, the
+    // first time it has anywhere to go; after that the view is the user's.
+    for (QScrollBar* bar :
+         { scroll->horizontalScrollBar(), scroll->verticalScrollBar() }) {
+        auto once = std::make_shared<QMetaObject::Connection>();
+        *once = connect(bar, &QScrollBar::rangeChanged, bar, [bar, once]() {
+            if (bar->maximum() <= bar->minimum()) {
+                return;
+            }
+            bar->setValue((bar->minimum() + bar->maximum()) / 2);
+            disconnect(*once);
+        });
+    }
 
     m_canvases.append(canvas);
     m_pages->addWidget(scroll);
@@ -420,33 +495,100 @@ void EditorWindow::resizeToFit(EditorCanvas* canvas)
         return;
     }
 
-    // Approximate, because none of this is laid out yet: the toolbar and
-    // scroll frame on the sides, and the toolbar, filmstrip and status bar
-    // stacked vertically. Erring large just means a little empty canvas
-    // border, which is better than immediate scrollbars on an image that
-    // would have fit.
-    const QSize chrome(40, 210);
-    QSize target = canvas->size() + chrome;
     // Leave room for the taskbar and window frame rather than filling the
     // screen edge to edge
-    target = target.boundedTo(screen->availableSize() * 0.92);
-    target = target.expandedTo(QSize(720, 520));
-    resize(target);
+    const QSize available = screen->availableSize() * 0.92;
+
+    // Nothing is laid out yet, but the bars can already say what they need
+    // once the style sheet has reached them
+    m_annotationBar->ensurePolished();
+    const int maxWidth = std::max(720, available.width());
+
+    // No narrower than the tools need to fit in two rows. A small capture
+    // would otherwise open a window so narrow the tools stack three or four
+    // deep and take the height the picture needed.
+    const int oneRow = m_annotationBar->heightForWidth(maxWidth);
+    // Sized for the image and a strip of workspace around it, not the whole
+    // workspace, which is mostly empty room to draw in
+    QSize wanted =
+      canvas->imageRect().size() + QSize(WorkspacePeek * 2, WorkspacePeek * 2);
+    // A thin capture, such as a toolbar strip, still gets room above and
+    // below it to write in
+    wanted.setHeight(std::max(wanted.height(), MinDrawingHeight));
+    int width = std::max(wanted.width() + 40, 720);
+    while (width < maxWidth &&
+           m_annotationBar->heightForWidth(width) > 2 * oneRow) {
+        width += 10;
+    }
+    width = std::min(width, maxWidth);
+
+    // The sides are the scroll frame; the slack on the height covers frames
+    // and borders nothing reports before layout. Erring large just means a
+    // little empty canvas border, which is better than immediate scrollbars
+    // on an image that would have fit. The filmstrip's height is fixed, and
+    // its size hint is not.
+    const int chrome =
+      m_toolBar->sizeHint().height() + m_annotationBar->heightForWidth(width) +
+      m_filmstrip->minimumHeight() + statusBar()->sizeHint().height() + 16;
+    int height = std::min(wanted.height() + chrome, available.height());
+    height = std::max(height, 520);
+    resize(width, height);
 }
 
 void EditorWindow::buildToolBar()
 {
-    auto* bar = addToolBar(tr("Tools"));
-    m_toolBar = bar;
-    bar->setObjectName(QStringLiteral("editorToolBar"));
-    bar->setMovable(false);
-    bar->setIconSize(QSize(20, 20));
+    // Two bars. Along the top: history, colour and size at the left, and
+    // what acts on the whole image at the right. Under the picture: the
+    // annotation tools on rows of their own. The window lays the second one
+    // out; see the constructor.
+    const Qt::ToolButtonStyle buttonStyle = ConfigHandler().showToolLabels()
+                                              ? Qt::ToolButtonTextUnderIcon
+                                              : Qt::ToolButtonIconOnly;
     // Names under the icons, the same one-word names the capture overlay
     // shows. applyTheme() re-picks the icons from the "phramerIcon" and
     // "phramerTool" properties set on each action below.
-    bar->setToolButtonStyle(ConfigHandler().showToolLabels()
-                              ? Qt::ToolButtonTextUnderIcon
-                              : Qt::ToolButtonIconOnly);
+    QToolBar* top = addToolBar(tr("Image"));
+    m_toolBar = top;
+    top->setObjectName(QStringLiteral("editorToolBar"));
+    top->setMovable(false);
+    top->setFloatable(false);
+    top->setIconSize(QSize(20, 20));
+    top->setToolButtonStyle(buttonStyle);
+    // QMainWindow's right-click menu can hide the top bar, and nothing would
+    // bring it back
+    setContextMenuPolicy(Qt::NoContextMenu);
+
+    // Not a QToolBar: one row cannot hold every tool at a usual window width,
+    // and a toolbar's answer is to squeeze the labels and hide the rest
+    // behind an arrow. The tools wrap onto more rows instead.
+    auto* bar = new QWidget(this);
+    m_annotationBar = bar;
+    bar->setObjectName(QStringLiteral("editorAnnotationBar"));
+    bar->setAttribute(Qt::WA_StyledBackground);
+    auto* toolsLayout = new FlowLayout(bar);
+    toolsLayout->setContentsMargins(10, 6, 10, 6);
+
+    QHash<QAction*, QToolButton*> buttons;
+    const auto addButton =
+      [this, bar, buttonStyle, &buttons](
+        QLayout* layout, const QIcon& icon, const QString& text) {
+          auto* action = new QAction(icon, text, this);
+          // Also on the bar itself, which refreshToolbarIcons() walks
+          bar->addAction(action);
+          auto* button = new QToolButton(bar);
+          button->setDefaultAction(action);
+          button->setToolButtonStyle(buttonStyle);
+          button->setIconSize(QSize(20, 20));
+          // As on a QToolBar: a click must not take focus from the canvas, or
+          // the tool keys and Esc stop reaching it
+          button->setFocusPolicy(Qt::NoFocus);
+          layout->addWidget(button);
+          buttons.insert(action, button);
+          return action;
+      };
+    const auto addTool = [&](const QIcon& icon, const QString& text) {
+        return addButton(toolsLayout, icon, text);
+    };
 
     // Tool icons come in a light and a dark variant; pick the one that
     // contrasts with whatever palette the window is actually using
@@ -460,7 +602,7 @@ void EditorWindow::buildToolBar()
     m_toolGroup->setExclusive(true);
 
     auto* selectAction =
-      bar->addAction(QIcon(iconDir + "pan-tool.svg"), tr("Select and move"));
+      addTool(QIcon(iconDir + "pan-tool.svg"), tr("Select and move"));
     // The overlay's hand tool, but in the editor it is also how objects
     // are picked, so it is called Select here
     selectAction->setIconText(
@@ -472,7 +614,9 @@ void EditorWindow::buildToolBar()
     selectAction->setChecked(true);
     selectAction->setData(static_cast<int>(CaptureTool::NONE));
     selectAction->setToolTip(
-      withShortcut(tr("Select, move and delete objects you have placed"),
+      withShortcut(tr("Select, move and delete objects you have placed, or "
+                      "drag empty space to move around. The wheel zooms at "
+                      "the pointer; Esc returns here from any tool."),
                    shortcutFor(CaptureTool::TYPE_MOVE_OBJECT)));
     m_toolGroup->addAction(selectAction);
     connect(selectAction,
@@ -484,7 +628,7 @@ void EditorWindow::buildToolBar()
     // Called Zoom, not Magnifier: "Show magnifier" is already a shipped
     // setting for the capture overlay's selection loupe, and two different
     // features under one word makes every bug report ambiguous.
-    m_zoomAction = bar->addAction(QIcon(iconDir + "magnify.svg"), tr("Zoom"));
+    m_zoomAction = addTool(QIcon(iconDir + "magnify.svg"), tr("Zoom"));
     m_zoomAction->setIconText(
       tr("Zoom (%1)")
         .arg(QKeySequence(Qt::Key_Z).toString(QKeySequence::NativeText)));
@@ -517,7 +661,8 @@ void EditorWindow::buildToolBar()
     addAction(zoomResetAction);
 
     m_zoomAction->setToolTip(
-      tr("Zoom the view with the wheel. Ctrl+wheel zooms from any tool."));
+      tr("Zoom the view with the wheel. With Select, the wheel zooms too; "
+         "Ctrl+wheel zooms from any tool."));
     m_toolGroup->addAction(m_zoomAction);
     connect(m_zoomAction,
             &QAction::triggered,
@@ -526,7 +671,7 @@ void EditorWindow::buildToolBar()
 
     // A view toggle, so it stays out of m_toolGroup and works alongside any
     // tool. Off for every new window, and one state for all open images.
-    m_gridAction = bar->addAction(QIcon(iconDir + "grid.svg"), tr("Grid"));
+    m_gridAction = addTool(QIcon(iconDir + "grid.svg"), tr("Grid"));
     m_gridAction->setIconText(tr("Grid"));
     m_gridAction->setProperty("phramerIcon", QStringLiteral("grid.svg"));
     m_gridAction->setCheckable(true);
@@ -547,7 +692,7 @@ void EditorWindow::buildToolBar()
             continue;
         }
         QAction* action =
-          bar->addAction(prototype->icon(background, true), prototype->name());
+          addTool(prototype->icon(background, true), prototype->name());
         // The shape button prefers a key of its own, and otherwise lists
         // the keys of the three tools it absorbed
         QString key =
@@ -569,18 +714,13 @@ void EditorWindow::buildToolBar()
                 &EditorWindow::onToolActionTriggered);
 
         if (prototype->hasOptionsMenu()) {
-            attachOptionsMenu(bar, action, type, background);
+            attachOptionsMenu(buttons.value(action), action, type, background);
         }
         delete prototype;
     }
 
-    // Drawing on the left, everything that acts on the image on the right
-    auto* spacer = new QWidget(bar);
-    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    bar->addWidget(spacer);
-
     m_undoAction =
-      bar->addAction(QIcon(iconDir + "undo-variant.svg"), tr("Undo"));
+      top->addAction(QIcon(iconDir + "undo-variant.svg"), tr("Undo"));
     m_undoAction->setProperty("phramerIcon",
                               QStringLiteral("undo-variant.svg"));
     m_undoAction->setShortcut(QKeySequence::Undo);
@@ -591,7 +731,7 @@ void EditorWindow::buildToolBar()
     });
 
     m_redoAction =
-      bar->addAction(QIcon(iconDir + "redo-variant.svg"), tr("Redo"));
+      top->addAction(QIcon(iconDir + "redo-variant.svg"), tr("Redo"));
     m_redoAction->setProperty("phramerIcon",
                               QStringLiteral("redo-variant.svg"));
     m_redoAction->setShortcut(QKeySequence::Redo);
@@ -601,17 +741,17 @@ void EditorWindow::buildToolBar()
         }
     });
 
-    bar->addSeparator();
+    top->addSeparator();
 
-    m_colorAction = bar->addAction(tr("Color"));
+    m_colorAction = top->addAction(tr("Color"));
     m_colorAction->setToolTip(tr("Drawing color"));
     connect(
       m_colorAction, &QAction::triggered, this, &EditorWindow::chooseColor);
 
-    auto* sizeLabel = new QLabel(tr("Size"), bar);
+    auto* sizeLabel = new QLabel(tr("Size"), top);
     sizeLabel->setContentsMargins(6, 0, 4, 0);
-    bar->addWidget(sizeLabel);
-    m_sizeBox = new QSpinBox(bar);
+    top->addWidget(sizeLabel);
+    m_sizeBox = new QSpinBox(top);
     m_sizeBox->setRange(EditorCanvas::MinToolSize, EditorCanvas::MaxToolSize);
     m_sizeBox->setValue(ConfigHandler().drawThickness());
     m_sizeBox->setToolTip(tr("Thickness of the active tool"));
@@ -620,22 +760,46 @@ void EditorWindow::buildToolBar()
             canvas->setToolSize(value);
         }
     });
-    bar->addWidget(m_sizeBox);
+    top->addWidget(m_sizeBox);
 
-    bar->addSeparator();
+    // The top bar keeps its buttons at the right, where they always were
+    auto* topSpacer = new QWidget(top);
+    topSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    top->addWidget(topSpacer);
 
     QAction* copyAction =
-      bar->addAction(QIcon(iconDir + "content-copy.svg"), tr("Copy"));
+      top->addAction(QIcon(iconDir + "content-copy.svg"), tr("Copy"));
     copyAction->setProperty("phramerIcon", QStringLiteral("content-copy.svg"));
     copyAction->setToolTip(tr("Copy the current image to the clipboard"));
     copyAction->setShortcut(QKeySequence::Copy);
     connect(copyAction, &QAction::triggered, this, &EditorWindow::copyCurrent);
 
+    // Copy stays the button; the file variant is in its drop-down and keeps
+    // the same shortcut as on the capture overlay
+    auto* copyFileAction = new QAction(tr("Copy as File"), this);
+    copyFileAction->setToolTip(
+      tr("Save the current image to the save folder and copy the file, to "
+         "paste as an attachment"));
+    copyFileAction->setShortcut(
+      QKeySequence(ConfigHandler().shortcut("TYPE_COPY_FILE")));
+    connect(copyFileAction,
+            &QAction::triggered,
+            this,
+            &EditorWindow::copyCurrentAsFile);
+    addAction(copyFileAction);
+    if (auto* copyButton =
+          qobject_cast<QToolButton*>(top->widgetForAction(copyAction))) {
+        auto* copyMenu = new QMenu(copyButton);
+        copyMenu->addAction(copyFileAction);
+        copyButton->setMenu(copyMenu);
+        copyButton->setPopupMode(QToolButton::MenuButtonPopup);
+    }
+
     // Save All is the button: a session usually holds several captures.
     // Saving just the image on screen is in its drop-down, and keeps Ctrl+S.
     const QKeySequence saveAllKey(Qt::CTRL | Qt::SHIFT | Qt::Key_S);
     QAction* saveAllAction =
-      bar->addAction(QIcon(iconDir + "content-save.svg"), tr("Save All"));
+      top->addAction(QIcon(iconDir + "content-save.svg"), tr("Save All"));
     saveAllAction->setProperty("phramerIcon",
                                QStringLiteral("content-save.svg"));
     saveAllAction->setShortcut(saveAllKey);
@@ -652,9 +816,18 @@ void EditorWindow::buildToolBar()
     // carries the action as well
     addAction(saveAction);
     if (auto* saveButton =
-          qobject_cast<QToolButton*>(bar->widgetForAction(saveAllAction))) {
+          qobject_cast<QToolButton*>(top->widgetForAction(saveAllAction))) {
         auto* saveMenu = new QMenu(saveButton);
         saveMenu->addAction(saveAction);
+        auto* showAction = saveMenu->addAction(tr("Show in Folder"));
+        showAction->setToolTip(tr("Open the last saved image in Explorer"));
+        connect(showAction, &QAction::triggered, this, []() {
+            FileHandoff::showInFolder(FileHandoff::lastSaved());
+        });
+        connect(saveMenu, &QMenu::aboutToShow, this, [showAction]() {
+            const QString last = FileHandoff::lastSaved();
+            showAction->setEnabled(!last.isEmpty() && QFile::exists(last));
+        });
         saveButton->setMenu(saveMenu);
         saveButton->setPopupMode(QToolButton::MenuButtonPopup);
     }
@@ -663,9 +836,9 @@ void EditorWindow::buildToolBar()
     // people reach for most. No shortcut on purpose: Delete already removes
     // the selected annotation inside the canvas, and overloading it would
     // make a misfire cost the whole image.
-    bar->addSeparator();
+    top->addSeparator();
     QAction* removeAction =
-      bar->addAction(QIcon(iconDir + "delete.svg"), tr("Remove Image"));
+      top->addAction(QIcon(iconDir + "delete.svg"), tr("Remove Image"));
     removeAction->setIconText(tr("Remove"));
     removeAction->setProperty("phramerIcon", QStringLiteral("delete.svg"));
     removeAction->setToolTip(
@@ -676,8 +849,8 @@ void EditorWindow::buildToolBar()
             &EditorWindow::removeCurrentImage);
 
 #if defined(Q_OS_WIN)
-    bar->addSeparator();
-    QAction* ocrAction = bar->addAction(QIcon(iconDir + "ocr.svg"), tr("OCR"));
+    top->addSeparator();
+    QAction* ocrAction = top->addAction(QIcon(iconDir + "ocr.svg"), tr("OCR"));
     ocrAction->setProperty("phramerIcon", QStringLiteral("ocr.svg"));
     ocrAction->setIconText(ToolFactory::labelWithShortcut(
       CaptureTool::TYPE_OCR, shortcutFor(CaptureTool::TYPE_OCR)));
@@ -720,12 +893,11 @@ void EditorWindow::runOcr()
 }
 #endif
 
-void EditorWindow::attachOptionsMenu(QToolBar* bar,
+void EditorWindow::attachOptionsMenu(QToolButton* button,
                                      QAction* action,
                                      CaptureTool::Type type,
                                      const QColor& background)
 {
-    auto* button = qobject_cast<QToolButton*>(bar->widgetForAction(action));
     if (!button) {
         return;
     }
@@ -903,6 +1075,17 @@ void EditorWindow::onZoomChanged(qreal zoom)
 
 void EditorWindow::keyPressEvent(QKeyEvent* event)
 {
+    // The canvas handles Escape when it has focus; this catches it when the
+    // focus is on the toolbar or the filmstrip instead
+    if (event->key() == Qt::Key_Escape && m_toolGroup->checkedAction() &&
+        m_toolGroup->checkedAction() != m_selectAction) {
+        if (EditorCanvas* canvas = currentCanvas()) {
+            canvas->commitActiveTool();
+        }
+        selectToolAction(m_selectAction);
+        event->accept();
+        return;
+    }
     switch (event->key()) {
         // A modifier on its own is not a shortcut, and matching one would
         // fire the moment the user reaches for Ctrl+S
@@ -1132,13 +1315,15 @@ void EditorWindow::applyTheme()
 
 void EditorWindow::refreshToolbarIcons()
 {
-    if (!m_toolBar) {
+    if (!m_toolBar || !m_annotationBar) {
         return;
     }
     const QString iconDir = ColorUtils::colorIsDark(m_toolbarBackground)
                               ? PathInfo::whiteIconPath()
                               : PathInfo::blackIconPath();
-    for (QAction* action : m_toolBar->actions()) {
+    const QList<QAction*> actions =
+      m_toolBar->actions() + m_annotationBar->actions();
+    for (QAction* action : actions) {
         const QVariant file = action->property("phramerIcon");
         if (file.isValid()) {
             action->setIcon(QIcon(iconDir + file.toString()));
@@ -1228,6 +1413,23 @@ void EditorWindow::copyCurrent()
     }
     canvas->commitActiveTool();
     FlameshotDaemon::copyToClipboard(canvas->rendered());
+}
+
+void EditorWindow::copyCurrentAsFile()
+{
+    EditorCanvas* canvas = currentCanvas();
+    if (!canvas) {
+        return;
+    }
+    canvas->commitActiveTool();
+    QString saved;
+    if (saveToFilesystem(canvas->rendered(),
+                         ConfigHandler().savePath(),
+                         tr("Copied as a file."),
+                         &saved)) {
+        canvas->markSaved();
+        FlameshotDaemon::copyFileToClipboard(saved);
+    }
 }
 
 void EditorWindow::saveCurrent()

@@ -5,6 +5,7 @@
 #include "tools/ocr/ocrlayout.h"
 #include "tools/ocr/ocrpipeline.h"
 #include "tools/ocr/ocrpreprocess.h"
+#include "tools/ocr/ocrscore.h"
 #include "tools/ocr/uiatextreader.h"
 #include "utils/confighandler.h"
 #include "widgets/loadspinner.h"
@@ -58,25 +59,6 @@ OcrWorker::OcrWorker(QImage image,
 
 void OcrWorker::process()
 {
-#ifdef Q_OS_WIN
-    // A screenshot is a lossy encoding of text the source application still
-    // holds verbatim. Where it can be read back, recognition has nothing to
-    // add. High effort means the user was unhappy with a recognized result,
-    // and this path has already declined once, so it is not retried.
-    if (m_effort == OcrEffort::Normal) {
-        OcrResult exact = readWindowText(m_screenRect);
-        if (exact.status == OcrResult::Status::Ok) {
-            exact.source = OcrResult::Source::Exact;
-            exact.diagnostics =
-              QStringLiteral("read directly from the window under the "
-                             "selection; no recognition was needed");
-            exact.lines = ocrOrderLines(exact.lines);
-            emit finished(exact, m_runId);
-            return;
-        }
-    }
-#endif
-
     // The engine is created inside the worker thread so nothing is shared
     // with the GUI thread
     QScopedPointer<OcrEngine> engine(OcrEngine::create());
@@ -90,6 +72,33 @@ void OcrWorker::process()
       m_language,
       engine->maxImageDimension(),
       m_effort);
+
+#ifdef Q_OS_WIN
+    // A screenshot is a lossy encoding of text the source application may
+    // still hold verbatim, but reading it back asks whatever window is on
+    // screen now, not the frozen capture: a window behind the one captured,
+    // or whole lines running past the selection, came back instead of what
+    // was selected. So recognition always runs, and exact text only replaces
+    // it when the two agree. High effort means the user was unhappy with a
+    // recognized result, and this path has already declined once.
+    if (m_effort == OcrEffort::Normal &&
+        result.status == OcrResult::Status::Ok) {
+        OcrResult exact = readWindowText(m_screenRect);
+        if (exact.status == OcrResult::Status::Ok &&
+            ocrTextsAgree(result.fullText, exact.fullText)) {
+            exact.source = OcrResult::Source::Exact;
+            exact.diagnostics =
+              QStringLiteral("read directly from the window under the "
+                             "selection, matching the recognized text\n") +
+              result.diagnostics;
+            result = exact;
+        } else if (exact.status == OcrResult::Status::Ok) {
+            result.diagnostics +=
+              QStringLiteral("\nwindow text ignored: it does not match the "
+                             "captured image");
+        }
+    }
+#endif
 
     // Ordering is deterministic, so doing it here keeps it off the GUI
     // thread and lets the window re-join the lines for free

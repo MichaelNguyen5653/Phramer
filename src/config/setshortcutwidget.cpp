@@ -45,7 +45,8 @@ SetShortcutDialog::SetShortcutDialog(QDialog* parent,
 #endif
 
     auto restartMessageAdded = false;
-    if (shortcutName == "TAKE_SCREENSHOT" && restartMessageAdded == false) {
+    if ((shortcutName == "TAKE_SCREENSHOT" || shortcutName == "RECORD_VIDEO") &&
+        restartMessageAdded == false) {
         msg +=
           "\n" + tr("Phramer must be restarted for changes to take effect.");
         restartMessageAdded = true;

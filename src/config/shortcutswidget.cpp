@@ -217,7 +217,12 @@ void ShortcutsWidget::loadShortcuts()
     }
 
     // additional tools that don't have their own buttons
-    appendShortcut("TYPE_TOGGLE_PANEL", tr("Toggle side panel"));
+    appendShortcut("TYPE_TOGGLE_PANEL", tr("Toggle tool settings"));
+#if defined(Q_OS_WIN)
+    appendShortcut("CAPTURE_MODE_SCREENSHOT", tr("Screenshot mode"));
+    appendShortcut("CAPTURE_MODE_VIDEO",
+                   tr("Video mode (hands off to Snipping Tool)"));
+#endif
     appendShortcut("TYPE_GRAB_COLOR", tr("Grab a color from the screen"));
     appendShortcut("TYPE_RESIZE_LEFT", tr("Resize selection left 1px"));
     appendShortcut("TYPE_RESIZE_RIGHT", tr("Resize selection right 1px"));
@@ -258,6 +263,7 @@ void ShortcutsWidget::loadShortcuts()
                                       << "Print Screen");
     }
     appendShortcut("TAKE_SCREENSHOT", tr("Capture screen"));
+    appendShortcut("RECORD_VIDEO", tr("Record video (Snipping Tool)"));
 #ifdef ENABLE_IMGUR
     m_shortcuts << (QStringList() << "" << QObject::tr("Screenshot history")
                                   << "Shift+Print Screen");

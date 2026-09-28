@@ -28,6 +28,9 @@ public:
         UPLOAD = 32,
         ACCEPT_ON_SELECT = 64,
         OPEN_IN_EDITOR = 128,
+        // Save to the save path, then put the file (not the image) on the
+        // clipboard
+        COPY_FILE = 256,
     };
 
     CaptureRequest(CaptureMode mode,

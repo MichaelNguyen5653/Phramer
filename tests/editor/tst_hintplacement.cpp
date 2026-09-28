@@ -24,6 +24,7 @@ private slots:
     void fallsInsideWhenTheSelectionFillsTheScreen();
     void avoidsAnObstacleInTheFirstSlot();
     void returnsNothingWhenEveryCandidateIsRejected();
+    void stepsPastButtonsStraddlingTheSelectionEdges();
     void clampsToTheScreenHorizontally();
 };
 
@@ -84,6 +85,19 @@ void HintPlacementTest::returnsNothingWhenEveryCandidateIsRejected()
     const QRect selection(700, 400, 400, 300);
     const QVector<QRect> obstacles{ QRect(0, 0, 1920, 1080) };
     QVERIFY(place(Pill, selection, Screen, obstacles, Gap8).isNull());
+}
+
+void HintPlacementTest::stepsPastButtonsStraddlingTheSelectionEdges()
+{
+    // The overlay centres its buttons on the selection edges, with name
+    // labels underneath, so every fixed slot touches one of them
+    const QRect selection(700, 400, 400, 300);
+    const QVector<QRect> obstacles{ QRect(650, 370, 500, 70),
+                                    QRect(650, 670, 500, 70) };
+    const QRect hint = place(Pill, selection, Screen, obstacles, Gap8);
+    QVERIFY(!hint.isNull());
+    // Clear of the upper strip, on its outside
+    QCOMPARE(hint.bottom() + 1, 370 - Gap8);
 }
 
 void HintPlacementTest::clampsToTheScreenHorizontally()

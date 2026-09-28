@@ -18,10 +18,12 @@ namespace HintPlacement {
 // Distance between the hint and the selection edge.
 inline constexpr int Gap = 8;
 
-// Tries above the selection, then below, then inside its bottom edge. Above
-// comes first because the tool buttons default to below. A candidate that
-// leaves the screen or touches an obstacle is rejected; a null rectangle means
-// nothing fits and the hint should not be drawn at all.
+// Tries above the selection, then below. Above comes first because the tool
+// buttons default to below. A candidate that leaves the screen or touches an
+// obstacle is rejected. When both are blocked they are stepped outward past
+// the obstacles in their way, and only then is the slot inside the
+// selection's bottom edge tried. A null rectangle means nothing fits and the
+// hint should not be drawn at all.
 QRect place(const QSize& hint,
             const QRect& selection,
             const QRect& screen,

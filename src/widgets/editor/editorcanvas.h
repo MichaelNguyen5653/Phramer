@@ -24,13 +24,18 @@ class ColorPicker;
  * static instance parented to it — while the editor needs one independent
  * surface, with its own undo stack, per image in the session.
  *
- * Image coordinates are tool coordinates. The origin is the original image's
- * top-left corner and negative coordinates are legal, so an annotation can sit
- * beside the image rather than only on it. Zoom and the growable canvas both
- * live in toImage()/fromImage(); nothing below this class ever learns about
- * either, which is what keeps the tools free of any transform.
+ * The image floats on a larger workspace, so an annotation can sit beside
+ * it (a callout, an arrow pointing in) rather than only on it. Tool
+ * coordinates are workspace coordinates: (0,0) is the workspace corner and the
+ * image starts at imageRect().topLeft(). The workspace corner being the
+ * pixmap's corner is what lets tools that read pixels, such as blur and
+ * invert, keep indexing the pixmap directly. Zoom lives in toImage()/
+ * fromImage(); nothing below this class ever learns about it.
  *
- * The widget is sized to the canvas scaled by the zoom and is meant to live
+ * An export (rendered()) is the image, grown only as far as annotations reach
+ * past it. With nothing outside, it is the image exactly as before.
+ *
+ * The widget is sized to the workspace scaled by the zoom and is meant to live
  * inside a scroll area. The image keeps its device pixel ratio, so annotations
  * drawn at logical coordinates still land on the full-resolution output. That
  * ratio is a separate scale from the zoom and the two must never be combined:
@@ -42,9 +47,13 @@ class EditorCanvas : public QWidget
 public:
     explicit EditorCanvas(const QPixmap& image, QWidget* parent = nullptr);
 
-    // The original image with every committed annotation baked in
-    QPixmap rendered() const { return m_rendered; }
+    // The original image with every committed annotation baked in, extended
+    // to take in annotations that reach past the image. What is saved,
+    // copied, pinned and shown in the filmstrip.
+    QPixmap rendered() const { return m_exported; }
     QPixmap original() const { return m_original; }
+    // Where the image sits on the workspace, in tool coordinates
+    QRect imageRect() const { return m_imageRect; }
 
     QUndoStack* undoStack() { return &m_undoStack; }
 
@@ -88,8 +97,8 @@ public:
     // because the scroll bars belong to the scroll area above it.
     QPoint lastZoomAnchor() const { return m_lastZoomAnchor; }
 
-    // Widget coordinates to image coordinates and back. The only two places
-    // that know the zoom or the canvas origin exist.
+    // Widget coordinates to workspace (tool) coordinates and back. The only
+    // two places that know the zoom exists.
     QPoint toImage(const QPoint& widgetPos) const;
     QPoint fromImage(const QPoint& imagePos) const;
 
@@ -122,6 +131,13 @@ signals:
     // scroll bars that keep the anchor under the pointer belong to the scroll
     // area above it, so the window performs the zoom.
     void zoomRequested(int notches, const QPoint& anchor);
+    // Escape was pressed with a tool picked: the window owns the tool
+    // buttons, so it is the one that switches back to Select
+    void selectModeRequested();
+    // A drag on empty space with no tool picked moves the view. The scroll
+    // bars belong to the scroll area above, so the window does the moving;
+    // delta is how far the pointer went, in screen pixels.
+    void panRequested(const QPoint& delta);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -131,6 +147,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void changeEvent(QEvent* event) override;
 
 private:
     void handleToolSignal(CaptureTool::Request request);
@@ -150,13 +167,30 @@ private:
     // changes either one goes through here.
     void updateCanvasSize();
     void paintGrid(QPainter& painter, const QRect& dirty) const;
+    void paintWorkspace(QPainter& painter) const;
+    // The workspace's colour, which is also what an export puts behind
+    // annotations that reach past the image
+    QColor workspaceColor() const;
+    // Renders a blur or invert onto the image part of the workspace only
+    void processOnImage(const QPointer<CaptureTool>& object,
+                        QPixmap& workspace);
+    // The flattened workspace cropped to the image and whatever reaches past
+    // it
+    QPixmap exportFrom(const QPixmap& flattened);
 
     QPixmap m_original;
+    // The workspace with only the image on it, transparent elsewhere: what
+    // every render starts from
+    QPixmap m_base;
+    // What is on screen: the workspace, annotations and selection outline
     QPixmap m_rendered;
+    QPixmap m_exported;
 
-    // The editable area in image space. Grows to contain annotations drawn
-    // outside the image; never smaller than the image itself.
+    // The whole editable area in tool coordinates; (0,0) at its corner
     QRect m_canvasRect;
+    // The image within it, and the same in the pixmaps' physical pixels
+    QRect m_imageRect;
+    QRect m_imagePhysical;
     qreal m_zoom{ 1.0 };
     QPoint m_lastZoomAnchor;
     bool m_zoomMode{ false };
@@ -184,6 +218,11 @@ private:
     bool m_mousePressed{ false };
     bool m_movingObject{ false };
     bool m_moveStarted{ false };
+    // Dragging the view, and where the pointer was last, in screen pixels
+    bool m_panning{ false };
+    QPoint m_panLast;
     QPoint m_moveStartPos;
+    // Where the left button went down, in widget pixels
+    QPoint m_pressPos;
     QPoint m_moveGrabOffset;
 };

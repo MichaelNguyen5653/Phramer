@@ -57,6 +57,7 @@ public:
         TYPE_OPEN_IN_EDITOR = 26,
         TYPE_SHAPE = 27,
         TYPE_MOVE_OBJECT = 28,
+        TYPE_COPY_FILE = 29,
     };
     Q_ENUM(Type);
 

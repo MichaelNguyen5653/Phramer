@@ -9,4 +9,6 @@ target_sources(
         editortheme.cpp
         editorwindow.h
         editorwindow.cpp
+        flowlayout.h
+        flowlayout.cpp
 )

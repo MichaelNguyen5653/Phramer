@@ -62,6 +62,11 @@ public slots:
 
     void openSavePath();
 
+#if defined(Q_OS_WIN)
+    // Hands the screen recording to Snipping Tool, if the user opted in
+    void recordVideo();
+#endif
+
     QVersionNumber getVersion();
 
 public:
@@ -118,6 +123,9 @@ private:
 
 #if (defined(Q_OS_MACOS) || defined(Q_OS_WIN))
     QHotkey* m_HotkeyScreenshotCapture;
+#endif
+#if defined(Q_OS_WIN)
+    QHotkey* m_HotkeyRecordVideo{ nullptr };
 #endif
 #if (defined(Q_OS_MACOS) && ENABLE_IMGUR)
     QHotkey* m_HotkeyScreenshotHistory;

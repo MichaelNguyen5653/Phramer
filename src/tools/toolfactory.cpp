@@ -8,6 +8,7 @@
 #include "tools/circle/circletool.h"
 #include "tools/circlecount/circlecounttool.h"
 #include "tools/copy/copytool.h"
+#include "tools/copyfile/copyfiletool.h"
 #include "tools/editor/openineditortool.h"
 #include "tools/exit/exittool.h"
 #include <QKeySequence>
@@ -58,6 +59,7 @@ CaptureTool* ToolFactory::CreateTool(CaptureTool::Type t, QObject* parent)
         if_TYPE_return_TOOL(TYPE_MOVE_OBJECT, MoveObjectTool);
         if_TYPE_return_TOOL(TYPE_UNDO, UndoTool);
         if_TYPE_return_TOOL(TYPE_COPY, CopyTool);
+        if_TYPE_return_TOOL(TYPE_COPY_FILE, CopyFileTool);
         if_TYPE_return_TOOL(TYPE_SAVE, SaveTool);
         if_TYPE_return_TOOL(TYPE_EXIT, ExitTool);
         if_TYPE_return_TOOL(TYPE_OPEN_IN_EDITOR, OpenInEditorTool);
@@ -108,6 +110,8 @@ QString ToolFactory::shortName(CaptureTool::Type t)
             return tr("Undo");
         case CaptureTool::TYPE_COPY:
             return tr("Copy");
+        case CaptureTool::TYPE_COPY_FILE:
+            return tr("Copy File");
         case CaptureTool::TYPE_SAVE:
             return tr("Save");
         case CaptureTool::TYPE_EXIT:

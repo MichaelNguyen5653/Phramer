@@ -76,6 +76,14 @@ void CaptureToolButton::initButton()
     m_emergeAnimation->setStartValue(QSize(0, 0));
     m_emergeAnimation->setEndValue(
       QSize(GlobalValues::buttonBaseSize(), GlobalValues::buttonBaseSize()));
+    // The overlay paints its keyboard hint clear of the buttons, but while
+    // they emerge they are still tiny; repaint once they reach full size or
+    // the hint stays where it was placed, underneath them
+    connect(m_emergeAnimation, &QPropertyAnimation::finished, this, [this]() {
+        if (parentWidget()) {
+            parentWidget()->update();
+        }
+    });
 }
 
 void CaptureToolButton::enableNameLabel()
@@ -110,6 +118,11 @@ void CaptureToolButton::enableNameLabel()
 QSize CaptureToolButton::labelSize() const
 {
     return m_label ? m_label->size() : QSize();
+}
+
+QRect CaptureToolButton::labelGeometry() const
+{
+    return m_label && m_label->isVisible() ? m_label->geometry() : QRect();
 }
 
 void CaptureToolButton::placeLabel()
@@ -238,24 +251,24 @@ static std::map<CaptureTool::Type, int> buttonTypeOrder
       { CaptureTool::TYPE_MOVE_OBJECT, 11 },
       { CaptureTool::TYPE_MOVESELECTION, 12 }, { CaptureTool::TYPE_UNDO, 13 },
       { CaptureTool::TYPE_REDO, 14 }, { CaptureTool::TYPE_COPY, 15 },
-      { CaptureTool::TYPE_SAVE, 16 },
+      { CaptureTool::TYPE_COPY_FILE, 16 }, { CaptureTool::TYPE_SAVE, 17 },
 #ifdef ENABLE_IMGUR
-      { CaptureTool::TYPE_IMAGEUPLOADER, 17 },
+      { CaptureTool::TYPE_IMAGEUPLOADER, 18 },
 #endif
-      { CaptureTool::TYPE_ACCEPT, 18 },
+      { CaptureTool::TYPE_ACCEPT, 19 },
 #if !defined(Q_OS_MACOS)
-      { CaptureTool::TYPE_OPEN_APP, 19 }, { CaptureTool::TYPE_EXIT, 20 },
-      { CaptureTool::TYPE_PIN, 21 },
+      { CaptureTool::TYPE_OPEN_APP, 20 }, { CaptureTool::TYPE_EXIT, 21 },
+      { CaptureTool::TYPE_PIN, 22 },
 #else
-      { CaptureTool::TYPE_EXIT, 19 }, { CaptureTool::TYPE_PIN, 20 },
+      { CaptureTool::TYPE_EXIT, 20 }, { CaptureTool::TYPE_PIN, 21 },
 #endif
 
-      { CaptureTool::TYPE_SIZEINCREASE, 22 },
-      { CaptureTool::TYPE_SIZEDECREASE, 23 },
+      { CaptureTool::TYPE_SIZEINCREASE, 23 },
+      { CaptureTool::TYPE_SIZEDECREASE, 24 },
 #if defined(Q_OS_WIN)
-      { CaptureTool::TYPE_OCR, 24 },
+      { CaptureTool::TYPE_OCR, 25 },
 #endif
-      { CaptureTool::TYPE_OPEN_IN_EDITOR, 25 },
+      { CaptureTool::TYPE_OPEN_IN_EDITOR, 26 },
 };
 
 int CaptureToolButton::getPriorityByButton(CaptureTool::Type b)
@@ -287,6 +300,7 @@ QList<CaptureTool::Type> CaptureToolButton::iterableButtonTypes = {
     CaptureTool::TYPE_UNDO,
     CaptureTool::TYPE_REDO,
     CaptureTool::TYPE_COPY,
+    CaptureTool::TYPE_COPY_FILE,
     CaptureTool::TYPE_SAVE,
     CaptureTool::TYPE_EXIT,
 #ifdef ENABLE_IMGUR

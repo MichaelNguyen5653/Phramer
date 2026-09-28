@@ -55,9 +55,10 @@ constexpr DWORD ElevatedWaitMs = 120000;
 
 bool isPhramerCommand(const QString& command)
 {
-    // Exactly the shape command() produces, for any install location
+    // Exactly the shape command() produces, for any install location, or the
+    // "gui" one earlier 15.0 builds registered
     static const QRegularExpression phramerCommand(
-      QStringLiteral(R"(^"[^"]*\\phramer\.exe" gui$)"),
+      QStringLiteral(R"(^"[^"]*\\phramer\.exe" (gui|--screenclip "%1")$)"),
       QRegularExpression::CaseInsensitiveOption);
     return phramerCommand.match(command).hasMatch();
 }
@@ -143,11 +144,13 @@ namespace ScreenClipProtocol {
 
 QString command()
 {
-    // "gui" is the CLI verb that asks the running Phramer for a capture. The
-    // URI Windows passes is deliberately not forwarded: the CLI would try to
-    // parse it as a subcommand.
-    return QStringLiteral("\"%1\" gui")
-      .arg(QDir::toNativeSeparators(QCoreApplication::applicationFilePath()));
+    // The link is passed so a recording request (Win+Shift+R) can be told
+    // from a snip and handed back to Snipping Tool. main() reads it before the
+    // command-line parser, which never sees it.
+    return QStringLiteral("\"%1\" %2 \"%3\"")
+      .arg(QDir::toNativeSeparators(QCoreApplication::applicationFilePath()),
+           QString::fromLatin1(ActivationArgument),
+           QStringLiteral("%1"));
 }
 
 bool isRegistered()
@@ -274,6 +277,13 @@ Result unregisterElevated()
 
 void openDefaultAppsSettings()
 {
+    // Phramer's own page exists only while it is registered. Once it is not,
+    // the general page is where another app is chosen for ms-screenclip.
+    if (!isRegisteredByPhramer()) {
+        QDesktopServices::openUrl(
+          QUrl(QStringLiteral("ms-settings:defaultapps")));
+        return;
+    }
     QDesktopServices::openUrl(
       QUrl(QStringLiteral("ms-settings:defaultapps?registeredAppMachine=%1")
              .arg(QString::fromLatin1(QUrl::toPercentEncoding(AppName)))));

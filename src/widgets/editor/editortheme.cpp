@@ -113,12 +113,17 @@ QToolBar#editorToolBar {
     padding: 6px 10px;
     spacing: 2px;
 }
+QWidget#editorAnnotationBar {
+    background: @window;
+    border-top: 1px solid @border;
+}
 QToolBar#editorToolBar::separator {
     background: @border;
     width: 1px;
     margin: 10px 6px;
 }
-QToolBar#editorToolBar QToolButton {
+QToolBar#editorToolBar QToolButton,
+QWidget#editorAnnotationBar QToolButton {
     background: transparent;
     color: @text;
     border: 1px solid transparent;
@@ -126,21 +131,28 @@ QToolBar#editorToolBar QToolButton {
     padding: 4px 6px;
     min-width: 38px;
 }
-QToolBar#editorToolBar QToolButton:hover { background: @hover; }
-QToolBar#editorToolBar QToolButton:pressed { background: @pressed; }
-QToolBar#editorToolBar QToolButton:checked {
+QToolBar#editorToolBar QToolButton:hover,
+QWidget#editorAnnotationBar QToolButton:hover { background: @hover; }
+QToolBar#editorToolBar QToolButton:pressed,
+QWidget#editorAnnotationBar QToolButton:pressed { background: @pressed; }
+QToolBar#editorToolBar QToolButton:checked,
+QWidget#editorAnnotationBar QToolButton:checked {
     background: @checked;
     border-color: @checkedBorder;
 }
-QToolBar#editorToolBar QToolButton:disabled { color: @muted; }
-QToolBar#editorToolBar QToolButton[popupMode="1"] { padding-right: 16px; }
-QToolBar#editorToolBar QToolButton::menu-button {
+QToolBar#editorToolBar QToolButton:disabled,
+QWidget#editorAnnotationBar QToolButton:disabled { color: @muted; }
+QToolBar#editorToolBar QToolButton[popupMode="1"],
+QWidget#editorAnnotationBar QToolButton[popupMode="1"] { padding-right: 16px; }
+QToolBar#editorToolBar QToolButton::menu-button,
+QWidget#editorAnnotationBar QToolButton::menu-button {
     border: none;
     border-top-right-radius: 8px;
     border-bottom-right-radius: 8px;
     width: 14px;
 }
-QToolBar#editorToolBar QToolButton::menu-button:hover { background: @hover; }
+QToolBar#editorToolBar QToolButton::menu-button:hover,
+QWidget#editorAnnotationBar QToolButton::menu-button:hover { background: @hover; }
 QToolBar#editorToolBar QLabel { color: @muted; }
 QToolBar#editorToolBar QSpinBox {
     background: @surface;

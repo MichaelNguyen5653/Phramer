@@ -21,6 +21,8 @@
 #include "utils/screengrabber.h"
 #include "utils/screenshotsaver.h"
 #include "utils/toolsizewheel.h"
+#include "utils/windowsnap.h"
+#include "widgets/capture/capturemodebar.h"
 #include "widgets/capture/colorpicker.h"
 #include "widgets/capture/hovereventfilter.h"
 #include "widgets/capture/modificationcommand.h"
@@ -201,6 +203,13 @@ CaptureWidget::CaptureWidget(const CaptureRequest& req,
 
             if (selectedScreen != nullptr && windowHandle()) {
                 windowHandle()->setScreen(selectedScreen);
+                // move() places the frame, and before the first show Qt
+                // still assumes a title bar: on a 100% monitor beside a
+                // 125% primary the overlay landed 31px low, the height of
+                // a caption. setGeometry() places the client area, which
+                // is what the dim overlays use and why they were exact.
+                setGeometry(
+                  QRect(selectedScreen->geometry().topLeft(), windowSize));
             }
         }
 #elif defined(Q_OS_MACOS)
@@ -342,6 +351,21 @@ CaptureWidget::CaptureWidget(const CaptureRequest& req,
     if (m_followCursorMode) {
         createDimOverlays();
     }
+    // Listed now, while the screen matches the frozen screenshot. Only for
+    // a fresh selection: a remembered region has already chosen its area.
+    if (fullScreen && !m_selection->isVisible()) {
+        m_windowRects = WindowSnap::visibleWindows();
+    }
+    // Only before a region exists: once there is one, this is a screenshot
+    if (fullScreen && !m_selection->isVisible()) {
+        m_modeBar = new CaptureModeBar(this);
+        connect(m_modeBar,
+                &CaptureModeBar::videoRequested,
+                this,
+                &CaptureWidget::startVideoCapture);
+        m_modeBar->placeIn(rect());
+        m_modeBar->show();
+    }
 #endif
 }
 
@@ -415,6 +439,7 @@ void CaptureWidget::initButtons()
         for (auto* buttonList : { &allButtonTypes, &visibleButtonTypes }) {
             buttonList->removeOne(CaptureTool::TYPE_SAVE);
             buttonList->removeOne(CaptureTool::TYPE_COPY);
+            buttonList->removeOne(CaptureTool::TYPE_COPY_FILE);
 #ifdef ENABLE_IMGUR
             buttonList->removeOne(CaptureTool::TYPE_IMAGEUPLOADER);
 #endif
@@ -545,6 +570,9 @@ void CaptureWidget::initHelpMessage()
 {
     QList<QPair<QString, QString>> keyMap;
     keyMap << std::pair(tr("Mouse"), tr("Select screenshot area"));
+#if defined(Q_OS_WIN)
+    keyMap << std::pair(tr("Click"), tr("Capture the window under the mouse"));
+#endif
     using CT = CaptureTool;
     for (auto toolType : { CT::TYPE_ACCEPT, CT::TYPE_SAVE, CT::TYPE_COPY }) {
         if (!m_tools.contains(toolType)) {
@@ -561,7 +589,7 @@ void CaptureWidget::initHelpMessage()
     keyMap << std::pair(tr("Mouse Wheel"), tr("Change tool size"));
     keyMap << std::pair(tr("Right Click"), tr("Show color picker"));
     keyMap << std::pair(ConfigHandler().shortcut("TYPE_TOGGLE_PANEL"),
-                        tr("Open side panel"));
+                        tr("Open tool settings"));
     keyMap << std::pair(tr("Esc"), tr("Exit"));
 
     m_helpMessage = OverlayMessage::compileFromKeyMap(keyMap);
@@ -850,6 +878,9 @@ void CaptureWidget::paintEvent(QPaintEvent* paintEvent)
         painter.restore();
     // draw inactive region
     drawInactiveRegion(&painter);
+#if defined(Q_OS_WIN)
+    drawHoverWindow(&painter);
+#endif
 
     drawEditorHint(&painter);
 
@@ -880,17 +911,30 @@ void CaptureWidget::drawEditorHint(QPainter* painter)
         return;
     }
 
-    // Read the binding rather than hard-coding E. If the user cleared it there
-    // is no key to advertise, so the hint stays away entirely instead of
-    // naming one that does nothing.
-    const QString configured = ConfigHandler().shortcut(
-      QVariant::fromValue(CaptureTool::TYPE_OPEN_IN_EDITOR).toString());
-    if (configured.isEmpty()) {
+    // Read the bindings rather than hard-coding E and Space. A key the user
+    // cleared is left out instead of naming one that does nothing, and with
+    // neither bound the hint stays away entirely.
+    const auto keyText = [](const QString& name) {
+        const QString configured = ConfigHandler().shortcut(name);
+        return configured.isEmpty()
+                 ? QString()
+                 : QKeySequence(configured).toString(QKeySequence::NativeText);
+    };
+    const QString editorKey =
+      keyText(QVariant::fromValue(CaptureTool::TYPE_OPEN_IN_EDITOR).toString());
+    const QString panelKey = keyText(QStringLiteral("TYPE_TOGGLE_PANEL"));
+
+    QStringList tips;
+    if (!editorKey.isEmpty()) {
+        tips << tr("press %1 to open the editor").arg(editorKey);
+    }
+    if (!panelKey.isEmpty()) {
+        tips << tr("%1 to open tool settings").arg(panelKey);
+    }
+    if (tips.isEmpty()) {
         return;
     }
-    const QString text =
-      tr("Tip: press %1 to open the editor")
-        .arg(QKeySequence(configured).toString(QKeySequence::NativeText));
+    const QString text = tr("Tip: %1").arg(tips.join(QStringLiteral("  ·  ")));
 
     const QFontMetrics fm = painter->fontMetrics();
     const QSize pill(fm.horizontalAdvance(text) + HintPadding * 2,
@@ -1175,6 +1219,9 @@ void CaptureWidget::rebindToScreen(QScreen* screen)
     const QRect localRect(QPoint(0, 0), windowSize);
     m_buttonHandler->updateScreenRegions(QVector<QRect>{ localRect });
     OverlayMessage::setTargetArea(localRect);
+    if (m_modeBar) {
+        m_modeBar->placeIn(localRect);
+    }
 
     QRect panelRect = localRect;
     panelRect.setWidth(m_colorPicker->width() * 1.5);
@@ -1203,6 +1250,11 @@ void CaptureWidget::mousePressEvent(QMouseEvent* e)
     m_mousePressedPos = e->pos();
     m_activeToolOffsetToMouseOnStart = QPoint();
 #if defined(Q_OS_WIN)
+    m_windowClickPending = e->button() == Qt::LeftButton &&
+                           !m_selection->isVisible() && !m_hoverWindow.isNull();
+    if (m_modeBar) {
+        m_modeBar->hide();
+    }
     if (m_followCursorMode) {
         // The capture is now committed to this screen; stop following the
         // cursor and let the other screens go back to normal
@@ -1294,6 +1346,9 @@ void CaptureWidget::mouseMoveEvent(QMouseEvent* e)
 
     m_context.mousePos = e->pos();
     if (e->buttons() != Qt::LeftButton) {
+#if defined(Q_OS_WIN)
+        updateHoverWindow(e->pos());
+#endif
         updateTool(activeButtonTool());
         updateCursor();
         return;
@@ -1361,6 +1416,21 @@ void CaptureWidget::mouseMoveEvent(QMouseEvent* e)
 
 void CaptureWidget::mouseReleaseEvent(QMouseEvent* e)
 {
+#if defined(Q_OS_WIN)
+    // A press and release in place, with no region yet, is a click on the
+    // highlighted window. Any real drag has already become a selection.
+    const bool windowClick = m_windowClickPending &&
+                             e->button() == Qt::LeftButton &&
+                             (e->pos() - m_mousePressedPos).manhattanLength() <=
+                               MOUSE_DISTANCE_TO_START_MOVING;
+    m_windowClickPending = false;
+    if (windowClick) {
+        m_mouseIsClicked = false;
+        selectHoverWindow();
+        updateCursor();
+        return;
+    }
+#endif
     if (e->button() == Qt::LeftButton && m_colorPicker->isVisible()) {
         // Color picker
         if (m_colorPicker->isVisible() && m_panel->activeLayerIndex() >= 0 &&
@@ -1429,6 +1499,13 @@ void CaptureWidget::setToolSize(int size)
 
 void CaptureWidget::keyPressEvent(QKeyEvent* e)
 {
+#if defined(Q_OS_WIN)
+    // Before the digits below reach the tool size: until a region exists
+    // there is no tool, and 1 and 2 pick the capture mode
+    if (m_modeBar && m_modeBar->isVisible() && handleCaptureModeKey(e)) {
+        return;
+    }
+#endif
     // If the key is a digit, change the tool size
     bool ok;
     int digit = e->text().toInt(&ok);
@@ -1455,6 +1532,92 @@ void CaptureWidget::keyPressEvent(QKeyEvent* e)
           this,
           new QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier));
     }
+}
+
+bool CaptureWidget::handleCaptureModeKey(QKeyEvent* e)
+{
+    // The number row and the keypad are the same key to the user
+    const QKeySequence pressed(
+      QKeyCombination(e->modifiers() & ~Qt::KeypadModifier, Qt::Key(e->key())));
+    const auto bound = [&pressed](const char* name) {
+        const QString key = ConfigHandler().shortcut(name);
+        return !key.isEmpty() && pressed == QKeySequence(key);
+    };
+
+    if (bound("CAPTURE_MODE_VIDEO")) {
+        if (m_modeBar->videoAvailable()) {
+            startVideoCapture();
+        } else {
+            m_modeBar->explainVideoUnavailable();
+        }
+        return true;
+    }
+    // Screenshot is the mode the overlay is already in
+    return bound("CAPTURE_MODE_SCREENSHOT");
+}
+
+void CaptureWidget::updateHoverWindow(const QPoint& pos)
+{
+    QRect hover;
+    if (!m_windowRects.isEmpty() && !m_selection->isVisible() &&
+        rect().contains(pos)) {
+        // The window list is physical, so the cursor is taken there through
+        // the overlay's own native origin; see utils/windowsnap.h
+        const qreal ratio = m_context.screenshot.devicePixelRatio();
+        const QPoint physical =
+          m_context.widgetScreenOffset + (QPointF(pos) * ratio).toPoint();
+        hover =
+          WindowSnap::toOverlay(WindowSnap::windowAt(m_windowRects, physical),
+                                m_context.widgetScreenOffset,
+                                ratio,
+                                rect());
+    }
+    if (hover != m_hoverWindow) {
+        update(paddedUpdateRect(m_hoverWindow));
+        m_hoverWindow = hover;
+        update(paddedUpdateRect(m_hoverWindow));
+    }
+}
+
+void CaptureWidget::drawHoverWindow(QPainter* painter)
+{
+    if (m_hoverWindow.isNull() || m_selection->isVisible()) {
+        return;
+    }
+    painter->save();
+    // Undimmed inside, so the window reads as what a click would capture
+    painter->drawPixmap(
+      m_hoverWindow, m_context.screenshot, extendedRect(m_hoverWindow));
+    painter->setPen(QPen(m_uiColor, 2));
+    painter->setBrush(Qt::NoBrush);
+    painter->drawRect(m_hoverWindow.adjusted(1, 1, -1, -1));
+    painter->restore();
+}
+
+void CaptureWidget::selectHoverWindow()
+{
+    const QRect window = m_hoverWindow;
+    m_hoverWindow = QRect();
+    // Shown before it is sized: SelectionWidget reports geometryChanged only
+    // while visible, and that signal is what clears the help message and
+    // updates the size indicator, exactly as a dragged selection does
+    m_selection->setVisible(true);
+    m_selection->setGeometry(window);
+    m_context.selection = extendedRect(m_selection->geometry());
+    emit m_selection->geometrySettled();
+    update();
+}
+
+void CaptureWidget::startVideoCapture()
+{
+#if defined(Q_OS_WIN)
+    // Snipping Tool draws its own overlay, so this one has to be gone before
+    // it starts. Closing without a region is the same as Escape: nothing is
+    // exported.
+    QTimer::singleShot(
+      0, Flameshot::instance(), []() { Flameshot::instance()->recordVideo(); });
+    close();
+#endif
 }
 
 void CaptureWidget::keyReleaseEvent(QKeyEvent* e)
@@ -1490,6 +1653,9 @@ void CaptureWidget::resizeEvent(QResizeEvent* e)
     m_context.widgetOffset = mapToGlobal(QPoint(0, 0));
     m_context.widgetScreenOffset =
       nativeWindowOrigin(winId(), m_context.widgetOffset);
+    if (m_modeBar) {
+        m_modeBar->placeIn(rect());
+    }
     if (!m_context.fullscreen) {
         m_panel->setFixedHeight(height());
         m_buttonHandler->updateScreenRegions(rect());

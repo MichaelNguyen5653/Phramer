@@ -15,6 +15,12 @@
 
 #define MARGIN (m_THandle.width())
 
+namespace {
+// Pixels a press must travel before it starts a new selection. Matches the
+// overlay's own click threshold (MOUSE_DISTANCE_TO_START_MOVING).
+constexpr int NewSelectionThreshold = 3;
+} // namespace
+
 SelectionWidget::SelectionWidget(QColor c, QWidget* parent)
   : QWidget(parent)
   , m_color(std::move(c))
@@ -206,6 +212,14 @@ void SelectionWidget::parentMouseMoveEvent(QMouseEvent* e)
     QPoint pos;
 
     if (!isVisible() || !mouseSide) {
+        // A press that has hardly moved is still a click, and the overlay
+        // turns a click into a window capture. Starting a selection on the
+        // first twitch of the mouse would settle a near-empty region first,
+        // and with accept-on-select that region is what gets exported.
+        if ((e->pos() - m_dragStartPos).manhattanLength() <=
+            NewSelectionThreshold) {
+            return;
+        }
         show();
         m_activeSide = TOPLEFT_SIDE;
         pos = m_dragStartPos;

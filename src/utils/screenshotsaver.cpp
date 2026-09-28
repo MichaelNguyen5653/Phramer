@@ -6,6 +6,7 @@
 #include "utils/abstractlogger.h"
 #include "utils/confighandler.h"
 #include "utils/desktopinfo.h"
+#include "utils/filehandoff.h"
 #include "utils/filenamehandler.h"
 #include "utils/globalvalues.h"
 
@@ -38,7 +39,8 @@
 
 bool saveToFilesystem(const QPixmap& capture,
                       const QString& path,
-                      const QString& messagePrefix)
+                      const QString& messagePrefix,
+                      QString* savedPath)
 {
     QString completePath = FileNameHandler().properScreenshotPath(
       path, ConfigHandler().saveAsFileExtension());
@@ -61,6 +63,10 @@ bool saveToFilesystem(const QPixmap& capture,
         }
 
         if (okay) {
+            FileHandoff::rememberSaved(completePath);
+            if (savedPath != nullptr) {
+                *savedPath = completePath;
+            }
             saveMessage += QObject::tr("Capture saved as ") + completePath;
             AbstractLogger::info().attachNotificationPath(notificationPath)
               << saveMessage;
@@ -315,6 +321,7 @@ bool saveToFilesystemGUI(const QPixmap& capture)
             QString pathNoFile = savePath.left(savePath.lastIndexOf('/'));
 
             ConfigHandler().setSavePath(pathNoFile);
+            FileHandoff::rememberSaved(savePath);
 
             QString msg = QObject::tr("Capture saved as ") + savePath;
             AbstractLogger().attachNotificationPath(savePath) << msg;

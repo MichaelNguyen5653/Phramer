@@ -93,6 +93,9 @@ private:
     void initSearchBox();
     // Snapshot of every filterable row, taken once the page is fully built
     void buildSearchIndex();
+    // Adds a setting whose label alone does not explain it, with a (?)
+    // marker that shows `help` on hover or click
+    void addWithHelp(QWidget* setting, const QString& help);
     void initAutoCloseIdleDaemon();
     void initAutostart();
 #if !defined(DISABLE_UPDATE_CHECKER)
@@ -133,6 +136,7 @@ private:
 #if defined(Q_OS_WIN)
     void initShowWelcomeMessage();
     void initScreenClipProtocol();
+    void initVideoCapture();
     // Status text and button for whatever the registry says right now
     void updateScreenClipRow();
     void toggleScreenClipRegistration();
@@ -211,6 +215,7 @@ private:
 #endif
 #if defined(Q_OS_WIN)
     QCheckBox* m_showWelcomeMessage{ nullptr };
+    QCheckBox* m_videoCapture{ nullptr };
     QLabel* m_screenClipStatus{ nullptr };
     QPushButton* m_screenClipButton{ nullptr };
     QPushButton* m_screenClipSettingsButton{ nullptr };

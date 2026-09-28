@@ -42,6 +42,9 @@ public:
     // Size of the name label, or empty when there is none. ButtonHandler
     // spaces the buttons to fit it.
     QSize labelSize() const;
+    // Where the name label sits, or a null rectangle when it is hidden or
+    // absent. Painted hints must avoid it as well as the button.
+    QRect labelGeometry() const;
 
 protected:
     void mousePressEvent(QMouseEvent* e) override;

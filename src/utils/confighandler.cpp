@@ -190,6 +190,9 @@ static QMap<class QString, QSharedPointer<ValueHandler>>
     // Shown once on first launch, then turned off automatically. The user
     // can switch it back on from the General settings page.
     OPTION("showWelcomeMessage"          ,Bool               ( true          )),
+    // Off by default: recording hands off to Snipping Tool, and whether
+    // staff record their screens at all is the user's (and IT's) call
+    OPTION("videoCaptureEnabled"         ,Bool               ( false         )),
 #endif
 #if !defined(Q_OS_MACOS)
     // Auto-select the monitor under the cursor instead of showing
@@ -224,6 +227,7 @@ static QMap<QString, QSharedPointer<KeySequence>> recognizedShortcuts = {
     SHORTCUT("TYPE_MOVESELECTION"       ,   "Ctrl+M"                ),
     SHORTCUT("TYPE_UNDO"                ,   "Ctrl+Z"                ),
     SHORTCUT("TYPE_COPY"                ,   "Ctrl+C"                ),
+    SHORTCUT("TYPE_COPY_FILE"           ,   "Ctrl+Shift+C"          ),
     SHORTCUT("TYPE_SAVE"                ,   "Ctrl+S"                ),
     SHORTCUT("TYPE_ACCEPT"              ,   "Return"                ),
     SHORTCUT("TYPE_EXIT"                ,   "Ctrl+Q"                ),
@@ -261,6 +265,12 @@ static QMap<QString, QSharedPointer<KeySequence>> recognizedShortcuts = {
 #if defined(Q_OS_WIN)
     SHORTCUT("TAKE_SCREENSHOT"          ,   "Meta+Shift+x"          ),
     SHORTCUT("TYPE_OCR"                 ,   "O"                     ),
+    // Global, like TAKE_SCREENSHOT; no default so it takes no key from
+    // anyone who has not opted in to video
+    SHORTCUT("RECORD_VIDEO"             ,                           ),
+    // The capture overlay's photo/video switch
+    SHORTCUT("CAPTURE_MODE_SCREENSHOT"  ,   "1"                     ),
+    SHORTCUT("CAPTURE_MODE_VIDEO"       ,   "2"                     ),
 #endif
 #if defined(Q_OS_MACOS)
     SHORTCUT("TYPE_DELETE_CURRENT_TOOL" ,   "Backspace"             ),

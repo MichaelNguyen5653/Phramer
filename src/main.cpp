@@ -21,6 +21,7 @@
 #include "utils/pathinfo.h"
 #if defined(Q_OS_WIN)
 #include "utils/screenclipprotocol.h"
+#include "utils/snippingtool.h"
 #endif
 #include "utils/valuehandler.h"
 
@@ -42,6 +43,15 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QTranslator>
+
+#if defined(Q_OS_WIN)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <tlhelp32.h>
+#endif
 
 // Required for saving button list QList<CaptureTool::Type>
 Q_DECLARE_METATYPE(QList<int>)
@@ -91,6 +101,46 @@ bool launchDaemonWithCapture()
                        QStringLiteral("1"));
     daemon.setProcessEnvironment(environment);
     return daemon.startDetached();
+}
+
+// Windows lets only the process the user just acted on bring a window to the
+// front. For Print Screen that is this short-lived process, not the daemon
+// that draws the overlay, so without this the overlay opens behind the focus
+// and Esc goes to whatever had it. The right is passed only to other running
+// copies of this same executable, matched by full path, never to any process.
+void allowOtherInstancesToForeground()
+{
+    const QString self = QDir::toNativeSeparators(
+      QFileInfo(QCoreApplication::applicationFilePath()).canonicalFilePath());
+    const DWORD ownPid = GetCurrentProcessId();
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    for (BOOL more = Process32FirstW(snapshot, &entry); more != FALSE;
+         more = Process32NextW(snapshot, &entry)) {
+        if (entry.th32ProcessID == ownPid) {
+            continue;
+        }
+        HANDLE process = OpenProcess(
+          PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+        if (!process) {
+            continue;
+        }
+        wchar_t path[MAX_PATH * 2];
+        DWORD length = static_cast<DWORD>(std::size(path));
+        const bool named =
+          QueryFullProcessImageNameW(process, 0, path, &length) != FALSE;
+        CloseHandle(process);
+        if (named && QString::fromWCharArray(path, static_cast<int>(length))
+                         .compare(self, Qt::CaseInsensitive) == 0) {
+            AllowSetForegroundWindow(entry.th32ProcessID);
+        }
+    }
+    CloseHandle(snapshot);
 }
 #endif
 
@@ -288,6 +338,24 @@ int main(int argc, char* argv[])
         qstrcmp(argv[1], ScreenClipProtocol::UnregisterArgument) == 0) {
         QCoreApplication app(argc, argv);
         return ScreenClipProtocol::removeRegistration() ? 0 : 1;
+    }
+    // Windows starting Phramer for an ms-screenclip link. Read here, before
+    // the command-line parser: the link is not Phramer's to interpret as
+    // options, and anything after it (a link with quotes in it can split into
+    // more arguments) is dropped rather than parsed.
+    static char guiVerb[] = "gui";
+    if (argc >= 2 &&
+        qstrcmp(argv[1], ScreenClipProtocol::ActivationArgument) == 0) {
+        const QString link =
+          argc == 3 ? QString::fromLocal8Bit(argv[2]) : QString();
+        // Win+Shift+R: Windows' own recording, which only comes here because
+        // Phramer answers every ms-screenclip link
+        if (ScreenClipProtocol::isRecordingRequest(link)) {
+            return SnippingTool::startRecording() ? 0 : 1;
+        }
+        // Print Screen or Win+Shift+S: a capture, exactly as a bare "gui"
+        argv[1] = guiVerb;
+        argc = 2;
     }
 #endif
 
@@ -644,8 +712,13 @@ int main(int argc, char* argv[])
         // daemon takes it instead, as its own hotkey would, and is started
         // for it if it is not running. Options that print to this process's
         // stdout or change the request keep the capture here.
-        if (req.tasks() == CaptureRequest::NO_TASK && delay == 0 &&
-            region.isEmpty() && !useLastRegion &&
+        const bool forwardable = req.tasks() == CaptureRequest::NO_TASK &&
+                                 delay == 0 && region.isEmpty() &&
+                                 !useLastRegion;
+        if (forwardable) {
+            allowOtherInstancesToForeground();
+        }
+        if (forwardable &&
             (FlameshotDaemon::requestGui() || launchDaemonWithCapture())) {
             delete qApp;
             return 0;

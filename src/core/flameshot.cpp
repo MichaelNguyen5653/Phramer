@@ -48,8 +48,12 @@ constexpr const char* visibleInDockProperty = "_visibleInDock";
 #include "core/qguiappcurrentscreen.h"
 #include "utils/abstractlogger.h"
 #include "utils/confighandler.h"
+#include "utils/filehandoff.h"
 #include "utils/screengrabber.h"
 #include "utils/screenshotsaver.h"
+#if defined(Q_OS_WIN)
+#include "utils/snippingtool.h"
+#endif
 #include "widgets/capture/capturewidget.h"
 #include "widgets/capturelauncher.h"
 #include "widgets/editor/editorwindow.h"
@@ -104,6 +108,20 @@ Flameshot::Flameshot()
                      &QHotkey::activated,
                      qApp,
                      [this]() { gui(); });
+#endif
+#if defined(Q_OS_WIN)
+    // Registered even when video is off, so turning it on needs no restart;
+    // recordVideo() is what checks the opt-in
+    m_HotkeyRecordVideo = new QHotkey(
+      QKeySequence(ConfigHandler().shortcut("RECORD_VIDEO")), true, this);
+    QObject::connect(m_HotkeyRecordVideo, &QHotkey::activated, qApp, [this]() {
+        recordVideo();
+    });
+    // A recording launch still waiting on Windows reports back into this
+    // object; it must stop before the application is torn down
+    QObject::connect(qApp, &QCoreApplication::aboutToQuit, qApp, []() {
+        SnippingTool::finishPendingLaunches();
+    });
 #endif
 #if (defined(Q_OS_MACOS) && ENABLE_IMGUR)
     m_HotkeyScreenshotHistory = new QHotkey(
@@ -179,6 +197,12 @@ CaptureWidget* Flameshot::gui(const CaptureRequest& req)
 
 #ifdef Q_OS_WIN
         m_captureWindow->show();
+        // Takes the keyboard when Windows allows it, so Esc and the tool keys
+        // reach the overlay rather than the application underneath. A capture
+        // forwarded from Print Screen is allowed it by the forwarding process;
+        // see allowOtherInstancesToForeground() in main.cpp.
+        m_captureWindow->raise();
+        m_captureWindow->activateWindow();
 #elif defined(Q_OS_MACOS)
         if (ConfigHandler().useNativeFullscreen()) {
             m_captureWindow->showFullScreen();
@@ -386,6 +410,38 @@ void Flameshot::openSavePath()
     }
 }
 
+#if defined(Q_OS_WIN)
+void Flameshot::recordVideo()
+{
+    if (!ConfigHandler().videoCaptureEnabled()) {
+        AbstractLogger::info()
+          << tr("Video capture is off. Turn it on in Settings, under "
+                "Advanced.");
+        return;
+    }
+    if (!SnippingTool::isAvailable()) {
+        AbstractLogger::warning()
+          << tr("Video capture needs the Windows Snipping Tool, which is not "
+                "installed on this computer.");
+        return;
+    }
+    SnippingTool::startRecordingAsync([](bool launched) {
+        if (launched) {
+            return;
+        }
+        // The logger can show a notification, so it runs on the GUI thread
+        QMetaObject::invokeMethod(
+          Flameshot::instance(),
+          []() {
+              AbstractLogger::warning()
+                << tr("Windows did not allow the Snipping Tool to start. It "
+                      "may be blocked on this computer.");
+          },
+          Qt::QueuedConnection);
+    });
+}
+#endif
+
 QVersionNumber Flameshot::getVersion()
 {
     return QVersionNumber::fromString(
@@ -501,6 +557,18 @@ void Flameshot::exportCapture(const QPixmap& capture,
 
     if (tasks & CR::COPY) {
         FlameshotDaemon::copyToClipboard(capture);
+    }
+
+    if (tasks & CR::COPY_FILE) {
+        // Always the configured folder, never a dialog: the point is to go
+        // straight from capture to a paste into Teams or Outlook
+        QString saved;
+        if (saveToFilesystem(capture,
+                             ConfigHandler().savePath(),
+                             QObject::tr("Copied as a file."),
+                             &saved)) {
+            FlameshotDaemon::copyFileToClipboard(saved);
+        }
     }
 
     if (tasks & CR::OPEN_IN_EDITOR) {

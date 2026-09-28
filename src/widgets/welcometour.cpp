@@ -9,6 +9,7 @@
 #include "utils/pathinfo.h"
 #if defined(Q_OS_WIN)
 #include "utils/screenclipprotocol.h"
+#include "utils/snippingtool.h"
 #endif
 #include "widgets/editor/editortheme.h"
 #include "widgets/editor/editorwindow.h"
@@ -20,6 +21,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
@@ -382,6 +384,7 @@ WelcomeTour::WelcomeTour(QWidget* parent)
     buildWelcomePage();
 #if defined(Q_OS_WIN)
     buildScreenClipPage();
+    buildVideoPage();
 #endif
     buildFeaturesPage();
     buildFixesPage();
@@ -579,6 +582,72 @@ void WelcomeTour::buildScreenClipPage()
 }
 #endif
 
+#if defined(Q_OS_WIN)
+void WelcomeTour::buildVideoPage()
+{
+    Page page;
+    page.widget = new QWidget(m_content);
+    auto* layout = new QVBoxLayout(page.widget);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    QWidget* title = makeTitle(tr("Record your screen"), page.widget, 1.8);
+    auto* subtitle =
+      new QLabel(tr("Optional: create a shortcut to video mode."), page.widget);
+    subtitle->setObjectName(QStringLiteral("muted"));
+    layout->addWidget(title);
+    layout->addWidget(subtitle);
+    layout->addSpacing(18);
+
+    const QString videoKey =
+      QKeySequence(ConfigHandler().shortcut("CAPTURE_MODE_VIDEO"))
+        .toString(QKeySequence::NativeText);
+    auto* detail = new QLabel(
+      tr("Phramer hands recording to the Windows Snipping Tool. Enabling "
+         "this option creates a shortcut to it: press %1 on the capture "
+         "screen, pick Record Video from the tray menu, or set a key under "
+         "Settings, Shortcuts.")
+        .arg(videoKey.isEmpty() ? tr("the Video button") : videoKey),
+      page.widget);
+    detail->setObjectName(QStringLiteral("muted"));
+    detail->setWordWrap(true);
+    layout->addWidget(detail);
+    layout->addSpacing(14);
+
+    auto* box = new QCheckBox(
+      tr("Turn on video capture (uses Windows Snipping Tool)"), page.widget);
+    box->setCursor(Qt::PointingHandCursor);
+    // Off unless the user already chose it: recording the screen is a
+    // choice people, and their IT department, make on purpose
+    box->setChecked(ConfigHandler().videoCaptureEnabled());
+    if (!SnippingTool::isAvailable()) {
+        box->setChecked(false);
+        box->setEnabled(false);
+        box->setText(
+          tr("Video capture needs the Windows Snipping Tool, which is not "
+             "installed on this computer"));
+    }
+    connect(box, &QCheckBox::toggled, this, [](bool checked) {
+        ConfigHandler().setVideoCaptureEnabled(checked);
+    });
+    layout->addWidget(box);
+
+    auto* later = new QLabel(
+      tr("You can change this at any time in Settings, under Advanced."),
+      page.widget);
+    later->setObjectName(QStringLiteral("muted"));
+    QFont small = later->font();
+    small.setPointSizeF(small.pointSizeF() * 0.85);
+    later->setFont(small);
+    layout->addSpacing(4);
+    layout->addWidget(later);
+    layout->addStretch(1);
+
+    page.reveal = { title, subtitle, detail, box, later };
+    m_pages.append(page);
+}
+#endif
+
 void WelcomeTour::buildFeaturesPage()
 {
     Page page;
@@ -603,6 +672,13 @@ void WelcomeTour::buildFeaturesPage()
         QString body;
     };
     const QVector<Item> items = {
+        { QStringLiteral("square-outline.svg"),
+          tr("Window capture"),
+          tr("Hover a window and click to capture exactly that window.") },
+        { QStringLiteral("file-copy.svg"),
+          tr("Copy as file"),
+          tr("Paste captures into Teams or Outlook as attachments, and "
+             "click the saved notice to show the file.") },
         { QStringLiteral("open-in-editor.svg"),
           tr("A redesigned editor"),
           tr("Light and dark themes that follow Windows, clearer tools and "
@@ -622,7 +698,8 @@ void WelcomeTour::buildFeaturesPage()
           tr("A cleaner blur that never reads what it hides.") },
         { QStringLiteral("grid.svg"),
           tr("Zoom and grid"),
-          tr("Ctrl+wheel to zoom, and grid lines that are never saved.") },
+          tr("Scroll to zoom at the pointer, Esc to put a tool down, and "
+             "grid lines that are never saved.") },
     };
 
     // Two columns, filled row by row
@@ -841,7 +918,11 @@ void WelcomeTour::reveal(const Page& page)
 void WelcomeTour::updateFooter()
 {
     const bool last = m_index == m_pages.size() - 1;
-    m_skipButton->setVisible(!last);
+    if (last && m_mandatory && !m_reachedEnd) {
+        m_reachedEnd = true;
+        ConfigHandler().setWelcomeTourShownFor(QStringLiteral(APP_VERSION));
+    }
+    m_skipButton->setVisible(!last && !m_mandatory);
     m_nextButton->setVisible(!last);
     m_settingsButton->setVisible(last);
     m_editorButton->setVisible(last);
@@ -1035,14 +1116,26 @@ bool WelcomeTour::showIfDue(QWidget* parent)
         return false;
     }
 
-    // Recorded before the dialog runs: closing it any way at all has to
-    // count as seen, or it reappears on every launch
-    config.setWelcomeTourShownFor(current);
-    showNow(parent);
+    // A new major version is mandatory and records itself on reaching the
+    // last page, so quitting halfway brings it back next launch. Anything
+    // else is recorded before the dialog runs: closing it any way at all has
+    // to count as seen, or it reappears on every launch.
+    if (!newMajor) {
+        config.setWelcomeTourShownFor(current);
+    }
+    showNow(parent, newMajor);
     return true;
 }
 
-void WelcomeTour::showNow(QWidget* parent)
+void WelcomeTour::reject()
+{
+    if (m_mandatory && !m_reachedEnd) {
+        return;
+    }
+    QDialog::reject();
+}
+
+void WelcomeTour::showNow(QWidget* parent, bool mandatory)
 {
     // One at a time: the tray entry can be clicked while one is open
     static QPointer<WelcomeTour> open;
@@ -1052,6 +1145,8 @@ void WelcomeTour::showNow(QWidget* parent)
         return;
     }
     open = new WelcomeTour(parent);
+    open->m_mandatory = mandatory;
+    open->updateFooter();
     open->setAttribute(Qt::WA_DeleteOnClose);
     open->show();
     open->activateWindow();

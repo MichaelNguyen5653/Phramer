@@ -25,6 +25,17 @@ namespace ScreenClipProtocol {
 
 inline constexpr char RegisterArgument[] = "--register-screenclip";
 inline constexpr char UnregisterArgument[] = "--unregister-screenclip";
+// How Windows starts Phramer for an ms-screenclip link: this, then the link
+// as the one and only other argument
+inline constexpr char ActivationArgument[] = "--screenclip";
+
+// Whether a link Windows handed to Phramer asks for a screen recording
+// (Win+Shift+R) rather than a snip (Print Screen, Win+Shift+S)
+inline bool isRecordingRequest(const QString& uri)
+{
+    return uri.contains(QStringLiteral("record"), Qt::CaseInsensitive) ||
+           uri.contains(QStringLiteral("capture/video"), Qt::CaseInsensitive);
+}
 
 enum class Result
 {
@@ -56,7 +67,8 @@ Result registerElevated();
 Result unregisterElevated();
 
 // Opens Phramer's page in Settings > Default apps, where ms-screenclip can
-// be pointed at it
+// be pointed at it; the general Default apps page when Phramer is not
+// registered, where it can be pointed back at Snipping Tool
 void openDefaultAppsSettings();
 
 } // namespace ScreenClipProtocol

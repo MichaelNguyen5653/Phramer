@@ -32,14 +32,21 @@ public:
      * @brief Shows the welcome if this version has not shown it yet.
      *
      * "Don't show again" from older tours silences release notes within a
-     * major version; a new major version is shown once regardless. The
-     * version is recorded before the dialog is answered, so closing it any
-     * way at all counts as seen. Returns whether it was shown.
+     * major version; a new major version is shown once regardless, and is
+     * mandatory: it cannot be skipped, and counts as seen only once its last
+     * page is reached. Any other release records the version before the
+     * dialog is answered, so closing it any way at all counts as seen.
+     * Returns whether it was shown.
      */
     static bool showIfDue(QWidget* parent = nullptr);
 
-    // Shows it unconditionally, for the tray's "What's New"
-    static void showNow(QWidget* parent = nullptr);
+    // Shows it unconditionally. Not mandatory for the tray's "What's New".
+    static void showNow(QWidget* parent = nullptr, bool mandatory = false);
+
+public slots:
+    // Refused while a mandatory tour has not reached its last page; Escape
+    // and Alt+F4 both arrive here
+    void reject() override;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -59,6 +66,7 @@ private:
 
     void buildWelcomePage();
     void buildScreenClipPage();
+    void buildVideoPage();
     void buildFeaturesPage();
     void buildFixesPage();
     void buildFooter();
@@ -99,6 +107,8 @@ private:
     QParallelAnimationGroup* m_revealAnimation{ nullptr };
     int m_index{ -1 };
     bool m_dark{ false };
+    bool m_mandatory{ false };
+    bool m_reachedEnd{ false };
     // Card-drag state; a null point means no drag is in progress
     QPoint m_dragOffset;
 };
