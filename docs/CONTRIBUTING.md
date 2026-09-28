@@ -1,42 +1,23 @@
 # Contributing
 
-Contributions are welcome! Here's how you can help:
-
-- [Contributing code](#code)
-- [Reporting issues](#issues)
-
 ## Code
 
-For small fixes or incremental improvements simply fork the repo and follow the process below. For larger changes submit an [RFC:](RFC.md)
-1. [Fork](https://help.github.com/articles/fork-a-repo/) the repository and [clone](https://help.github.com/articles/cloning-a-repository/) your fork.
-
-2. Start coding!
-    - Implement your feature.
-    - Check your code works as expected.
-    - Run the code formatter: `clang-format -i $(git ls-files "*.cpp" "*.h")`
-      Use **clang-format 11**; CI pins that version and newer ones format
-      differently.
-
-3. Commit your changes to a new branch (not `master`, one change per branch) and push it:
-    - Commit messages should:
-        - Header line: explain the commit in one line (use the imperative)
-        - Be descriptive.
-        - Have a first line with less than *80 characters* and have a second line that is *empty* if you want to add a description.
-
-4. Once you are happy with your changes, submit a pull request.
-     - Open the pull-request.
-     - Add a short description explaining briefly what you've done (or if it's a work-in-progress - what you need to do)
+1. Fork the repository and create a branch for your change (one change per
+   branch, not `master`).
+2. Format with **clang-format 11**; CI pins that version and newer ones format
+   differently:
+   `clang-format -i $(git ls-files "*.cpp" "*.h")`
+3. Write commit messages with an imperative first line under 80 characters,
+   followed by a blank line and any description.
+4. Open a pull request with a short description of the change. For larger
+   changes, submit an [RFC](RFC.md) first.
 
 ## Issues
 
-1. Do a quick search on GitHub to check if the issue has already been reported.
-2. [Open an issue](https://github.com/MichaelNguyen5653/Phramer/issues/new/choose) and describe the issue you are having - you could include:
-     - Screenshots
-     - Ways to reproduce the issue.
-     - Your Phramer version.
-     - Your Windows version, and your monitor setup including display scaling.
-
-After reporting you should aim to answer questions or clarifications as this helps pinpoint the cause of the issue.
+Search existing issues first, then
+[open an issue](https://github.com/MichaelNguyen5653/Phramer/issues/new/choose)
+with steps to reproduce, your Phramer version, your Windows version, and your
+monitor setup including display scaling.
 
 Security vulnerabilities should not be reported as issues. See
 [SECURITY.md](../SECURITY.md) for how to report those privately.
