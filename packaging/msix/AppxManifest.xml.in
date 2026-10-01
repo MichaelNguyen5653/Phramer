@@ -72,7 +72,7 @@
             Enabled="false"
             DisplayName="Phramer" />
         </desktop:Extension>
-        <!--@SCREENCLIP_BEGIN@-->
+        <!-- BEGIN screenclip: removed in the noscreenclip variant -->
         <!-- Lists Phramer under Settings > Default apps for the snip that
              Print Screen and Win+Shift+S ask for. main() reads the link;
              recording links go back to Snipping Tool. -->
@@ -81,7 +81,7 @@
             <uap:DisplayName>Phramer</uap:DisplayName>
           </uap3:Protocol>
         </uap3:Extension>
-        <!--@SCREENCLIP_END@-->
+        <!-- END screenclip -->
         <uap5:Extension
           Category="windows.appExecutionAlias"
           Executable="phramer.exe"

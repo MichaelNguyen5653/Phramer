@@ -108,7 +108,7 @@ if ($tooBig.Count -gt 0) {
 $manifest = Get-Content (Join-Path $here 'AppxManifest.xml.in') -Raw
 if ($Variant -eq 'noscreenclip') {
     $manifest = [regex]::Replace($manifest,
-        '(?s)[ \t]*<!--@SCREENCLIP_BEGIN@-->.*?<!--@SCREENCLIP_END@-->\r?\n', '')
+        '(?s)[ \t]*<!-- BEGIN screenclip.*?<!-- END screenclip -->\r?\n', '')
     if ($manifest -match 'ms-screenclip') { throw 'The noscreenclip variant still declares ms-screenclip' }
 }
 $fields = [ordered]@{
