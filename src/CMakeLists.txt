@@ -234,6 +234,8 @@ if (APPLE)
     target_link_libraries(
             flameshot
             qhotkey
+            # AssocQueryStringW, for the Store edition's ms-screenclip check
+            shlwapi
     )
 endif ()
 
@@ -265,6 +267,8 @@ if (WIN32)
     target_link_libraries(
             flameshot
             qhotkey
+            # AssocQueryStringW, for the Store edition's ms-screenclip check
+            shlwapi
     )
 endif ()
 

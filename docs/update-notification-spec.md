@@ -170,3 +170,11 @@ needed**; the GitHub releases API is the manifest.
   running. A machine that reboots daily may check far less often than that
   implies. Worth a check shortly after startup, which is already the
   behaviour.
+
+## Store edition
+
+The Microsoft Store build (`PHRAMER_STORE_BUILD`) compiles this whole
+feature out through `DISABLE_UPDATE_CHECKER`: the Store delivers its updates,
+and a package cannot run an MSI. The `checkForUpdates` and
+`ignoreUpdateToVersion` keys stay declared, so a configuration carried over
+from the MSI build loads without an unrecognized-setting error.

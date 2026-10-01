@@ -313,9 +313,7 @@ void ShortcutsWidget::checkPrintScreenForcesSnipping()
                           " tool when the 'Print Screen' key is pressed. Would "
                           "you like to disable this so that Phramer can use "
                           "the 'Print Screen' key?") +
-                       "\n\n" +
-                       tr("Phramer must be restarted for changes to take "
-                          "effect."));
+                       "\n\n" + PrintScreenKey::disableInstructions());
         QPushButton* yesBtn = msgBox.addButton(QMessageBox::Yes);
         QPushButton* noBtn = msgBox.addButton(QMessageBox::No);
         QPushButton* noDontAskAgainBtn =

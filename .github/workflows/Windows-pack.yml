@@ -195,3 +195,79 @@ jobs:
             ${{ github.workspace }}/build/Package/portable/phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip
             ${{ github.workspace }}/build/Package/portable/phramer-${{ env.VERSION }}-${{ matrix.config.pak_arch }}.zip.sha256sum
           overwrite: true
+
+  # The Microsoft Store edition. A job of its own rather than a third matrix
+  # type: the steps above hard-code the MSI and ZIP names per type.
+  windows-msix:
+    name: VS 2022 x64-msix
+    runs-on: windows-2022
+    steps:
+      - name: Checkout Source code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Read version
+        shell: bash
+        run: |
+          echo "VERSION=$(grep 'set.*(.*FLAMESHOT_VERSION' CMakeLists.txt | sed 's/[^0-9.]*//' | sed 's/)//g')" >> $GITHUB_ENV
+          echo "GIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.9.3
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: 'qtimageformats'
+          cache: true
+          cache-key-prefix: install-qt-action-6.9.3
+          dir: ${{ github.workspace }}/qt
+
+      - name: Locate Visual Studio
+        shell: pwsh
+        # windeployqt --compiler-runtime runs as a POST_BUILD step and needs
+        # VCINSTALLDIR to find the MSVC redistributables
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -property installationPath
+          if (-not $vsPath) { throw "Could not locate a Visual Studio installation" }
+          "VCINSTALLDIR=$vsPath\VC" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Configure
+        shell: pwsh
+        # Every -D quoted: PowerShell passes a bare dash token containing a
+        # variable through literally
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_BUILD_TYPE=Release" "-DUSE_PORTABLE_CONFIG=OFF" "-DPHRAMER_STORE_BUILD=ON"
+
+      - name: Compile
+        shell: pwsh
+        run: cmake --build build --config Release
+
+      - name: Install
+        shell: pwsh
+        run: cmake --install build --config Release --prefix stage
+
+      - name: Package MSIX
+        shell: pwsh
+        run: |
+          ./packaging/msix/make-msix.ps1 -InstallDir stage -Version "$env:VERSION" -OutDir dist -Variant store
+          ./packaging/msix/make-msix.ps1 -InstallDir stage -Version "$env:VERSION" -OutDir dist -Variant noscreenclip
+
+      - name: Test-signed copies for sideloading
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Filter *.msix | ForEach-Object {
+            ./packaging/msix/sign-for-sideload.ps1 -Msix $_.FullName -OutDir dist/sideload
+          }
+
+      - name: Artifact Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PRODUCT }}-${{ env.VERSION }}+${{ env.GIT_HASH }}-artifact-win-x64-msix
+          path: |
+            ${{ github.workspace }}/dist/*.msix
+            ${{ github.workspace }}/dist/sideload/*
+          overwrite: true

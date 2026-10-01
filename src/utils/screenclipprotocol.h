@@ -57,12 +57,17 @@ bool isRegisteredByPhramer();
 // Whether the user has picked Phramer for ms-screenclip in Windows Settings
 bool isDefault();
 
+#if !defined(PHRAMER_STORE_BUILD)
 // The elevated halves: change the keys. Return false if they could not.
 bool writeRegistration();
 bool removeRegistration();
+#endif
 
 // The unelevated halves: start the elevated copy through UAC and wait for
-// it. Block for as long as the UAC prompt is up.
+// it. Block for as long as the UAC prompt is up. The Store edition declares
+// the handler in its package manifest instead, so there nothing is written
+// and nothing elevates: registering succeeds exactly when the package
+// declares it, and unregistering always fails.
 Result registerElevated();
 Result unregisterElevated();
 

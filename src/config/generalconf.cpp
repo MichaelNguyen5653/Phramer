@@ -255,6 +255,11 @@ void GeneralConf::autoCloseIdleDaemonChanged(bool checked)
 void GeneralConf::autostartChanged(bool checked)
 {
     ConfigHandler().setStartupLaunch(checked);
+#if defined(PHRAMER_STORE_BUILD)
+    // The startup task can refuse (the user or policy turned it off), so
+    // show what Windows ended up with rather than what was clicked
+    m_autostart->setChecked(ConfigHandler().startupLaunch());
+#endif
 }
 
 void GeneralConf::importConfiguration()
@@ -1228,6 +1233,13 @@ void GeneralConf::initShowWelcomeMessage()
 
 void GeneralConf::initScreenClipProtocol()
 {
+#if defined(PHRAMER_STORE_BUILD)
+    // Declared by the package manifest or not at all; see
+    // utils/screenclipprotocol.h
+    if (!ScreenClipProtocol::isRegistered()) {
+        return;
+    }
+#endif
     auto* rowLayout = new QHBoxLayout();
     m_screenClipStatus = new QLabel(this);
     m_screenClipStatus->setWordWrap(true);
@@ -1255,6 +1267,14 @@ void GeneralConf::initScreenClipProtocol()
             &QPushButton::clicked,
             this,
             &GeneralConf::toggleScreenClipRegistration);
+#if defined(PHRAMER_STORE_BUILD)
+    // Nothing to register or unregister: the package did it on install
+    m_screenClipStatus->setToolTip(
+      tr("Windows opens ms-screenclip: for its own screen capture, including "
+         "the Print Screen key. Phramer is listed as an MS-SCREENCLIP app in "
+         "Windows Settings, where you choose it."));
+    m_screenClipButton->hide();
+#endif
     updateScreenClipRow();
 }
 
@@ -1292,6 +1312,9 @@ void GeneralConf::updateScreenClipRow()
     }
     m_screenClipButton->setText(registered ? tr("Unregister") : tr("Register"));
     m_screenClipSettingsButton->setVisible(registered || stillChosen);
+#if defined(PHRAMER_STORE_BUILD)
+    m_screenClipButton->hide();
+#endif
 }
 
 void GeneralConf::toggleScreenClipRegistration()

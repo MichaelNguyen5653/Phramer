@@ -15,6 +15,7 @@
 #include <QIODevice>
 #include <QPixmap>
 #include <QRect>
+#include <QTimer>
 
 #if !(defined(Q_OS_MACOS) || defined(Q_OS_WIN))
 #include <QDBusConnection>
@@ -36,6 +37,14 @@
   (defined(Q_OS_MACOS) || defined(Q_OS_WIN))
 #include <QBuffer>
 #include <kdsingleapplication.h>
+#endif
+
+#if defined(Q_OS_WIN) && defined(PHRAMER_STORE_BUILD)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "utils/packageidentity.h"
+#include <windows.h>
 #endif
 
 #ifdef Q_OS_WIN
@@ -154,9 +163,7 @@ void FlameshotDaemon::showWelcomeMessage()
       QObject::tr("Windows currently opens its own snipping tool when you "
                   "press Print Screen. Would you like Phramer to take over "
                   "that key instead?") +
-      "\n\n" +
-      QObject::tr("Phramer must be restarted for the change to take "
-                  "effect."));
+      "\n\n" + PrintScreenKey::disableInstructions());
     QPushButton* yesBtn = msgBox.addButton(QMessageBox::Yes);
     msgBox.addButton(QMessageBox::No);
     msgBox.setDefaultButton(yesBtn);
@@ -180,6 +187,15 @@ void FlameshotDaemon::start()
         m_instance->initTrayIcon();
 #if defined(Q_OS_WIN) && !defined(USE_PORTABLE_CONFIG)
         ConfigHandler().applyDefaultStartupLaunch();
+#endif
+#if defined(Q_OS_WIN) && defined(PHRAMER_STORE_BUILD)
+        // The Store closes a running app to update it and, with this,
+        // starts it again afterwards. Not after a crash, hang or reboot:
+        // the startup task covers sign-in.
+        if (PackageIdentity::isPackaged()) {
+            RegisterApplicationRestart(
+              nullptr, RESTART_NO_CRASH | RESTART_NO_HANG | RESTART_NO_REBOOT);
+        }
 #endif
         qApp->setQuitOnLastWindowClosed(false);
     }
@@ -834,6 +850,10 @@ void FlameshotDaemon::messageReceivedFromSecondaryInstance(
             qWarning() << "Received \"attachScreenshotToClipboard\" from "
                           "second instance, but pixmap is empty!";
         }
+    } else if (methodCall == QStringLiteral("launcher")) {
+        QTimer::singleShot(0, Flameshot::instance(), []() {
+            Flameshot::instance()->launcher();
+        });
     } else if (methodCall == QStringLiteral("gui")) {
         // Deferred: the message is delivered from inside the IPC socket's
         // handler, and gui() can wait on modal dialogs

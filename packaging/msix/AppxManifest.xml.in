@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Package manifest for the Microsoft Store edition. make-msix.ps1 fills the
+  @…@ fields and packs the result; see packaging/msix/README.md.
+
+  Identity Name, Publisher and PublisherDisplayName must match Partner
+  Center's Product identity page character for character, or the upload is
+  rejected. The fourth version field is reserved by the Store and stays 0.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 uap5 desktop desktop4 rescap">
+
+  <Identity
+    Name="@IDENTITY_NAME@"
+    Publisher="@PUBLISHER@"
+    Version="@VERSION@.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Phramer</DisplayName>
+    <PublisherDisplayName>@PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 19041 is Windows 10 2004, the oldest release still serviced -->
+    <TargetDeviceFamily
+      Name="Windows.Desktop"
+      MinVersion="10.0.19041.0"
+      MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <!-- English only: each language listed here becomes a Store listing that
+       policy 10.7 expects to be translated -->
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Capabilities>
+    <!-- A desktop app: global hotkeys, a tray icon and a frameless
+         always-on-top capture overlay across every monitor -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+
+  <Applications>
+    <Application
+      Id="Phramer"
+      Executable="phramer.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Phramer"
+        Description="Screenshot capture and annotation"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <!-- Launch at sign-in, switched by utils/packagedstartup. Off until
+             the user turns it on. -->
+        <desktop:Extension
+          Category="windows.startupTask"
+          Executable="phramer.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask
+            TaskId="PhramerStartup"
+            Enabled="false"
+            DisplayName="Phramer" />
+        </desktop:Extension>
+        <!-- BEGIN screenclip: removed in the noscreenclip variant -->
+        <!-- Lists Phramer under Settings > Default apps for the snip that
+             Print Screen and Win+Shift+S ask for. main() reads the link;
+             recording links go back to Snipping Tool. -->
+        <uap3:Extension Category="windows.protocol">
+          <uap3:Protocol Name="ms-screenclip" Parameters="--screenclip &quot;%1&quot;">
+            <uap:DisplayName>Phramer</uap:DisplayName>
+          </uap3:Protocol>
+        </uap3:Extension>
+        <!-- END screenclip -->
+        <uap5:Extension
+          Category="windows.appExecutionAlias"
+          Executable="phramer.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="phramer.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+
+    <!-- The console front end. Its own Application because a package
+         application may have only one execution alias; hidden from Start. -->
+    <Application
+      Id="PhramerCli"
+      Executable="phramer-cli.exe"
+      EntryPoint="Windows.FullTrustApplication"
+      desktop4:SupportsMultipleInstances="true">
+      <uap:VisualElements
+        DisplayName="Phramer command line"
+        Description="Phramer command line"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        AppListEntry="none" />
+      <Extensions>
+        <uap5:Extension
+          Category="windows.appExecutionAlias"
+          Executable="phramer-cli.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias desktop4:Subsystem="console">
+            <uap5:ExecutionAlias Alias="phramer-cli.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

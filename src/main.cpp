@@ -20,6 +20,7 @@
 #include "utils/filenamehandler.h"
 #include "utils/pathinfo.h"
 #if defined(Q_OS_WIN)
+#include "utils/packageidentity.h"
 #include "utils/screenclipprotocol.h"
 #include "utils/snippingtool.h"
 #endif
@@ -34,6 +35,7 @@
 #include "utils/globalvalues.h"
 
 #include <QApplication>
+#include <QDataStream>
 #include <QDir>
 #include <QFileInfo>
 #include <QLibraryInfo>
@@ -325,7 +327,7 @@ static void migrateLegacyConfig()
 
 int main(int argc, char* argv[])
 {
-#if defined(Q_OS_WIN)
+#if defined(Q_OS_WIN) && !defined(PHRAMER_STORE_BUILD)
     // The elevated copy started to register or unregister ms-screenclip.
     // Handled before anything else: it must not touch the config, take the
     // single-instance lock or show a window, only write the key and exit.
@@ -339,6 +341,8 @@ int main(int argc, char* argv[])
         QCoreApplication app(argc, argv);
         return ScreenClipProtocol::removeRegistration() ? 0 : 1;
     }
+#endif
+#if defined(Q_OS_WIN)
     // Windows starting Phramer for an ms-screenclip link. Read here, before
     // the command-line parser: the link is not Phramer's to interpret as
     // options, and anything after it (a link with quotes in it can split into
@@ -391,6 +395,16 @@ int main(int argc, char* argv[])
 
             if (!kdsa.isPrimaryInstance() &&
                 !ConfigHandler().allowMultipleGuiInstances()) {
+#if defined(Q_OS_WIN) && defined(PHRAMER_STORE_BUILD)
+                // Started again from the Start menu while already running:
+                // show the running copy's launcher, since quitting without a
+                // trace reads as an app that does not open
+                allowOtherInstancesToForeground();
+                QByteArray data;
+                QDataStream stream(&data, QIODevice::WriteOnly);
+                stream << QStringLiteral("launcher");
+                kdsa.sendMessage(data);
+#endif
                 return 0; // Quit
             }
 #endif
@@ -433,6 +447,14 @@ int main(int argc, char* argv[])
         }
 
         if (Flameshot::instance()->restartRequested()) {
+#if defined(Q_OS_WIN) && defined(PHRAMER_STORE_BUILD)
+            // A package relaunches through Windows' app activation, which is
+            // documented to give the new process the package identity;
+            // starting the exe by path inside WindowsApps is not
+            if (PackageIdentity::activateSelf()) {
+                return exitCode;
+            }
+#endif
             QProcess::startDetached(QCoreApplication::applicationFilePath(),
                                     QStringList());
         }

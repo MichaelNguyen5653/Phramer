@@ -279,6 +279,16 @@ Rules:
   `main()` reads the link before the CLI parser and drops anything after it,
   so a crafted link cannot smuggle in options. A recording link (Win+Shift+R)
   goes back to Snipping Tool; anything else is a plain `gui` capture.
+- **Microsoft Store edition** — `-DPHRAMER_STORE_BUILD=ON` (requires
+  `USE_PORTABLE_CONFIG=OFF`, implies `DISABLE_UPDATE_CHECKER`), packed as
+  MSIX by `packaging/msix/`. Inside a package Windows redirects HKCU writes
+  and new AppData files to a private per-package store, keeps the install
+  folder read-only, and the Store rejects anything that elevates. So the
+  Store build has no updater, declares ms-screenclip and the startup task
+  in its manifest instead of writing the registry, opens Settings for the
+  Print Screen toggle, and relaunches through app activation
+  (`utils/packageidentity`, `utils/packagedstartup`). Every such branch is
+  behind `PHRAMER_STORE_BUILD`, so the MSI and ZIP are unchanged.
 
 ## Coding Conventions
 
@@ -294,6 +304,16 @@ Rules:
   what it does.
 
 ### Traps
+
+- **A packaged app's registry writes can succeed and change nothing.**
+  HKCU writes from the Store edition land in a private hive that only
+  Phramer reads back, so a write-then-verify looks fine while Windows never
+  sees it. Declare it in `packaging/msix/AppxManifest.xml.in` or send the
+  user to a Settings page; never write the registry for Windows' benefit
+  under `PHRAMER_STORE_BUILD`.
+- **The Store version is the CMake version plus `.0`.** The fourth field is
+  reserved by the Store. Package identity strings come from Partner Center
+  and must match it exactly; they live in `make-msix.ps1`.
 
 - **`CaptureWidget` is effectively a singleton.** `OverlayMessage` is a
   static instance parented to it, its destructor exports the capture, and
@@ -398,6 +418,10 @@ One known rough edge in that hop: the old build relaunches
 `applicationFilePath()` after installing, and the upgrade has already deleted
 that path, so the app does not reopen on its own. Users start Phramer once
 from the Start Menu.
+
+Each tag also builds the Store MSIX (`windows-msix` job), kept as a workflow
+artifact. It is uploaded to Partner Center by hand; see
+`packaging/msix/README.md`.
 
 `Linux-pack`, `MacOS-pack`, `build_cmake` and `deploy-dev-docs` are
 `workflow_dispatch` only. `Windows-pack` and `test-clang-format` run on every

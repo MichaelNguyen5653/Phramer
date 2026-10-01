@@ -503,6 +503,13 @@ void WelcomeTour::buildWelcomePage()
 #if defined(Q_OS_WIN)
 void WelcomeTour::buildScreenClipPage()
 {
+#if defined(PHRAMER_STORE_BUILD)
+    // The Store package either declares the handler or does not; without
+    // it there is nothing this page could offer
+    if (!ScreenClipProtocol::isRegistered()) {
+        return;
+    }
+#endif
     Page page;
     page.widget = new QWidget(m_content);
     m_screenClipPage = page.widget;
@@ -525,11 +532,18 @@ void WelcomeTour::buildScreenClipPage()
     layout->addWidget(m_zoom);
     layout->addSpacing(14);
 
-    auto* detail = new QLabel(
+#if defined(PHRAMER_STORE_BUILD)
+    const QString detailText =
+      tr("Phramer is listed in Windows Settings as an MS-SCREENCLIP app. "
+         "Choose it there, and the Print Screen key and apps that ask "
+         "Windows for a snip open Phramer instead of the Snipping Tool.");
+#else
+    const QString detailText =
       tr("Registering lists Phramer in Windows Settings as an MS-SCREENCLIP "
          "app. Choose it there, and the Print Screen key and apps that ask "
-         "Windows for a snip open Phramer instead of the Snipping Tool."),
-      page.widget);
+         "Windows for a snip open Phramer instead of the Snipping Tool.");
+#endif
+    auto* detail = new QLabel(detailText, page.widget);
     detail->setObjectName(QStringLiteral("muted"));
     detail->setWordWrap(true);
     layout->addWidget(detail);

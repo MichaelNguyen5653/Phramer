@@ -3004,7 +3004,7 @@ Eventuell muss das &apos;#&apos; Zeichen als &apos;\#FFF&apos; maskiert werden</
     <message>
         <location filename="../../src/widgets/trayicon.cpp" line="143"/>
         <source>&amp;About</source>
-        <translation>&amp;Über Flameshot</translation>
+        <translation>&amp;Über Phramer</translation>
     </message>
     <message>
         <location filename="../../src/widgets/trayicon.cpp" line="150"/>
