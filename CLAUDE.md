@@ -314,6 +314,9 @@ Rules:
 - **The Store version is the CMake version plus `.0`.** The fourth field is
   reserved by the Store. Package identity strings come from Partner Center
   and must match it exactly; they live in `make-msix.ps1`.
+- **The MSIX has exactly one visible application.** Partner Center rejects
+  a hidden one (`AppListEntry="none"`) without a waiver, so the
+  `phramer-cli` alias is an extension of the main application.
 
 - **`CaptureWidget` is effectively a singleton.** `OverlayMessage` is a
   static instance parented to it, its destructor exports the capture, and

@@ -63,11 +63,13 @@ Add-AppxPackage Phramer_<ver>.0_x64_sideload.msix
 
 Each CI run makes a new throwaway certificate whose private key is deleted
 straight after signing. Run the Windows App Certification Kit against the
-unsigned package:
+sideload copy (WACK installs the package, and Windows installs only signed
+ones; the contents are identical to the unsigned package), before
+installing it by hand:
 
 ```powershell
 appcert.exe reset
-appcert.exe test -appxpackagepath Phramer_<ver>.0_x64.msix -reportoutputpath wack.xml
+appcert.exe test -appxpackagepath Phramer_<ver>.0_x64_sideload.msix -reportoutputpath wack.xml
 ```
 
 Upload the **unsigned** `Phramer_<ver>.0_x64.msix` to Partner Center, never
@@ -86,5 +88,11 @@ of Phramer that cannot work, or are not allowed, inside a package:
 | Launch at sign-in | Run key, on by default | Startup task, off until the user turns it on |
 | Tray Restart | Starts the exe by path | Activates the app by its AUMID |
 | Second launch from Start | Exits silently | Shows the running copy's launcher |
+| `phramer-cli` | Beside the exe | On every terminal's PATH through an execution alias |
+
+The package has a single application. Partner Center rejects an application
+hidden from Start (`AppListEntry="none"`) unless Microsoft grants a
+`HeadlessAppBypass` waiver, so the console alias is an extension of the main
+application rather than an application of its own.
 
 The reasons are in `docs/store/` and in `CLAUDE.md`.
