@@ -114,6 +114,29 @@ option(USE_WAYLAND_CLIPBOARD "USE KF Gui Wayland Clipboard" OFF)
 option(DISABLE_UPDATE_CHECKER "Disable check for updates" OFF)
 option(ENABLE_IMGUR "Enable Imgur Uploader" OFF)
 
+# The Microsoft Store edition, packaged as MSIX by packaging/msix. Windows
+# only. It drops the in-app updater (the Store delivers updates), every path
+# that elevates or writes HKLM, and the HKCU writes that a package's registry
+# virtualization would silently swallow. The MSI and ZIP builds leave it OFF.
+option(PHRAMER_STORE_BUILD "Build the Microsoft Store (MSIX) edition" OFF)
+
+if(PHRAMER_STORE_BUILD)
+  if(NOT WIN32)
+    message(FATAL_ERROR "PHRAMER_STORE_BUILD is Windows-only")
+  endif()
+  # A package's install folder is read-only, and portable mode keeps
+  # phramer.ini beside the exe. Refused rather than overridden, because the
+  # cache default is ON on Windows and a silent override hides the mistake.
+  if(USE_PORTABLE_CONFIG)
+    message(
+      FATAL_ERROR
+        "PHRAMER_STORE_BUILD needs -DUSE_PORTABLE_CONFIG=OFF: an MSIX "
+        "package's install folder is read-only")
+  endif()
+  set(DISABLE_UPDATE_CHECKER ON)
+  add_compile_definitions(PHRAMER_STORE_BUILD)
+endif()
+
 if(ENABLE_IMGUR)
   add_compile_definitions(ENABLE_IMGUR)
 endif()
@@ -172,7 +195,9 @@ if(WIN32 OR APPLE)
   FetchContent_Declare(
     qHotKey
     GIT_REPOSITORY https://github.com/flameshot-org/QHotkey
-    GIT_TAG master
+    # Pinned rather than master, so a release (and a Store package) can be
+    # rebuilt from its tag and get the same hotkey code
+    GIT_TAG d7063877c14d5ae2b489dc70bbe02e76a43bf38b
   )
   FetchContent_MakeAvailable(QHotKey)
 endif()
@@ -218,6 +243,13 @@ if(WIN32)
 
   if(USE_PORTABLE_CONFIG)
     set(CPACK_PACKAGE_FILE_NAME "${APP_BINARY_NAME}-${PROJECT_VERSION}-win64")
+    set(CPACK_GENERATOR ZIP)
+
+  elseif(PHRAMER_STORE_BUILD)
+    # Never an MSI: the Store binary has no updater and expects a package
+    # identity, so it ships only through packaging/msix. A ZIP of the
+    # install tree is all cpack may make of it, for inspection.
+    set(CPACK_PACKAGE_FILE_NAME "${APP_BINARY_NAME}-${PROJECT_VERSION}-win64-store")
     set(CPACK_GENERATOR ZIP)
 
   else()

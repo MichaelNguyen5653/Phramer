@@ -128,10 +128,11 @@ private:
     QList<QWidget*> m_widgets;
     TrayIcon* m_trayIcon;
 
-#if !defined(DISABLE_UPDATE_CHECKER)
     // The file behind the latest tray notification, if it had one: the
     // tray reports a click, not which message was clicked
     QString m_notificationFile;
+
+#if !defined(DISABLE_UPDATE_CHECKER)
     QString m_appLatestUrl;
     QString m_appLatestVersion;
     bool m_showManualCheckAppUpdateStatus;

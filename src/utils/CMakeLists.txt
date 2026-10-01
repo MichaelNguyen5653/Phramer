@@ -55,6 +55,10 @@ IF (WIN32)
   target_sources(
     flameshot
     PRIVATE winlnkfileparse.cpp
+            packagedstartup.h
+            packagedstartup.cpp
+            packageidentity.h
+            packageidentity.cpp
             printscreenkey.h
             printscreenkey.cpp
             screenclipprotocol.h

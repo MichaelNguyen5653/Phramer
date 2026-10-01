@@ -22,6 +22,11 @@
 #include <QProcess>
 #endif
 
+#if defined(Q_OS_WIN) && defined(PHRAMER_STORE_BUILD)
+#include "utils/packagedstartup.h"
+#include "utils/packageidentity.h"
+#endif
+
 // HELPER FUNCTIONS
 
 bool verifyLaunchFile()
@@ -32,6 +37,8 @@ bool verifyLaunchFile()
                                           QStandardPaths::LocateDirectory) +
                    "Phramer.desktop";
     bool res = QFile(path).exists();
+#elif defined(Q_OS_WIN) && defined(PHRAMER_STORE_BUILD)
+    bool res = PackagedStartup::state() == PackagedStartup::State::Enabled;
 #elif defined(Q_OS_WIN)
     QSettings bootUpSettings(
       "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
@@ -80,9 +87,10 @@ static QMap<class QString, QSharedPointer<ValueHandler>>
     OPTION("showAbortNotification"       ,Bool               ( false         )),
     OPTION("disabledTrayIcon"            ,Bool               ( false         )),
     OPTION("historyConfirmationToDelete" ,Bool               ( true          )),
-#if !defined(DISABLE_UPDATE_CHECKER)
+    // Declared even where the update checker is compiled out (the Store
+    // edition among them): a config carried over from a build that had it
+    // must not trip the unrecognized-setting error
     OPTION("checkForUpdates"             ,Bool               ( true          )),
-#endif
     OPTION("allowMultipleGuiInstances"   ,Bool               ( false         )),
     OPTION("showMagnifier"               ,Bool               ( false         )),
     OPTION("squareMagnifier"             ,Bool               ( false         )),
@@ -349,6 +357,13 @@ bool ConfigHandler::startupLaunch()
     // Reading never writes the launch entry. It used to re-sync it here,
     // which meant merely opening the settings of a second copy (a portable
     // or test build) repointed autostart at that copy.
+#if defined(Q_OS_WIN) && defined(PHRAMER_STORE_BUILD)
+    // The startup task is the truth: the user can switch it off in Task
+    // Manager without Phramer hearing of it
+    if (PackageIdentity::isPackaged()) {
+        return verifyLaunchFile();
+    }
+#endif
     return value(QStringLiteral("startupLaunch")).toBool();
 }
 
@@ -374,6 +389,10 @@ void ConfigHandler::applyDefaultStartupLaunch()
     // autostart off elsewhere is not overridden on the next start.
     // Installed builds only: a portable copy would point the Run entry at
     // wherever that copy happens to be.
+#if defined(PHRAMER_STORE_BUILD)
+    // Not in the Store edition: its startup task stays off until the user
+    // turns it on in Settings, rather than being enabled on their behalf
+#else
     const QString key = QStringLiteral("startupLaunch");
     if (m_settings.contains(key)) {
         return;
@@ -383,6 +402,7 @@ void ConfigHandler::applyDefaultStartupLaunch()
     if (start != verifyLaunchFile()) {
         writeLaunchEntry(start);
     }
+#endif
 }
 #endif
 
@@ -435,6 +455,13 @@ void ConfigHandler::writeLaunchEntry(bool start)
         }
     } else {
         file.remove();
+    }
+#elif defined(Q_OS_WIN) && defined(PHRAMER_STORE_BUILD)
+    const PackagedStartup::State state = PackagedStartup::setEnabled(start);
+    // Switched off by the user outside Phramer: only they can turn it back
+    // on, in the Settings page this opens
+    if (start && state == PackagedStartup::State::DisabledByUser) {
+        PackagedStartup::openStartupSettings();
     }
 #elif defined(Q_OS_WIN)
     QSettings bootUpSettings(
