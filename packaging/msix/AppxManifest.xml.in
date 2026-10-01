@@ -50,10 +50,14 @@
   </Capabilities>
 
   <Applications>
+    <!-- Multi-instance because of the console alias below: Windows requires
+         it of console apps. A desktop app starts a process per launch
+         anyway, and Phramer's own single-instance lock decides the rest. -->
     <Application
       Id="Phramer"
       Executable="phramer.exe"
-      EntryPoint="Windows.FullTrustApplication">
+      EntryPoint="Windows.FullTrustApplication"
+      desktop4:SupportsMultipleInstances="true">
       <uap:VisualElements
         DisplayName="Phramer"
         Description="Screenshot capture and annotation"
@@ -82,32 +86,11 @@
           </uap3:Protocol>
         </uap3:Extension>
         <!-- END screenclip -->
-        <uap5:Extension
-          Category="windows.appExecutionAlias"
-          Executable="phramer.exe"
-          EntryPoint="Windows.FullTrustApplication">
-          <uap5:AppExecutionAlias>
-            <uap5:ExecutionAlias Alias="phramer.exe" />
-          </uap5:AppExecutionAlias>
-        </uap5:Extension>
-      </Extensions>
-    </Application>
-
-    <!-- The console front end. Its own Application because a package
-         application may have only one execution alias; hidden from Start. -->
-    <Application
-      Id="PhramerCli"
-      Executable="phramer-cli.exe"
-      EntryPoint="Windows.FullTrustApplication"
-      desktop4:SupportsMultipleInstances="true">
-      <uap:VisualElements
-        DisplayName="Phramer command line"
-        Description="Phramer command line"
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png"
-        AppListEntry="none" />
-      <Extensions>
+        <!-- phramer-cli on the PATH of every terminal. The console tool
+             rides on this application rather than one of its own: the
+             Store refuses an application hidden from Start
+             (AppListEntry="none") without a waiver, and a visible second
+             tile would only open a console. -->
         <uap5:Extension
           Category="windows.appExecutionAlias"
           Executable="phramer-cli.exe"
