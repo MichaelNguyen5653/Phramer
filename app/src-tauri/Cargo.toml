@@ -36,6 +36,8 @@ regex = "1"
 
 phramer-core = { path = "../../crates/phramer-core" }
 phramer-capture = { path = "../../crates/phramer-capture" }
+# The capture overlay and the export.
+phramer-overlay = { path = "../../crates/phramer-overlay" }
 
 # Run value, single-instance lock check, tray balloons.
 [target.'cfg(windows)'.dependencies]
@@ -47,6 +49,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-# tests/smoke.rs lists processes by image path.
+# tests/smoke.rs lists processes by image path, finds the overlay's monitor
+# in physical pixels and sends the overlay keys.
 [target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Graphics_Gdi",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

@@ -20,8 +20,10 @@ impl Log for StderrLogger {
             Level::Warn => "warning",
             _ => "info",
         };
-        // Only this crate's own lines; dependencies log through `log` too
-        if record.target().starts_with(env!("CARGO_CRATE_NAME")) {
+        // Only Phramer's own lines (this crate and the overlay's timings and
+        // export results); dependencies log through `log` too
+        let target = record.target();
+        if target.starts_with(env!("CARGO_CRATE_NAME")) || target.starts_with("phramer_overlay") {
             eprintln!("phramer: {level}: {}", record.args());
         }
     }

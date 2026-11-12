@@ -1,0 +1,978 @@
+//! The overlay windows: one topmost, borderless popup per monitor, sized in
+//! physical pixels, drawn with GDI from a BGRA buffer.
+//!
+//! Presentation is `SetDIBitsToDevice` from memory the renderer writes
+//! directly: one copy into the window surface per frame, no swap chain and
+//! no extra dependency. A 4K frame is 33 MB; GDI moves that in a few
+//! milliseconds, and paints are coalesced by `WM_PAINT`, so fast pointer
+//! movement costs one render per displayed frame.
+//!
+//! Everything runs on the calling thread, which must not own other windows:
+//! [`run_overlay`] pumps that thread's messages until the state machine
+//! closes, then destroys every window before it returns, on every path
+//! (error, early return or panic) through the windows' guards.
+
+use std::cell::{Cell, RefCell};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::OnceLock;
+use std::time::Instant;
+
+use phramer_annotate::Document;
+use phramer_capture::{
+    Frame, LocalRect, LogicalPoint, Monitor, PhysicalRect, cursor_position, grab_monitor,
+    visible_windows,
+};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::DwmFlush;
+use windows_sys::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, DIB_RGB_COLORS, EndPaint, InvalidateRect,
+    PAINTSTRUCT, SetDIBitsToDevice, UpdateWindow,
+};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON, MK_SHIFT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, MAPVK_VK_TO_CHAR, MapVirtualKeyW, ReleaseCapture, SetCapture, VK_BACK, VK_CONTROL,
+    VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN,
+    VK_MENU, VK_NEXT, VK_NUMPAD0, VK_NUMPAD9, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT,
+    VK_SPACE, VK_TAB, VK_UP,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
+    GetMessageW, HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    IDC_SIZENWSE, IDC_SIZEWE, KillTimer, LoadCursorW, MSG, PostQuitMessage, RegisterClassExW,
+    SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SetCursor, SetForegroundWindow, SetTimer, ShowWindow,
+    WM_ACTIVATEAPP, WM_CLOSE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+};
+
+use super::last_error;
+use crate::error::OverlayError;
+use crate::export::CapturedImage;
+use crate::input::{Key, Modifiers, PointerButton};
+use crate::render::text::Font;
+use crate::render::{FrameView, Painter, Theme};
+use crate::state::{CursorShape, Effect, Event, Millis, Outcome, OverlayConfig, OverlayState};
+
+const CLASS_NAME: &str = "PhramerCaptureOverlay";
+const TIMER_ID: usize = 1;
+
+/// What the overlay needs to start.
+pub struct OverlaySession<'a> {
+    /// Every monitor of the desktop, as enumerated for this capture.
+    pub monitors: Vec<Monitor>,
+    /// The monitor to open on.
+    pub active: usize,
+    pub config: OverlayConfig,
+    pub theme: Theme,
+    /// TrueType or OpenType bytes for the labels and the help message.
+    pub font: &'a [u8],
+    /// List the windows for window snap (not when a region is given).
+    pub snap_windows: bool,
+    /// When the capture was asked for; the first frame is timed from here.
+    pub requested_at: Instant,
+}
+
+/// How a capture ended, with the pixels of an export.
+pub struct Finished {
+    pub outcome: Outcome,
+    /// The exported region's pixels, and where they were on the desktop.
+    pub capture: Option<(CapturedImage, PhysicalRect)>,
+}
+
+/// Grabs the active monitor, shows the overlay, runs it until it closes and
+/// returns the outcome. Blocks the calling thread for the whole capture.
+pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError> {
+    let OverlaySession {
+        monitors,
+        active,
+        config,
+        theme,
+        font,
+        snap_windows,
+        requested_at,
+    } = session;
+    let monitor = monitors
+        .get(active)
+        .cloned()
+        .ok_or(OverlayError::NoSuchMonitor(active))?;
+    // Parsed now, so a bad font fails before any window exists
+    Font::parse(font)?;
+
+    let started = Instant::now();
+    let frame = grab_monitor(&monitor)?;
+    let grabbed = started.elapsed();
+    // Listed before any window of ours exists, so they match the frame
+    let windows = if snap_windows {
+        visible_windows().unwrap_or_else(|error| {
+            log::warn!("window snap unavailable: {error}");
+            Vec::new()
+        })
+    } else {
+        Vec::new()
+    };
+
+    let listed = started.elapsed();
+    let mut state = OverlayState::new(monitors.clone(), active, windows, config)?;
+    let class = window_class()?;
+    let mut frames: Vec<Option<Frame>> = monitors.iter().map(|_| None).collect();
+    frames[active] = Some(frame);
+
+    let _shell_guard = ShellGuard;
+    let mut windows: Vec<OverlayWindow> = Vec::new();
+    let first = OverlayWindow::create(class, &monitor)?;
+    let first_hwnd = first.hwnd;
+    windows.push(first);
+    PANICKED.with(|flag| flag.set(false));
+    SHELL.with(|cell| {
+        *cell.borrow_mut() = Some(Shell::new(&monitors, font, theme, first_hwnd));
+    });
+    with_shell(|shell| {
+        shell.attach(active, first_hwnd, frames[active].take(), &theme);
+    });
+
+    // First frame: rendered before the window shows, presented by the
+    // synchronous paint that follows. It assumes the keyboard will come
+    // (no "lost focus" notice flashing up); checked once the window shows.
+    let mut effects = state.start();
+    effects.extend(state.handle(Event::Focus(true), 0));
+    if let Ok(cursor) = cursor_position()
+        && let Some(local) = monitor.rect_to_logical(PhysicalRect::new(cursor.x, cursor.y, 1, 1))
+    {
+        effects.extend(state.handle(
+            Event::PointerMove {
+                monitor: active,
+                at: LogicalPoint::new(local.x, local.y),
+                left_down: false,
+                modifiers: Modifiers::NONE,
+            },
+            0,
+        ));
+    }
+    with_shell(|shell| shell.state = Some(state));
+    run_effects(effects);
+    let painted = with_shell(|shell| shell.paint_pending(active)).unwrap_or(Ok(()));
+    painted?;
+    let rendered = started.elapsed();
+    // SAFETY: `first_hwnd` is a window this thread just created.
+    unsafe {
+        ShowWindow(first_hwnd, SW_SHOW);
+        // Takes the keyboard when Windows allows it: the daemon holds the
+        // foreground right of the hotkey press or of the forwarding CLI
+        SetForegroundWindow(first_hwnd);
+        UpdateWindow(first_hwnd);
+        DwmFlush();
+    }
+    // SAFETY: a plain query.
+    if unsafe { GetForegroundWindow() } != first_hwnd {
+        log::warn!("overlay: Windows did not give it the keyboard");
+        let effects = with_shell(|shell| shell.feed(Event::Focus(false))).unwrap_or_default();
+        run_effects(effects);
+    }
+    let shown = requested_at.elapsed();
+    let presented = started.elapsed();
+    log::info!(
+        "overlay: first frame on screen {} ms after the request ({} ms to start; grab {} ms, \
+         window list {} ms, render {} ms, show and present {} ms; {}x{})",
+        shown.as_millis(),
+        shown.saturating_sub(presented).as_millis(),
+        grabbed.as_millis(),
+        listed.saturating_sub(grabbed).as_millis(),
+        rendered.saturating_sub(listed).as_millis(),
+        presented.saturating_sub(rendered).as_millis(),
+        monitor.bounds().width,
+        monitor.bounds().height
+    );
+
+    // Snip across all monitors: the rest are grabbed after the first frame
+    // is up, so the user never waits for them, then dimmed
+    let following =
+        with_shell(|shell| shell.state.as_ref().is_some_and(OverlayState::is_following))
+            .unwrap_or(false);
+    if following {
+        for (index, other) in monitors
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != active)
+        {
+            let frame = match grab_monitor(other) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    log::warn!("cannot grab monitor {index}: {error}");
+                    continue;
+                }
+            };
+            let window = OverlayWindow::create(class, other)?;
+            let hwnd = window.hwnd;
+            windows.push(window);
+            with_shell(|shell| shell.attach(index, hwnd, Some(frame), &theme));
+            with_shell(|shell| shell.paint_pending(index)).unwrap_or(Ok(()))?;
+            // SAFETY: a window this thread just created.
+            unsafe {
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                UpdateWindow(hwnd);
+            }
+        }
+    }
+
+    pump_until_closed()?;
+
+    let shell = SHELL.with(|cell| cell.borrow_mut().take());
+    // The windows go first, whatever happens next
+    drop(windows);
+    let Some(mut shell) = shell else {
+        return Err(OverlayError::Panicked);
+    };
+    let outcome = shell.outcome.take().unwrap_or(Outcome::Cancelled);
+    let capture = match (&outcome, shell.state.as_ref()) {
+        (Outcome::Export(export), Some(state)) => {
+            let frame = shell
+                .slots
+                .get_mut(export.monitor)
+                .and_then(|slot| slot.as_mut())
+                .and_then(|slot| slot.frame.take());
+            match (frame, state.monitors().get(export.monitor)) {
+                (Some(frame), Some(monitor)) => Some((
+                    capture_region(state.document(), &frame, export.region, font)?,
+                    monitor.rect_to_physical(export.region),
+                )),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    Ok(Finished { outcome, capture })
+}
+
+/// The exported pixels: the frame's region, with any annotations drawn in.
+fn capture_region(
+    document: &Document,
+    frame: &Frame,
+    region: LocalRect,
+    font: &[u8],
+) -> Result<CapturedImage, OverlayError> {
+    let bounds = (
+        u32::try_from(region.x).unwrap_or(0),
+        u32::try_from(region.y).unwrap_or(0),
+        u32::try_from(region.width).unwrap_or(0),
+        u32::try_from(region.height).unwrap_or(0),
+    );
+    if document.objects().is_empty() {
+        return Ok(CapturedImage::crop(frame.bgra(), frame.width(), bounds));
+    }
+    let mut rgba = frame.bgra().to_vec();
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    let base = phramer_annotate::BaseImage::new(frame.width(), frame.height(), &rgba)
+        .map_err(|error| OverlayError::Encode(error.to_string()))?;
+    let mut fonts = phramer_annotate::FontLibrary::new();
+    fonts
+        .add("Inter", false, false, font.to_vec())
+        .map_err(|error| OverlayError::Font(error.to_string()))?;
+    let rendered = phramer_annotate::render(
+        document,
+        base,
+        &fonts,
+        &phramer_annotate::RenderOptions::default(),
+    )
+    .map_err(|error| OverlayError::Encode(error.to_string()))?;
+    let mut image = CapturedImage::crop(&rendered.rgba, rendered.bounds.width, {
+        let offset_x = u32::try_from(-rendered.bounds.x).unwrap_or(0);
+        let offset_y = u32::try_from(-rendered.bounds.y).unwrap_or(0);
+        (bounds.0 + offset_x, bounds.1 + offset_y, bounds.2, bounds.3)
+    });
+    for pixel in image.bgra.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    Ok(image)
+}
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
+
+/// Registers the window class once per process.
+fn window_class() -> Result<u16, OverlayError> {
+    static CLASS: OnceLock<u16> = OnceLock::new();
+    if let Some(atom) = CLASS.get() {
+        return Ok(*atom);
+    }
+    let name = wide(CLASS_NAME);
+    let class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        lpfnWndProc: Some(window_proc),
+        // SAFETY: a null name asks for this executable's own module handle.
+        hInstance: unsafe { GetModuleHandleW(std::ptr::null()) },
+        lpszClassName: name.as_ptr(),
+        ..Default::default()
+    };
+    // SAFETY: `class` is fully initialised and `name` outlives the call;
+    // the system copies the class name.
+    let atom = unsafe { RegisterClassExW(&class) };
+    if atom == 0 {
+        // Another thread may have registered it first
+        return CLASS
+            .get()
+            .copied()
+            .ok_or_else(|| last_error("RegisterClassExW"));
+    }
+    Ok(*CLASS.get_or_init(|| atom))
+}
+
+/// A window of the overlay, destroyed when dropped.
+struct OverlayWindow {
+    hwnd: HWND,
+}
+
+impl OverlayWindow {
+    /// A hidden popup exactly covering `monitor`.
+    fn create(class: u16, monitor: &Monitor) -> Result<Self, OverlayError> {
+        let bounds = monitor.bounds();
+        let title = wide("Phramer capture");
+        // SAFETY: the class atom is registered, `title` outlives the call,
+        // and every other argument is a plain value or null.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                // Topmost; a tool window stays out of the taskbar and Alt+Tab
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                class as usize as *const u16,
+                title.as_ptr(),
+                WS_POPUP,
+                bounds.x,
+                bounds.y,
+                bounds.width,
+                bounds.height,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::null(),
+            )
+        };
+        if hwnd.is_null() {
+            return Err(last_error("CreateWindowExW"));
+        }
+        Ok(Self { hwnd })
+    }
+}
+
+impl Drop for OverlayWindow {
+    fn drop(&mut self) {
+        // SAFETY: the window was created by this thread and is destroyed
+        // once, here.
+        unsafe { DestroyWindow(self.hwnd) };
+    }
+}
+
+/// One monitor's window and what it shows.
+struct Slot {
+    hwnd: HWND,
+    frame: Option<Frame>,
+    painter: Option<Painter>,
+    buffer: Vec<u8>,
+    dirty: bool,
+}
+
+/// The running overlay, reachable from the window procedure.
+struct Shell {
+    state: Option<OverlayState>,
+    slots: Vec<Option<Slot>>,
+    scales: Vec<f64>,
+    font: Vec<u8>,
+    theme: Theme,
+    timer_window: HWND,
+    epoch: Instant,
+    cursor: CursorShape,
+    outcome: Option<Outcome>,
+}
+
+thread_local! {
+    static SHELL: RefCell<Option<Shell>> = const { RefCell::new(None) };
+    static PANICKED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Clears the thread's shell however `run_overlay` ends.
+struct ShellGuard;
+
+impl Drop for ShellGuard {
+    fn drop(&mut self) {
+        SHELL.with(|cell| {
+            if let Ok(mut shell) = cell.try_borrow_mut() {
+                shell.take();
+            }
+        });
+    }
+}
+
+fn with_shell<T>(f: impl FnOnce(&mut Shell) -> T) -> Option<T> {
+    SHELL.with(|cell| {
+        let mut shell = cell.try_borrow_mut().ok()?;
+        shell.as_mut().map(f)
+    })
+}
+
+impl Shell {
+    fn new(monitors: &[Monitor], font: &[u8], theme: Theme, timer_window: HWND) -> Self {
+        Self {
+            state: None,
+            slots: monitors.iter().map(|_| None).collect(),
+            scales: monitors.iter().map(Monitor::scale).collect(),
+            font: font.to_vec(),
+            theme,
+            timer_window,
+            epoch: Instant::now(),
+            cursor: CursorShape::Cross,
+            outcome: None,
+        }
+    }
+
+    fn attach(&mut self, monitor: usize, hwnd: HWND, frame: Option<Frame>, theme: &Theme) {
+        let painter = frame
+            .as_ref()
+            .map(|frame| Painter::new(FrameView::from_frame(frame), theme));
+        let buffer = frame
+            .as_ref()
+            .map(|frame| vec![0; frame.bgra().len()])
+            .unwrap_or_default();
+        if let Some(slot) = self.slots.get_mut(monitor) {
+            *slot = Some(Slot {
+                hwnd,
+                frame,
+                painter,
+                buffer,
+                dirty: true,
+            });
+        }
+    }
+
+    fn now(&self) -> Millis {
+        Millis::try_from(self.epoch.elapsed().as_millis()).unwrap_or(Millis::MAX)
+    }
+
+    fn monitor_of(&self, hwnd: HWND) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(|slot| slot.as_ref().is_some_and(|slot| slot.hwnd == hwnd))
+    }
+
+    /// Renders a window's buffer if its picture is out of date.
+    fn paint_pending(&mut self, monitor: usize) -> Result<(), OverlayError> {
+        let Some(state) = self.state.as_ref() else {
+            return Ok(());
+        };
+        let Some(Some(slot)) = self.slots.get_mut(monitor) else {
+            return Ok(());
+        };
+        if !slot.dirty {
+            return Ok(());
+        }
+        let (Some(frame), Some(painter)) = (slot.frame.as_ref(), slot.painter.as_ref()) else {
+            return Ok(());
+        };
+        let mut font = Font::parse(&self.font)?;
+        painter.paint(
+            state,
+            monitor,
+            FrameView::from_frame(frame),
+            &self.theme,
+            &mut font,
+            &mut slot.buffer,
+        )?;
+        slot.dirty = false;
+        Ok(())
+    }
+
+    /// Feeds an event in and turns the effects into window work, which runs
+    /// after the shell is released (it can send messages back here).
+    fn feed(&mut self, event: Event) -> Vec<Effect> {
+        let now = self.now();
+        match self.state.as_mut() {
+            Some(state) => state.handle(event, now),
+            None => Vec::new(),
+        }
+    }
+}
+
+/// Window work an effect needs, done outside the shell's borrow.
+enum Work {
+    Invalidate(HWND),
+    Cursor(CursorShape),
+    Hide(HWND),
+    Timer(HWND, u32),
+}
+
+/// Applies effects: bookkeeping inside the shell, window calls after.
+fn run_effects(effects: Vec<Effect>) {
+    if effects.is_empty() {
+        return;
+    }
+    let work = with_shell(|shell| {
+        let mut work = Vec::new();
+        for effect in effects {
+            match effect {
+                Effect::Redraw { monitor } => {
+                    if let Some(Some(slot)) = shell.slots.get_mut(monitor) {
+                        slot.dirty = true;
+                        work.push(Work::Invalidate(slot.hwnd));
+                    }
+                }
+                Effect::SetCursor(shape) => {
+                    shell.cursor = shape;
+                    work.push(Work::Cursor(shape));
+                }
+                // Every monitor already has its window while following
+                Effect::SwitchMonitor { .. } => {}
+                Effect::ReleaseMonitors => {
+                    let active = shell.state.as_ref().map(OverlayState::active_monitor);
+                    for (index, slot) in shell.slots.iter().enumerate() {
+                        if let Some(slot) = slot
+                            && Some(index) != active
+                        {
+                            work.push(Work::Hide(slot.hwnd));
+                        }
+                    }
+                }
+                Effect::WakeAt(at) => {
+                    let delay = at.saturating_sub(shell.now());
+                    let delay = u32::try_from(delay).unwrap_or(u32::MAX).max(1);
+                    work.push(Work::Timer(shell.timer_window, delay));
+                }
+                Effect::Close(outcome) => shell.outcome = Some(outcome),
+            }
+        }
+        work
+    })
+    .unwrap_or_default();
+    for item in work {
+        // SAFETY: every handle is a window of this thread that is still
+        // alive (windows are destroyed only after the loop ends); the calls
+        // take plain values.
+        unsafe {
+            match item {
+                Work::Invalidate(hwnd) => {
+                    InvalidateRect(hwnd, std::ptr::null(), 0);
+                }
+                Work::Cursor(shape) => {
+                    SetCursor(load_cursor(shape));
+                }
+                Work::Hide(hwnd) => {
+                    ShowWindow(hwnd, SW_HIDE);
+                }
+                Work::Timer(hwnd, delay) => {
+                    SetTimer(hwnd, TIMER_ID, delay, None);
+                }
+            }
+        }
+    }
+}
+
+fn load_cursor(shape: CursorShape) -> windows_sys::Win32::UI::WindowsAndMessaging::HCURSOR {
+    let id = match shape {
+        CursorShape::Cross => IDC_CROSS,
+        CursorShape::Arrow => IDC_ARROW,
+        CursorShape::ResizeNwSe => IDC_SIZENWSE,
+        CursorShape::ResizeNeSw => IDC_SIZENESW,
+        CursorShape::ResizeHorizontal => IDC_SIZEWE,
+        CursorShape::ResizeVertical => IDC_SIZENS,
+        CursorShape::Grabbing => IDC_SIZEALL,
+    };
+    // SAFETY: a system cursor id with a null module is the documented way
+    // to load a shared system cursor.
+    unsafe { LoadCursorW(std::ptr::null_mut(), id) }
+}
+
+/// Pumps this thread's messages until the overlay closes or a handler
+/// panics.
+fn pump_until_closed() -> Result<(), OverlayError> {
+    loop {
+        if PANICKED.with(Cell::get) {
+            return Err(OverlayError::Panicked);
+        }
+        if with_shell(|shell| shell.outcome.is_some()).unwrap_or(true) {
+            return Ok(());
+        }
+        let mut message = MSG::default();
+        // SAFETY: `message` is a valid out-parameter; a null window reads
+        // every message of this thread.
+        let got = unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) };
+        if got == 0 {
+            return Ok(());
+        }
+        if got == -1 {
+            return Err(last_error("GetMessageW"));
+        }
+        // SAFETY: `message` was filled in by GetMessageW.
+        unsafe { DispatchMessageW(&message) };
+    }
+}
+
+unsafe extern "system" fn window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let handled = catch_unwind(AssertUnwindSafe(|| {
+        handle_message(hwnd, message, wparam, lparam)
+    }));
+    match handled {
+        Ok(Some(result)) => result,
+        // SAFETY: the arguments are exactly those this procedure received.
+        Ok(None) => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+        Err(_) => {
+            // Ends the loop; `run_overlay` then destroys every window
+            PANICKED.with(|flag| flag.set(true));
+            // SAFETY: posts WM_QUIT to this thread's own queue.
+            unsafe { PostQuitMessage(1) };
+            0
+        }
+    }
+}
+
+/// `Some(result)` for a message the overlay handled.
+fn handle_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    match message {
+        WM_PAINT => {
+            paint(hwnd);
+            Some(0)
+        }
+        // The whole client area is painted from the buffer
+        WM_ERASEBKGND => Some(1),
+        WM_SETCURSOR if (lparam & 0xffff) as u32 == HTCLIENT => {
+            let shape = with_shell(|shell| shell.cursor)?;
+            // SAFETY: sets a shared system cursor.
+            unsafe { SetCursor(load_cursor(shape)) };
+            Some(1)
+        }
+        WM_MOUSEMOVE => {
+            let monitor = with_shell(|shell| shell.monitor_of(hwnd))??;
+            pointer(monitor, lparam, |at| Event::PointerMove {
+                monitor,
+                at,
+                left_down: wparam & MK_LBUTTON as usize != 0,
+                modifiers: pointer_modifiers(wparam),
+            });
+            Some(0)
+        }
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
+            let monitor = with_shell(|shell| shell.monitor_of(hwnd))??;
+            // SAFETY: captures the pointer for a window of this thread.
+            unsafe { SetCapture(hwnd) };
+            pointer(monitor, lparam, |at| Event::PointerDown {
+                monitor,
+                at,
+                button: button_of(message),
+                modifiers: pointer_modifiers(wparam),
+            });
+            Some(0)
+        }
+        WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP => {
+            let monitor = with_shell(|shell| shell.monitor_of(hwnd))??;
+            // SAFETY: releases this thread's pointer capture.
+            unsafe { ReleaseCapture() };
+            pointer(monitor, lparam, |at| Event::PointerUp {
+                monitor,
+                at,
+                button: button_of(message),
+                modifiers: pointer_modifiers(wparam),
+            });
+            Some(0)
+        }
+        WM_KEYDOWN | WM_SYSKEYDOWN => {
+            let key = key_of(wparam, lparam)?;
+            let effects = with_shell(|shell| {
+                shell.feed(Event::Key {
+                    key,
+                    modifiers: keyboard_modifiers(),
+                })
+            })?;
+            run_effects(effects);
+            // System keys go on to the default handling, so Alt+F4 becomes
+            // WM_CLOSE (a cancel, below)
+            (message == WM_KEYDOWN).then_some(0)
+        }
+        // Alt+F4 and the like: a cancel, never a destroyed window
+        WM_CLOSE => {
+            let effects = with_shell(|shell| {
+                shell.feed(Event::Key {
+                    key: Key::Escape,
+                    modifiers: Modifiers::NONE,
+                })
+            })?;
+            run_effects(effects);
+            Some(0)
+        }
+        WM_ACTIVATEAPP => {
+            let effects = with_shell(|shell| shell.feed(Event::Focus(wparam != 0)))?;
+            run_effects(effects);
+            Some(0)
+        }
+        WM_TIMER if wparam == TIMER_ID => {
+            // SAFETY: stops this window's own one-shot timer.
+            unsafe { KillTimer(hwnd, TIMER_ID) };
+            let effects = with_shell(|shell| shell.feed(Event::Tick))?;
+            run_effects(effects);
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
+/// Client coordinates (physical) to the monitor's logical ones, then the
+/// event.
+fn pointer(monitor: usize, lparam: LPARAM, event: impl FnOnce(LogicalPoint) -> Event) {
+    let x = f64::from((lparam & 0xffff) as u16 as i16);
+    let y = f64::from(((lparam >> 16) & 0xffff) as u16 as i16);
+    let effects = with_shell(|shell| {
+        let scale = shell.scales.get(monitor).copied().unwrap_or(1.0);
+        let at = LogicalPoint::new((x / scale).round() as i32, (y / scale).round() as i32);
+        shell.feed(event(at))
+    })
+    .unwrap_or_default();
+    run_effects(effects);
+}
+
+fn button_of(message: u32) -> PointerButton {
+    match message {
+        WM_RBUTTONDOWN | WM_RBUTTONUP => PointerButton::Right,
+        WM_MBUTTONDOWN | WM_MBUTTONUP => PointerButton::Middle,
+        _ => PointerButton::Left,
+    }
+}
+
+fn key_down(key: u16) -> bool {
+    // SAFETY: reads this thread's keyboard state for one virtual key.
+    unsafe { GetKeyState(i32::from(key)) < 0 }
+}
+
+fn keyboard_modifiers() -> Modifiers {
+    Modifiers {
+        ctrl: key_down(VK_CONTROL),
+        shift: key_down(VK_SHIFT),
+        alt: key_down(VK_MENU),
+        meta: key_down(VK_LWIN) || key_down(VK_RWIN),
+    }
+}
+
+fn pointer_modifiers(wparam: WPARAM) -> Modifiers {
+    Modifiers {
+        ctrl: wparam & MK_CONTROL as usize != 0,
+        shift: wparam & MK_SHIFT as usize != 0,
+        ..keyboard_modifiers()
+    }
+}
+
+/// A virtual key as a [`Key`]; `None` for modifier keys and keys the
+/// overlay has no use for.
+fn key_of(wparam: WPARAM, lparam: LPARAM) -> Option<Key> {
+    let vk = u16::try_from(wparam).ok()?;
+    // Bit 24: an extended key, which for Return means the keypad's Enter
+    let extended = (lparam >> 24) & 1 == 1;
+    Some(match vk {
+        VK_ESCAPE => Key::Escape,
+        VK_RETURN if extended => Key::Enter,
+        VK_RETURN => Key::Return,
+        VK_BACK => Key::Backspace,
+        VK_DELETE => Key::Delete,
+        VK_INSERT => Key::Insert,
+        VK_TAB => Key::Tab,
+        VK_SPACE => Key::Space,
+        VK_LEFT => Key::Left,
+        VK_RIGHT => Key::Right,
+        VK_UP => Key::Up,
+        VK_DOWN => Key::Down,
+        VK_HOME => Key::Home,
+        VK_END => Key::End,
+        VK_PRIOR => Key::PageUp,
+        VK_NEXT => Key::PageDown,
+        f if (VK_F1..=VK_F24).contains(&f) => Key::Function(u8::try_from(f - VK_F1 + 1).ok()?),
+        n if (VK_NUMPAD0..=VK_NUMPAD9).contains(&n) => {
+            Key::Char(char::from(b'0' + u8::try_from(n - VK_NUMPAD0).ok()?))
+        }
+        letter @ 0x41..=0x5a => {
+            Key::Char(char::from(u8::try_from(letter).ok()?).to_ascii_lowercase())
+        }
+        digit @ 0x30..=0x39 => Key::Char(char::from(u8::try_from(digit).ok()?)),
+        other => {
+            // Punctuation: the character the layout puts on the key
+            // SAFETY: a pure lookup in the active keyboard layout.
+            let mapped = unsafe { MapVirtualKeyW(u32::from(other), MAPVK_VK_TO_CHAR) } & 0x7fff;
+            let c = char::from_u32(mapped).filter(|c| !c.is_control())?;
+            Key::Char(c.to_lowercase().next().unwrap_or(c))
+        }
+    })
+}
+
+fn paint(hwnd: HWND) {
+    let mut paint = PAINTSTRUCT::default();
+    // SAFETY: `hwnd` is a window of this thread receiving WM_PAINT;
+    // `paint` is a valid out-parameter, ended below.
+    let dc = unsafe { BeginPaint(hwnd, &mut paint) };
+    let drawn = with_shell(|shell| {
+        let monitor = shell.monitor_of(hwnd)?;
+        if let Err(error) = shell.paint_pending(monitor) {
+            log::error!("overlay paint failed: {error}");
+        }
+        let slot = shell.slots.get(monitor)?.as_ref()?;
+        let frame = slot.frame.as_ref()?;
+        let (width, height) = (frame.width(), frame.height());
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: i32::try_from(width).ok()?,
+                // Negative: rows top-down, as the buffer holds them
+                biHeight: -i32::try_from(height).ok()?,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // SAFETY: `dc` is the paint DC; `buffer` holds `width * height`
+        // 32-bit pixels described by `info`, and both outlive the call.
+        unsafe {
+            SetDIBitsToDevice(
+                dc,
+                0,
+                0,
+                width,
+                height,
+                0,
+                0,
+                0,
+                height,
+                slot.buffer.as_ptr().cast(),
+                &info,
+                DIB_RGB_COLORS,
+            );
+        }
+        Some(())
+    });
+    if drawn.is_none() {
+        log::debug!("overlay paint skipped");
+    }
+    // SAFETY: pairs the BeginPaint above.
+    unsafe { EndPaint(hwnd, &paint) };
+}
+
+#[cfg(test)]
+mod tests {
+    use phramer_capture::{MonitorId, PhysicalRect};
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject,
+    };
+
+    use super::*;
+
+    /// What one interactive redraw costs at 4K: the render, then the copy
+    /// GDI makes of the buffer (into a 4K DIB section standing in for the
+    /// window's surface).
+    #[test]
+    #[ignore = "timing; run with --release"]
+    fn render_and_present_a_4k_frame() {
+        let (width, height) = (3840u32, 2160u32);
+        let monitor = Monitor::new(
+            MonitorId::new("4k"),
+            PhysicalRect::new(0, 0, width as i32, height as i32),
+            144,
+            true,
+        );
+        let mut state =
+            OverlayState::new(vec![monitor], 0, Vec::new(), OverlayConfig::default()).unwrap();
+        state.handle(Event::Focus(true), 0);
+        for (event, x, y) in [("down", 300, 200), ("drag", 900, 700), ("drag", 1500, 1000)] {
+            let at = LogicalPoint::new(x, y);
+            let event = if event == "down" {
+                Event::PointerDown {
+                    monitor: 0,
+                    at,
+                    button: PointerButton::Left,
+                    modifiers: Modifiers::NONE,
+                }
+            } else {
+                Event::PointerMove {
+                    monitor: 0,
+                    at,
+                    left_down: true,
+                    modifiers: Modifiers::NONE,
+                }
+            };
+            state.handle(event, 0);
+        }
+        let frame: Vec<u8> = (0..width * height)
+            .flat_map(|i| [(i % 251) as u8, (i % 241) as u8, (i % 239) as u8, 255])
+            .collect();
+        let view = FrameView::new(width, height, &frame).unwrap();
+        let theme = Theme::default();
+        let started = Instant::now();
+        let painter = Painter::new(view, &theme);
+        let dimmed = started.elapsed();
+        let mut font = Font::parse(crate::BUNDLED_FONT).unwrap();
+        let mut buffer = vec![0u8; frame.len()];
+        const ROUNDS: u32 = 10;
+        let started = Instant::now();
+        for _ in 0..ROUNDS {
+            painter
+                .paint(&state, 0, view, &theme, &mut font, &mut buffer)
+                .unwrap();
+        }
+        let render = started.elapsed() / ROUNDS;
+
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width as i32,
+                biHeight: -(height as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // SAFETY: a memory DC with a 4K DIB section selected into it, all
+        // released below; the buffer matches `info`.
+        let present = unsafe {
+            let dc = CreateCompatibleDC(std::ptr::null_mut());
+            let mut bits = std::ptr::null_mut();
+            let bitmap = CreateDIBSection(
+                dc,
+                &info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                std::ptr::null_mut(),
+                0,
+            );
+            let previous = SelectObject(dc, bitmap);
+            let started = Instant::now();
+            for _ in 0..ROUNDS {
+                SetDIBitsToDevice(
+                    dc,
+                    0,
+                    0,
+                    width,
+                    height,
+                    0,
+                    0,
+                    0,
+                    height,
+                    buffer.as_ptr().cast(),
+                    &info,
+                    DIB_RGB_COLORS,
+                );
+            }
+            let present = started.elapsed() / ROUNDS;
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            present
+        };
+        println!(
+            "4K: dim once {} ms; per redraw: render {:.1} ms, SetDIBitsToDevice {:.1} ms",
+            dimmed.as_millis(),
+            render.as_secs_f64() * 1000.0,
+            present.as_secs_f64() * 1000.0
+        );
+    }
+}

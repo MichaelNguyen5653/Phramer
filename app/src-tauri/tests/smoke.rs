@@ -1,5 +1,6 @@
-//! Live smoke test of the daemon shell. Ignored by default: it starts real
-//! processes, shows a tray icon and reads the real settings file.
+//! Live smoke tests of the daemon shell and the capture overlay. Ignored by
+//! default: they start real processes, show a tray icon and the overlay, and
+//! read the real settings file. They take turns (one daemon at a time).
 //!
 //! ```text
 //! cargo test -p phramer --test smoke -- --ignored --nocapture
@@ -16,6 +17,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
@@ -32,13 +34,30 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, SYNCHRONIZATION_SYNCHRONIZE,
     WaitForSingleObject,
 };
+use windows_sys::Win32::Foundation::POINT;
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
+};
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows_sys::Win32::UI::Shell::{NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ENDSESSION_CLOSEAPP, EnumWindows, GWL_EXSTYLE, GetClassNameW, GetWindowLongW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_ENDSESSION, WS_EX_TOOLWINDOW,
+    ENDSESSION_CLOSEAPP, EnumWindows, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetSystemMetrics,
+    GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, WM_ENDSESSION, WM_KEYDOWN, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST,
 };
 
 const LOCK: &str = "app.phramer.desktop-sim";
+/// The overlay's window class (`phramer-overlay`).
+const OVERLAY_CLASS: &str = "PhramerCaptureOverlay";
+/// Command to first frame, as the daemon measures and logs it.
+const FIRST_FRAME_BUDGET_MS: u128 = 100;
+
+/// One live daemon at a time: the tests share the single-instance lock.
+static LIVE: Mutex<()> = Mutex::new(());
 const RUN_KEY: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
 const APP_PATHS_KEY: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\phramer.exe";
 
@@ -120,6 +139,7 @@ struct Window {
     class: String,
     visible: bool,
     tool_window: bool,
+    topmost: bool,
     rect: (i32, i32, i32, i32),
 }
 
@@ -166,6 +186,7 @@ fn windows_of(pid: u32) -> Vec<Window> {
                 class: String::from_utf16_lossy(&class[..length.max(0) as usize]),
                 visible,
                 tool_window: ex_style as u32 & WS_EX_TOOLWINDOW != 0,
+                topmost: ex_style as u32 & WS_EX_TOPMOST != 0,
                 rect: (rect.left, rect.top, rect.right, rect.bottom),
             })
         })
@@ -366,8 +387,89 @@ fn check_daemon(exe: &Path, pid: u32) -> Window {
         class: tray.class.clone(),
         visible: tray.visible,
         tool_window: tray.tool_window,
+        topmost: tray.topmost,
         rect: tray.rect,
     }
+}
+
+/// The daemon's overlay windows that are showing.
+fn overlays(pid: u32) -> Vec<Window> {
+    windows_of(pid)
+        .into_iter()
+        .filter(|window| window.class == OVERLAY_CLASS && window.visible)
+        .collect()
+}
+
+/// Waits for an overlay covering `monitor` exactly; returns it and how long
+/// it took.
+fn wait_for_overlay(
+    pid: u32,
+    monitor: (i32, i32, i32, i32),
+    timeout: Duration,
+) -> Option<(Window, Duration)> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Some(window) = overlays(pid).into_iter().find(|window| window.rect == monitor) {
+            return Some((window, start.elapsed()));
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    None
+}
+
+/// Sends Esc to an overlay and waits for every overlay window to go.
+fn close_overlay(pid: u32, overlay: &Window) {
+    // SAFETY: posting a message to a window handle; a stale one just fails.
+    let posted =
+        unsafe { PostMessageW(overlay.hwnd as HWND, WM_KEYDOWN, usize::from(VK_ESCAPE), 0) };
+    assert_ne!(posted, 0, "Esc could not be posted");
+    assert!(
+        wait_until(Duration::from_secs(5), || windows_of(pid)
+            .iter()
+            .all(|window| window.class != OVERLAY_CLASS)),
+        "an overlay window was left behind: {:?}",
+        windows_of(pid)
+    );
+}
+
+/// Makes this test process see physical pixels, as the daemon does.
+fn per_monitor_dpi_aware() {
+    // SAFETY: a constant context; failing only means it was already set.
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+}
+
+/// The monitor under the cursor, physical (left, top, right, bottom).
+fn monitor_under_cursor() -> (i32, i32, i32, i32) {
+    let mut cursor = POINT::default();
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: valid out-parameters; the monitor handle comes from the system.
+    unsafe {
+        GetCursorPos(&mut cursor);
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+        GetMonitorInfoW(monitor, &mut info);
+    }
+    let rect = info.rcMonitor;
+    (rect.left, rect.top, rect.right, rect.bottom)
+}
+
+/// The first-frame time the daemon logged last, in milliseconds.
+fn logged_first_frame(log: &str) -> Option<u128> {
+    log.lines()
+        .rev()
+        .filter_map(|line| line.split("first frame on screen ").nth(1))
+        .find_map(|rest| rest.split(' ').next()?.parse().ok())
+}
+
+/// Width and height from a PNG's IHDR.
+fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.get(..8)? != b"\x89PNG\r\n\x1a\n" || bytes.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let field = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+    Some((field(16)?, field(20)?))
 }
 
 fn stop(pid: u32, tray: &Window) {
@@ -412,6 +514,8 @@ fn wait_cli(mut child: Child) -> u32 {
 #[test]
 #[ignore = "live: starts the daemon, shows a tray icon"]
 fn daemon_tray_forwarding_and_spawn() {
+    let _live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    per_monitor_dpi_aware();
     let exe = exe();
     println!("binary: {}", exe.display());
     assert!(
@@ -464,13 +568,11 @@ fn daemon_tray_forwarding_and_spawn() {
     wait_cli(cli);
     assert!(image_path(cli_pid).is_none(), "the CLI process is still there");
     assert_eq!(processes_of(&exe), [daemon_pid], "only the daemon remains");
-    assert!(
-        wait_until(Duration::from_secs(5), || {
-            fs::read_to_string(&log_path)
-                .is_ok_and(|text| text.contains("capture overlay: not implemented yet"))
-        }),
-        "the daemon did not receive the forwarded gui command"
-    );
+    // It opens the overlay; Esc closes it
+    let (overlay, _) =
+        wait_for_overlay(daemon_pid, monitor_under_cursor(), Duration::from_secs(10))
+            .expect("the daemon did not open the overlay for the forwarded gui command");
+    close_overlay(daemon_pid, &overlay);
 
     // 3. A clean stop
     stop(daemon_pid, &tray);
@@ -506,6 +608,11 @@ fn daemon_tray_forwarding_and_spawn() {
             .any(|w| w.class == "tray_icon_app")),
         "the spawned daemon has no tray icon"
     );
+    // It opened the overlay for the command it was started for
+    let (overlay, _) =
+        wait_for_overlay(spawned_pid, monitor_under_cursor(), Duration::from_secs(10))
+            .expect("the spawned daemon did not open the overlay");
+    close_overlay(spawned_pid, &overlay);
     std::thread::sleep(Duration::from_secs(2));
     let tray = check_daemon(&exe, spawned_pid);
     stop(spawned_pid, &tray);
@@ -515,5 +622,158 @@ fn daemon_tray_forwarding_and_spawn() {
         "the settings file or startup registry entries changed"
     );
     println!("settings file and startup registry entries unchanged");
+    let _ = fs::remove_file(&log_path);
+}
+
+#[test]
+#[ignore = "live: starts the daemon, shows the capture overlay"]
+fn overlay_opens_closes_and_full_capture_saves() {
+    let _live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    per_monitor_dpi_aware();
+    let exe = exe();
+    println!("binary: {}", exe.display());
+    assert!(
+        processes_of(&exe).is_empty(),
+        "{} is already running",
+        exe.display()
+    );
+    assert!(!lock_exists(), "another Phramer 16 daemon holds the lock");
+    let mut cleanup = Cleanup {
+        exe: exe.clone(),
+        pids: Vec::new(),
+        before: user_state(),
+    };
+    let save_dir =
+        std::env::temp_dir().join(format!("phramer-overlay-smoke-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&save_dir);
+    fs::create_dir_all(&save_dir).expect("save folder");
+
+    // 1. The daemon
+    let log_path =
+        std::env::temp_dir().join(format!("phramer-overlay-smoke-{}.log", std::process::id()));
+    let log = fs::File::create(&log_path).expect("log file");
+    let daemon = Command::new(&exe)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log)
+        .spawn()
+        .expect("start the daemon");
+    let daemon_pid = daemon.id();
+    cleanup.pids.push(daemon_pid);
+    println!("daemon pid {daemon_pid}, log {}", log_path.display());
+    assert!(
+        wait_until(Duration::from_secs(20), || {
+            lock_exists()
+                && windows_of(daemon_pid)
+                    .iter()
+                    .any(|w| w.class == "tray_icon_app")
+        }),
+        "the daemon did not come up"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    let tray = check_daemon(&exe, daemon_pid);
+
+    // 2. `phramer gui`: a topmost overlay over the monitor under the cursor
+    let target = monitor_under_cursor();
+    println!("target monitor {target:?}");
+    let cli = Command::new(&exe)
+        .arg("gui")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the CLI");
+    cleanup.pids.push(cli.id());
+    let (overlay, waited) = wait_for_overlay(daemon_pid, target, Duration::from_secs(10))
+        .expect("no overlay covering the target monitor");
+    println!(
+        "overlay {:#x} at {:?} seen {} ms after starting the CLI (topmost {}, tool window {})",
+        overlay.hwnd,
+        overlay.rect,
+        waited.as_millis(),
+        overlay.topmost,
+        overlay.tool_window
+    );
+    wait_cli(cli);
+    assert!(overlay.topmost, "the overlay is not topmost");
+    assert!(
+        overlay.tool_window,
+        "the overlay would show in the taskbar and Alt+Tab"
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), || fs::read_to_string(&log_path)
+            .is_ok_and(|text| logged_first_frame(&text).is_some())),
+        "the daemon logged no first-frame time"
+    );
+    let first_frame = logged_first_frame(&fs::read_to_string(&log_path).unwrap_or_default())
+        .expect("first-frame time");
+    println!("daemon: first frame {first_frame} ms after the command");
+    assert!(
+        first_frame < FIRST_FRAME_BUDGET_MS,
+        "first frame took {first_frame} ms (budget {FIRST_FRAME_BUDGET_MS} ms)"
+    );
+
+    // 3. Esc closes every overlay window and exports nothing
+    close_overlay(daemon_pid, &overlay);
+    assert!(
+        wait_until(Duration::from_secs(5), || fs::read_to_string(&log_path)
+            .is_ok_and(|text| text.contains("capture cancelled"))),
+        "the overlay did not report a cancel"
+    );
+    let text = fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(!text.contains("Capture saved"), "Esc exported something");
+    assert_eq!(fs::read_dir(&save_dir).map(Iterator::count).unwrap_or(0), 0);
+    println!("Esc: overlay closed, nothing exported");
+
+    // 4. `phramer full -p <folder>`: one PNG the size of the virtual desktop
+    let cli = Command::new(&exe)
+        .args(["full", "-p"])
+        .arg(&save_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the CLI");
+    cleanup.pids.push(cli.id());
+    wait_cli(cli);
+    assert!(
+        wait_until(Duration::from_secs(20), || fs::read_to_string(&log_path)
+            .is_ok_and(|text| text.contains("Capture saved as"))),
+        "the full capture was not saved"
+    );
+    let saved: Vec<PathBuf> = fs::read_dir(&save_dir)
+        .expect("save folder")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    let bytes = fs::read(&saved[0]).expect("saved file");
+    // SAFETY: plain metric queries.
+    let desktop = unsafe {
+        (
+            GetSystemMetrics(SM_CXVIRTUALSCREEN) as u32,
+            GetSystemMetrics(SM_CYVIRTUALSCREEN) as u32,
+        )
+    };
+    let size = png_size(&bytes);
+    println!(
+        "saved {} ({} bytes), {size:?}; virtual desktop {desktop:?}",
+        saved[0].display(),
+        bytes.len()
+    );
+    assert_eq!(size, Some(desktop));
+
+    // 5. A clean stop
+    stop(daemon_pid, &tray);
+    drop(daemon);
+    println!(
+        "--- daemon log ---\n{}",
+        fs::read_to_string(&log_path).unwrap_or_default()
+    );
+    assert!(
+        user_state() == cleanup.before,
+        "the settings file or startup registry entries changed"
+    );
+    println!("settings file and startup registry entries unchanged");
+    let _ = fs::remove_dir_all(&save_dir);
     let _ = fs::remove_file(&log_path);
 }

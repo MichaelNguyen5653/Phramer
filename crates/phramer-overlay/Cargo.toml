@@ -1,0 +1,42 @@
+[package]
+name = "phramer-overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = "2"
+log = "0.4"
+phramer-core = { path = "../phramer-core" }
+phramer-capture = { path = "../phramer-capture" }
+# The document the selection is annotated in (tools come later).
+phramer-annotate = { path = "../phramer-annotate" }
+# Same features as phramer-annotate: a different set would be unified into
+# its build and change the pixels it promises to keep identical.
+tiny-skia = { version = "0.12", default-features = false, features = ["no-std-float"] }
+# Glyph outlines of the bundled Inter Variable; `variable-fonts` selects the
+# weight. Leaves fonts without variations exactly as before.
+ttf-parser = { version = "0.25", default-features = false, features = ["no-std-float", "variable-fonts"] }
+# Export encoders: PNG (the default format and the clipboard's PNG format)
+# and JPEG (`jpg` saves and `useJpgForClipboard`).
+png = "0.18"
+jpeg-encoder = "0.7"
+
+# The overlay windows, the clipboard and Show in Folder.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }

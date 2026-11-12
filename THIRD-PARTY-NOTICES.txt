@@ -80,3 +80,13 @@ Microsoft Visual C++ runtime
 ----------------------------
 Copyright (C) Microsoft Corporation. Redistributed under the Visual Studio
 redistributable license terms.
+
+
+Inter
+-----
+Inter Variable 4.1, the capture overlay's interface font, bundled as
+crates/phramer-overlay/assets/InterVariable.ttf.
+Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter).
+Licensed under the SIL Open Font License, Version 1.1; the full licence is in
+crates/phramer-overlay/assets/Inter-LICENSE.txt and at
+https://openfontlicense.org.

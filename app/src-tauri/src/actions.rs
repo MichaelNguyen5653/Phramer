@@ -7,6 +7,7 @@ use std::process::Command;
 
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::capture::{self, OverlayPlan, Placement};
 use crate::cli::{FullRequest, GuiRequest, ScreenRequest};
 use crate::daemon::DaemonState;
 use crate::{notify, settings};
@@ -17,19 +18,42 @@ fn not_implemented(feature: &str, detail: &dyn std::fmt::Debug) {
 
 /// `Flameshot::gui` / `requestCapture` in graphical mode: the capture
 /// overlay.
-pub(crate) fn capture_gui<R: Runtime>(_app: &AppHandle<R>, request: GuiRequest) {
-    not_implemented("capture overlay", &request);
+pub(crate) fn capture_gui<R: Runtime>(app: &AppHandle<R>, request: GuiRequest) {
+    capture::overlay(
+        app,
+        OverlayPlan {
+            delay_ms: request.delay_ms,
+            placement: request.monitor.map_or(Placement::Settings, Placement::Monitor),
+            initial_selection: request.initial_selection,
+            tasks: request.tasks,
+        },
+    );
 }
 
 /// `Flameshot::screen`: one monitor without the overlay, or the overlay
 /// limited to it with `--edit`.
-pub(crate) fn capture_screen<R: Runtime>(_app: &AppHandle<R>, request: ScreenRequest) {
-    not_implemented("screen capture", &request);
+pub(crate) fn capture_screen<R: Runtime>(app: &AppHandle<R>, request: ScreenRequest) {
+    if request.edit {
+        let initial_selection = request
+            .region
+            .map_or(crate::cli::InitialSelection::None, crate::cli::InitialSelection::Region);
+        capture::overlay(
+            app,
+            OverlayPlan {
+                delay_ms: request.delay_ms,
+                placement: request.monitor.map_or(Placement::UnderCursor, Placement::Monitor),
+                initial_selection,
+                tasks: request.tasks,
+            },
+        );
+    } else {
+        capture::screen(app, request.delay_ms, request.monitor, request.region, request.tasks);
+    }
 }
 
 /// `Flameshot::full`: every monitor.
-pub(crate) fn capture_full<R: Runtime>(_app: &AppHandle<R>, request: FullRequest) {
-    not_implemented("full capture", &request);
+pub(crate) fn capture_full<R: Runtime>(app: &AppHandle<R>, request: FullRequest) {
+    capture::full(app, request.delay_ms, request.tasks);
 }
 
 /// `Flameshot::launcher`.
@@ -67,15 +91,19 @@ pub(crate) fn show_about<R: Runtime>(_app: &AppHandle<R>) {
     not_implemented("about window", &());
 }
 
-/// The last file saved this session; kept in memory only, by design. Set by
-/// the export, which is not built yet.
+/// The last file saved this session; kept in memory only, by design.
 pub(crate) fn last_capture() -> Option<PathBuf> {
-    None
+    capture::last_saved()
 }
 
 /// `FileHandoff::showInFolder(lastSaved())`.
 pub(crate) fn show_last_capture_in_folder<R: Runtime>(_app: &AppHandle<R>) {
-    not_implemented("show last capture in folder", &last_capture());
+    let Some(path) = last_capture() else {
+        return;
+    };
+    if let Err(error) = phramer_overlay::show_in_folder(&path) {
+        log::error!("cannot show {}: {error}", path.display());
+    }
 }
 
 /// `Flameshot::recordVideo`: only once the user opted in to video.

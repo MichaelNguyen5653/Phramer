@@ -3,6 +3,7 @@
 //! daemon and exits, as 15.0.0's `main.cpp` decided by argument count.
 
 mod actions;
+mod capture;
 mod cli;
 mod daemon;
 mod hotkeys;
