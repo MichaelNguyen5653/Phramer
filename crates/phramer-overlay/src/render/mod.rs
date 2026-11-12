@@ -1,6 +1,7 @@
-//! Draws one monitor's overlay: the frozen screenshot, dimmed outside the
-//! selection, with the selection frame, the highlighted window, the size
-//! label and the help message on top.
+//! Draws one monitor's overlay: the frozen screenshot with the annotations
+//! in, dimmed outside the selection, with the selection frame, the
+//! highlighted window, the toolbar, the colour wheel, the size label and the
+//! help message on top.
 //!
 //! The look follows `docs/design/raycast-notes.md` and `app/src/tokens.css`:
 //! sizes from the same scales (4/6/8/12/16 spacing, 4/6/12 radii, 13 px
@@ -9,25 +10,34 @@
 //! in logical pixels and scaled to the monitor, so the overlay looks the same
 //! at every DPI.
 
+pub(crate) mod layer;
 pub(crate) mod text;
+mod tools;
 
+use phramer_annotate::FontLibrary;
 use phramer_capture::{Frame, LogicalRect, Monitor};
 use phramer_core::config::Settings;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, PixmapMut, Rect, Transform};
 
 use crate::error::OverlayError;
 use crate::state::{GeometryLabel, OverlayState};
+use layer::Layer;
 use text::{Font, Weight};
 
+// `app/src/tokens.css`, in logical pixels
+const SPACE_2: f32 = 2.0;
 const SPACE_4: f32 = 4.0;
 const SPACE_6: f32 = 6.0;
 const SPACE_8: f32 = 8.0;
 const SPACE_12: f32 = 12.0;
 const SPACE_16: f32 = 16.0;
+const SPACE_24: f32 = 24.0;
 const RADIUS_4: f32 = 4.0;
 const RADIUS_6: f32 = 6.0;
 const RADIUS_12: f32 = 12.0;
 const TEXT_13: f32 = 13.0;
+/// `--ease-out`, for fades in.
+const EASE_OUT: (f32, f32, f32, f32) = (0.16, 1.0, 0.3, 1.0);
 /// The selection handles are 8 px circles.
 const HANDLE_RADIUS: f32 = 4.0;
 /// The highlighted window's frame, drawn inside the window (15.0.0: 2 px).
@@ -38,8 +48,9 @@ const HOVER_FRAME: f32 = 2.0;
 const FG: (u8, u8, u8) = (0xed, 0xed, 0xef);
 const BG: (u8, u8, u8) = (0x18, 0x19, 0x1b);
 const PANEL_OPACITY: f32 = 0.92;
-/// `--fg-10`, `--fg-60`.
+/// `--fg-10`, `--fg-20`, `--fg-60`.
 const FG_10: f32 = 0.10;
+const FG_20: f32 = 0.20;
 const FG_60: f32 = 0.60;
 
 /// The colours that come from the settings.
@@ -135,7 +146,7 @@ pub fn render(
     theme: &Theme,
     font: &[u8],
 ) -> Result<RgbaImage, OverlayError> {
-    let painter = Painter::new(frame, theme);
+    let mut painter = Painter::new(frame, theme, font);
     let mut font = Font::parse(font)?;
     let mut pixels = vec![0; frame.bgra.len()];
     painter.paint(state, monitor, frame, theme, &mut font, &mut pixels)?;
@@ -149,23 +160,123 @@ pub fn render(
     })
 }
 
-/// Paints one window again and again: the dimmed screenshot is computed
-/// once.
+/// Paints one window again and again: the screenshot with the annotations
+/// in, and its dimmed copy, are kept between frames and redone only where
+/// the document changed.
 pub(crate) struct Painter {
     dimmed: Vec<u8>,
+    dim_alpha: u8,
+    layer: Layer,
+    fonts: FontLibrary,
 }
 
 impl Painter {
-    pub(crate) fn new(frame: FrameView<'_>, theme: &Theme) -> Self {
+    /// A painter for `frame`; `font` is the font text objects are set in.
+    pub(crate) fn new(frame: FrameView<'_>, theme: &Theme, font: &[u8]) -> Self {
+        let mut fonts = FontLibrary::new();
+        if let Err(error) = fonts.add("Inter", false, false, font.to_vec()) {
+            log::error!("annotation font: {error}");
+        }
         Self {
             dimmed: dim(frame.bgra, theme.dim_alpha),
+            dim_alpha: theme.dim_alpha,
+            layer: Layer::new(),
+            fonts,
+        }
+    }
+
+    /// Brings the annotated screenshot and its dimmed copy up to the
+    /// state's document.
+    fn update_layer(&mut self, state: &OverlayState, frame: FrameView<'_>) {
+        let changed = self.layer.update(
+            frame.bgra,
+            (frame.width, frame.height),
+            state.document().objects(),
+            state.excluded_object(),
+            &self.fonts,
+        );
+        let Some(area) = changed else {
+            return;
+        };
+        let source = self.layer.pixels(frame.bgra);
+        if area.x == 0 && area.y == 0 && area.width == frame.width && area.height == frame.height {
+            self.dimmed = dim(source, self.dim_alpha);
+            return;
+        }
+        let stride = frame.width as usize * 4;
+        let (start, end) = (
+            area.x.max(0) as usize * 4,
+            (area.x.max(0) as usize + area.width as usize) * 4,
+        );
+        for row in area.y.max(0) as usize..(area.y.max(0) as usize + area.height as usize) {
+            let line = row * stride;
+            if let (Some(target), Some(source)) = (
+                self.dimmed.get_mut(line + start..line + end),
+                source.get(line + start..line + end),
+            ) {
+                target.copy_from_slice(&dim(source, self.dim_alpha));
+            }
+        }
+    }
+
+    /// Draws the previews (the object being drawn, dragged or recoloured,
+    /// the text being typed) into `out`: as they are inside the selection,
+    /// dimmed outside it.
+    fn paint_previews(
+        &self,
+        state: &OverlayState,
+        frame: FrameView<'_>,
+        selection: Option<PixelRect>,
+        out: &mut [u8],
+    ) {
+        let previews = state.previews();
+        if previews.is_empty() {
+            return;
+        }
+        let image = phramer_annotate::Rect::new(0, 0, frame.width, frame.height);
+        let area = layer::reach(&previews, &self.fonts).intersection(&image);
+        let source = self.layer.pixels(frame.bgra);
+        let Some(pixels) = layer::render_area(
+            source,
+            (frame.width, frame.height),
+            area,
+            &previews,
+            &self.fonts,
+        ) else {
+            return;
+        };
+        let stride = frame.width as usize * 4;
+        let row_bytes = area.width as usize * 4;
+        let keep = 255 - u32::from(self.dim_alpha);
+        for (row, line) in pixels.chunks_exact(row_bytes).enumerate() {
+            let y = area.y as usize + row;
+            for (column, pixel) in line.as_chunks::<4>().0.iter().enumerate() {
+                let x = area.x as usize + column;
+                let at = y * stride + x * 4;
+                let Some(target) = out.get_mut(at..at + 4) else {
+                    continue;
+                };
+                let lit = selection.is_some_and(|s| {
+                    (s.left as usize..s.right as usize).contains(&x)
+                        && (s.top as usize..s.bottom as usize).contains(&y)
+                });
+                if lit {
+                    target.copy_from_slice(pixel);
+                } else {
+                    for channel in 0..3 {
+                        let product = u32::from(pixel[channel]) * keep + 128;
+                        target[channel] = ((product + (product >> 8)) >> 8) as u8;
+                    }
+                    target[3] = u8::MAX;
+                }
+            }
         }
     }
 
     /// Paints into `out`, BGRA like `frame`, which must be the frame the
     /// painter was made from.
     pub(crate) fn paint(
-        &self,
+        &mut self,
         state: &OverlayState,
         monitor: usize,
         frame: FrameView<'_>,
@@ -182,14 +293,16 @@ impl Painter {
                 actual: out.len(),
             });
         }
-        out.copy_from_slice(&self.dimmed);
         let Some(screen) = state.monitors().get(monitor) else {
             return Err(OverlayError::NoSuchMonitor(monitor));
         };
         // Another monitor while following the cursor: dimmed, nothing else
         if monitor != state.active_monitor() {
+            out.copy_from_slice(&self.dimmed);
             return Ok(());
         }
+        self.update_layer(state, frame);
+        out.copy_from_slice(&self.dimmed);
 
         let mapping = Mapping {
             monitor: screen,
@@ -201,8 +314,9 @@ impl Painter {
             .hover_window()
             .and_then(|rect| mapping.to_pixels(rect));
         if let Some(clear) = selection.or(hover) {
-            undim(frame, clear, out);
+            undim(self.layer.pixels(frame.bgra), frame.width, clear, out);
         }
+        self.paint_previews(state, frame, selection, out);
 
         let mut canvas = PixmapMut::from_bytes(out, width, height)
             .ok_or(OverlayError::Canvas { width, height })?;
@@ -215,6 +329,7 @@ impl Painter {
         // with red and blue exchanged
         let accent = bgra_color(theme.accent, 1.0);
 
+        ui.object_marks(&mut canvas, state);
         if let Some(selection) = selection {
             ui.selection_frame(&mut canvas, selection, accent);
             if let Some((position, label)) = state.geometry_label() {
@@ -223,6 +338,9 @@ impl Painter {
         } else if let Some(window) = hover {
             ui.window_frame(&mut canvas, window, accent);
         }
+        ui.toolbar(&mut canvas, font, state, &mapping, theme);
+        ui.wheel(&mut canvas, state, &mapping, theme);
+        ui.size_notice(&mut canvas, font, state);
         if state.help_visible() {
             ui.help(&mut canvas, font, &state.help_rows());
         }
@@ -233,13 +351,14 @@ impl Painter {
     }
 }
 
-/// Copies the undimmed screenshot back into `area`.
-fn undim(frame: FrameView<'_>, area: PixelRect, out: &mut [u8]) {
-    let stride = frame.width as usize * 4;
+/// Copies the undimmed screenshot (`source`, BGRA rows of `width`) back
+/// into `area`.
+fn undim(source: &[u8], width: u32, area: PixelRect, out: &mut [u8]) {
+    let stride = width as usize * 4;
     let (start, end) = (area.left as usize * 4, area.right as usize * 4);
     for row in area.top as usize..area.bottom as usize {
         let line = row * stride;
-        out[line + start..line + end].copy_from_slice(&frame.bgra[line + start..line + end]);
+        out[line + start..line + end].copy_from_slice(&source[line + start..line + end]);
     }
 }
 

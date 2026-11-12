@@ -6,19 +6,26 @@
 //! The same sequence of events always yields the same effects, which is what
 //! lets every interaction be tested by script.
 //!
-//! The rules are `CaptureWidget` and `SelectionWidget` of 15.0.0, minus the
-//! annotation tools (which come later and will edit [`OverlayState::document`]).
+//! The rules are `CaptureWidget` and `SelectionWidget` of 15.0.0; the
+//! annotation tools (`annotate`) edit [`OverlayState::document`] through an
+//! [`Editor`](phramer_annotate::Editor) with its undo history.
 
+mod annotate;
 mod selection;
+pub(crate) mod toolbar;
+pub mod tools;
 
-use phramer_annotate::{Document, Size};
+use phramer_annotate::{Document, Editor, Size};
 use phramer_capture::{LocalRect, LogicalPoint, LogicalRect, Monitor, PhysicalRect, window_at};
-use phramer_core::config::Settings;
+use phramer_core::config::{ButtonType, Settings};
 
 use crate::error::OverlayError;
 use crate::input::{Bindings, Direction, Key, KeyAction, Modifiers, PointerButton};
+pub(crate) use annotate::{HOVER_FADE_MS, disc_color};
+pub use annotate::{ShapeOption, ToolbarButton, WheelView};
 pub use selection::Side;
 use selection::{CLICK_DISTANCE, nudged, resize, side_at, spanned, translated};
+pub use tools::{SettingChange, ShapeKind, ToolSettings};
 
 /// Milliseconds on any monotonic clock; only differences matter.
 pub type Millis = u64;
@@ -73,6 +80,10 @@ pub struct OverlayConfig {
     /// A region to start with, in physical pixels relative to the monitor
     /// (`--region`, `--last-region`). Ignored while following the cursor.
     pub initial_selection: Option<LocalRect>,
+    /// The toolbar, colours and tool sizes.
+    pub tools: ToolSettings,
+    /// The system asks for no animation: hover changes are instant.
+    pub reduced_motion: bool,
 }
 
 impl OverlayConfig {
@@ -89,6 +100,8 @@ impl OverlayConfig {
             has_tasks: false,
             follow_cursor: false,
             initial_selection: None,
+            tools: ToolSettings::from_settings(settings),
+            reduced_motion: false,
         }
     }
 }
@@ -123,6 +136,16 @@ pub enum Event {
     },
     Key {
         key: Key,
+        modifiers: Modifiers,
+    },
+    /// A character typed (`WM_CHAR`), for text being entered.
+    Text(char),
+    /// The mouse wheel turned; `delta` is in `WHEEL_DELTA` units (120 a
+    /// notch), positive away from the user.
+    Wheel {
+        monitor: usize,
+        at: LogicalPoint,
+        delta: i32,
         modifiers: Modifiers,
     },
     /// A wake-up asked for with [`Effect::WakeAt`] (or any later time).
@@ -167,11 +190,36 @@ pub struct Export {
     pub action: ExportAction,
 }
 
+/// What a toolbar action hands to a part of the application that is not
+/// built yet. The overlay closes with the region, as for an export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeferredAction {
+    /// Pin the capture on the desktop.
+    Pin,
+    /// Read the text in the selection (15.0.0 kept the overlay open).
+    Ocr,
+    /// Open the capture, with its annotations editable, in the editor.
+    OpenInEditor,
+    /// Open the capture with another application (App Launcher).
+    OpenWith,
+}
+
+/// The region a deferred action works on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deferred {
+    pub monitor: usize,
+    /// Physical pixels relative to that monitor.
+    pub region: LocalRect,
+    pub action: DeferredAction,
+}
+
 /// How the overlay ended. There is exactly one per capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Cancelled,
     Export(Export),
+    /// An action whose backend does not exist yet.
+    Deferred(Deferred),
 }
 
 /// What the shell must do after an event.
@@ -190,6 +238,8 @@ pub enum Effect {
     ReleaseMonitors,
     /// Send [`Event::Tick`] at this time.
     WakeAt(Millis),
+    /// Write a choice back to the settings file now, as 15.0.0 did.
+    Persist(SettingChange),
     /// Close every window; export when the outcome says so. Always the last
     /// effect, and never emitted twice.
     Close(Outcome),
@@ -197,7 +247,7 @@ pub enum Effect {
 
 /// What a pressed left button is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Drag {
+pub(crate) enum Drag {
     Idle,
     /// Not yet a drag. `window_click`: released here, it picks the
     /// highlighted window.
@@ -211,6 +261,16 @@ enum Drag {
     Moving {
         last: LogicalPoint,
     },
+    /// A tool is drawing the object in progress.
+    Drawing,
+    /// The selected object follows the pointer once it moved past the click
+    /// distance.
+    MovingObject {
+        start: LogicalPoint,
+        moved: bool,
+    },
+    /// A toolbar button (or Shape menu entry) is held.
+    Button(usize),
 }
 
 /// One capture's overlay.
@@ -237,12 +297,14 @@ pub struct OverlayState {
     focused: bool,
     cursor: CursorShape,
     closed: bool,
-    document: Document,
+    /// The time of the event being handled, for fades.
+    now: Millis,
+    tools: annotate::Tools,
 }
 
 /// Collects effects, one redraw per monitor.
 #[derive(Default)]
-struct Effects(Vec<Effect>);
+pub(crate) struct Effects(Vec<Effect>);
 
 impl Effects {
     fn push(&mut self, effect: Effect) {
@@ -268,7 +330,8 @@ impl OverlayState {
         let monitor = monitors
             .get(active)
             .ok_or(OverlayError::NoSuchMonitor(active))?;
-        let document = document_for(monitor);
+        let editor = Editor::with_undo_limit(document_for(monitor), config.tools.undo_limit);
+        let tools = annotate::Tools::new(editor, &config.tools, config.has_tasks);
         let following = config.follow_cursor && monitors.len() > 1;
         let selection = match config.initial_selection {
             Some(local) if !following => monitor.rect_to_logical(monitor.rect_to_physical(local)),
@@ -290,7 +353,8 @@ impl OverlayState {
             focused: false,
             cursor: CursorShape::Cross,
             closed: false,
-            document,
+            now: 0,
+            tools,
             config,
         })
     }
@@ -315,6 +379,7 @@ impl OverlayState {
         if self.closed {
             return effects.0;
         }
+        self.now = now;
         match event {
             Event::PointerMove {
                 monitor,
@@ -326,8 +391,8 @@ impl OverlayState {
                 monitor,
                 at,
                 button,
-                ..
-            } => self.pointer_down(monitor, at, button, &mut effects),
+                modifiers,
+            } => self.pointer_down(monitor, at, button, modifiers, &mut effects),
             Event::PointerUp {
                 monitor,
                 at,
@@ -335,6 +400,17 @@ impl OverlayState {
                 ..
             } => self.pointer_up(monitor, at, button, now, &mut effects),
             Event::Key { key, modifiers } => self.key(key, modifiers, now, &mut effects),
+            Event::Text(c) => self.typed(c, &mut effects),
+            Event::Wheel {
+                monitor,
+                delta,
+                modifiers,
+                ..
+            } => {
+                if monitor == self.active && self.selection.is_some() {
+                    self.wheel_turned(delta, modifiers, &mut effects);
+                }
+            }
             Event::Tick => self.tick(now, &mut effects),
             Event::Focus(focused) => {
                 if focused != self.focused {
@@ -455,10 +531,15 @@ impl OverlayState {
     }
 
     /// The annotation document of the active monitor's capture: its image
-    /// is the whole monitor, so placed objects stay where they are drawn
-    /// when the selection moves, as in 15.0.0. Empty until the tools exist.
+    /// is the whole monitor, in physical pixels, so placed objects stay
+    /// where they are drawn when the selection moves, as in 15.0.0.
     pub fn document(&self) -> &Document {
-        &self.document
+        self.tools.editor.document()
+    }
+
+    /// The time of the last event, for fades.
+    pub fn now(&self) -> Millis {
+        self.now
     }
 
     fn monitor_rect(&self) -> LogicalRect {
@@ -482,7 +563,10 @@ impl OverlayState {
         let from = self.active;
         self.active = monitor;
         self.hover = None;
-        self.document = document_for(&self.monitors[monitor]);
+        self.tools.editor = Editor::with_undo_limit(
+            document_for(&self.monitors[monitor]),
+            self.config.tools.undo_limit,
+        );
         effects.push(Effect::SwitchMonitor { to: monitor });
         effects.redraw(from);
         effects.redraw(monitor);
@@ -506,8 +590,15 @@ impl OverlayState {
             self.pointer_up(monitor, at, PointerButton::Left, now, effects);
             return;
         }
+        if self.tools_drag(at, modifiers, effects) {
+            self.update_cursor(Some(at), effects);
+            return;
+        }
         match self.drag {
-            Drag::Idle => self.update_hover(at, effects),
+            Drag::Idle => {
+                self.update_hover(at, effects);
+                self.update_tools_hover(at, effects);
+            }
             Drag::Pending { start, .. } => {
                 if manhattan(at, start) > CLICK_DISTANCE {
                     // A new selection, whatever was selected before. The
@@ -520,6 +611,8 @@ impl OverlayState {
                 }
             }
             Drag::Resizing { .. } => self.resize_to(at, modifiers, now, effects),
+            // Handled by the tools above
+            Drag::Drawing | Drag::MovingObject { .. } | Drag::Button(_) => {}
             Drag::Moving { last } => {
                 if let Some(selection) = self.selection {
                     self.selection = Some(translated(selection, at.x - last.x, at.y - last.y));
@@ -555,6 +648,7 @@ impl OverlayState {
         monitor: usize,
         at: LogicalPoint,
         button: PointerButton,
+        modifiers: Modifiers,
         effects: &mut Effects,
     ) {
         if !self.claim(monitor, effects) {
@@ -566,9 +660,16 @@ impl OverlayState {
             effects.push(Effect::ReleaseMonitors);
             effects.redraw(self.active);
         }
+        if button == PointerButton::Right {
+            // The colour wheel, centred on the press
+            self.open_wheel(at, effects);
+            return;
+        }
         if button != PointerButton::Left {
-            // The right button is the colour picker's, which comes with
-            // the tools; only its release matters here
+            return;
+        }
+        if self.tools_press(at, modifiers, effects) {
+            self.update_cursor(Some(at), effects);
             return;
         }
         // What a click picks is what is under the pointer now, even if it
@@ -598,7 +699,26 @@ impl OverlayState {
         if monitor != self.active {
             return;
         }
+        if button == PointerButton::Right && self.wheel_release(at, effects) {
+            self.update_cursor(Some(at), effects);
+            return;
+        }
         let drag = std::mem::replace(&mut self.drag, Drag::Idle);
+        if matches!(
+            drag,
+            Drag::Drawing | Drag::MovingObject { .. } | Drag::Button(_)
+        ) {
+            if button == PointerButton::Left {
+                self.tools_release(drag, at, effects);
+            } else {
+                // Another button let go mid-drag: the drag goes on
+                self.drag = drag;
+            }
+            if !self.closed {
+                self.update_cursor(Some(at), effects);
+            }
+            return;
+        }
         if button == PointerButton::Left
             && let Drag::Pending {
                 start,
@@ -627,11 +747,31 @@ impl OverlayState {
     }
 
     fn key(&mut self, key: Key, modifiers: Modifiers, now: Millis, effects: &mut Effects) {
-        if key == Key::Escape {
-            self.close(Outcome::Cancelled, effects);
+        if self.tools.text.is_some() {
+            self.text_key(key, modifiers, effects);
             return;
         }
+        if key == Key::Escape {
+            if !self.escape_tools(effects) {
+                self.close(Outcome::Cancelled, effects);
+            }
+            return;
+        }
+        let plain = !modifiers.ctrl && !modifiers.alt && !modifiers.meta && !modifiers.shift;
+        if let Key::Char(c) = key
+            && plain
+            && let Some(digit) = c.to_digit(10)
+        {
+            // Typed tool sizes (`CaptureWidget::keyPressEvent`)
+            self.digit(digit, effects);
+            return;
+        }
+        self.reset_digits();
         let Some(action) = self.config.bindings.action(key, modifiers) else {
+            // Ctrl+Y redoes too, unless something else has it
+            if key == Key::Char('y') && modifiers == Modifiers::CTRL {
+                self.press_button(ButtonType::Redo, effects);
+            }
             return;
         };
         let has_tasks = self.config.has_tasks;
@@ -659,6 +799,9 @@ impl OverlayState {
             KeyAction::SymmetricResize(direction) => {
                 self.nudge(symmetric_edges(direction), now, effects);
             }
+            KeyAction::Button(button) => self.press_button(button, effects),
+            KeyAction::CommitTool => self.commit_current(effects),
+            KeyAction::DeleteTool => self.delete_selected(effects),
         }
     }
 
@@ -683,13 +826,24 @@ impl OverlayState {
             self.settle_at = None;
             self.settle(effects);
         }
+        if self.tools.notice_until.is_some_and(|at| at <= now) {
+            self.persist_size(effects);
+        }
+        if self.tools.hover.is_some() && now <= self.tools.hover_since + HOVER_FADE_MS {
+            effects.redraw(self.active);
+        }
     }
 
     fn next_wake(&self) -> Option<Millis> {
-        [self.label_hide_at, self.settle_at]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.label_hide_at,
+            self.settle_at,
+            self.tools.notice_until,
+            self.next_frame(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     fn update_hover(&mut self, at: LogicalPoint, effects: &mut Effects) {
@@ -741,13 +895,7 @@ impl OverlayState {
     /// Ends the capture with the selection, or the whole monitor when there
     /// is none (`CaptureContext::selectedScreenshotArea`).
     fn export(&mut self, action: ExportAction, effects: &mut Effects) {
-        let monitor = &self.monitors[self.active];
-        let whole = LocalRect::new(0, 0, monitor.bounds().width, monitor.bounds().height);
-        let region = self
-            .selection
-            .and_then(|selection| selection.intersection(&self.monitor_rect()))
-            .and_then(|visible| monitor.rect_to_local(monitor.logical_rect_to_physical(visible)))
-            .unwrap_or(whole);
+        let region = self.export_region(effects);
         self.close(
             Outcome::Export(Export {
                 monitor: self.active,
@@ -758,10 +906,36 @@ impl OverlayState {
         );
     }
 
+    /// Ends the capture with an action the application cannot do yet.
+    fn defer(&mut self, action: DeferredAction, effects: &mut Effects) {
+        let region = self.export_region(effects);
+        self.close(
+            Outcome::Deferred(Deferred {
+                monitor: self.active,
+                region,
+                action,
+            }),
+            effects,
+        );
+    }
+
+    /// The region to export; typed text is placed first.
+    fn export_region(&mut self, effects: &mut Effects) -> LocalRect {
+        self.commit_text(effects);
+        let monitor = &self.monitors[self.active];
+        let whole = LocalRect::new(0, 0, monitor.bounds().width, monitor.bounds().height);
+        self.selection
+            .and_then(|selection| selection.intersection(&self.monitor_rect()))
+            .and_then(|visible| monitor.rect_to_local(monitor.logical_rect_to_physical(visible)))
+            .unwrap_or(whole)
+    }
+
     fn close(&mut self, outcome: Outcome, effects: &mut Effects) {
         if self.closed {
             return;
         }
+        // A size still on its notice is saved first: Close comes last
+        self.persist_size(effects);
         self.closed = true;
         self.drag = Drag::Idle;
         effects
@@ -772,11 +946,24 @@ impl OverlayState {
 
     fn update_cursor(&mut self, at: Option<LogicalPoint>, effects: &mut Effects) {
         let shape = match self.drag {
-            Drag::Moving { .. } => CursorShape::Grabbing,
+            Drag::Moving { .. } | Drag::MovingObject { .. } => CursorShape::Grabbing,
             Drag::Resizing { side } => side_cursor(side),
+            Drag::Drawing => CursorShape::Cross,
+            Drag::Button(_) => CursorShape::Arrow,
+            Drag::Idle | Drag::Pending { .. }
+                if at.is_some_and(|at| self.over_toolbar(at) || self.tools.wheel.is_some()) =>
+            {
+                CursorShape::Arrow
+            }
             Drag::Idle | Drag::Pending { .. } => {
+                let drawing = self
+                    .tools
+                    .active
+                    .is_some_and(|tool| tools::draws(tool) || tool == ButtonType::MoveSelection);
                 match (self.selection, at) {
                     (Some(selection), Some(at)) => match side_at(selection, at) {
+                        // A drawing tool draws inside
+                        Some(Side::Center) if drawing => CursorShape::Cross,
                         // `setIdleCentralCursor(Qt::ArrowCursor)`
                         Some(Side::Center) => CursorShape::Arrow,
                         Some(side) => side_cursor(side),

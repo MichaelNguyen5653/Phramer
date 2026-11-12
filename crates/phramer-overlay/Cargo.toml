@@ -40,3 +40,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# tests/smoke.rs: whether the session is locked, per-monitor DPI awareness
+# like the daemon's, and posting the overlay mouse and key messages.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_System_StationsAndDesktops",
+    "Win32_UI_HiDpi",
+] }

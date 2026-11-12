@@ -87,10 +87,17 @@ pub(crate) fn overlay<R: Runtime>(app: &AppHandle<R>, plan: OverlayPlan) {
         return;
     }
     let delay = plan.delay_ms;
+    // Colours and tool sizes picked on the overlay are saved here
+    let settings_path = app.state::<DaemonState>().settings_path.clone();
     let started = spawn(app, "capture-overlay", delay, move |settings, requested| {
         // Reopened for the next capture however this one ends
         let _open = OverlayOpen;
-        run_gui(settings, plan, requested.unwrap_or(requested_at))
+        run_gui(
+            settings,
+            plan,
+            requested.unwrap_or(requested_at),
+            settings_path,
+        )
     });
     if !started {
         OVERLAY_OPEN.store(false, Ordering::SeqCst);
@@ -276,6 +283,7 @@ fn run_gui(
     settings: Settings,
     plan: OverlayPlan,
     requested_at: Instant,
+    settings_path: PathBuf,
 ) -> Result<Delivery, CaptureFailure> {
     let monitors = enumerate_monitors()?;
     let (active, follow) = placement(&monitors, plan.placement, &settings)?;
@@ -303,7 +311,16 @@ fn run_gui(
         font: BUNDLED_FONT,
         snap_windows: initial.is_none(),
         requested_at,
+        settings_path: Some(settings_path),
     })?;
+    if let phramer_overlay::Outcome::Deferred(deferred) = finished.outcome {
+        // Pin, OCR, the editor and the app launcher come later
+        log::warn!(
+            "{:?}: not implemented yet; the capture is dropped",
+            deferred.action
+        );
+        return Ok(Delivery::Aborted);
+    }
     let (phramer_overlay::Outcome::Export(done), Some((image, geometry))) =
         (finished.outcome, finished.capture)
     else {

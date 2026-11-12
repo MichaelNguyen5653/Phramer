@@ -14,6 +14,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -40,10 +41,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
     GetMessageW, HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
     IDC_SIZENWSE, IDC_SIZEWE, KillTimer, LoadCursorW, MSG, PostQuitMessage, RegisterClassExW,
-    SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SetCursor, SetForegroundWindow, SetTimer, ShowWindow,
-    WM_ACTIVATEAPP, WM_CLOSE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SPI_GETCLIENTAREAANIMATION, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SetCursor,
+    SetForegroundWindow, SetTimer, ShowWindow, SystemParametersInfoW, TranslateMessage,
+    WM_ACTIVATEAPP, WM_CHAR, WM_CLOSE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 use super::last_error;
@@ -52,7 +55,9 @@ use crate::export::CapturedImage;
 use crate::input::{Key, Modifiers, PointerButton};
 use crate::render::text::Font;
 use crate::render::{FrameView, Painter, Theme};
-use crate::state::{CursorShape, Effect, Event, Millis, Outcome, OverlayConfig, OverlayState};
+use crate::state::{
+    CursorShape, Effect, Event, Millis, Outcome, OverlayConfig, OverlayState, SettingChange,
+};
 
 const CLASS_NAME: &str = "PhramerCaptureOverlay";
 const TIMER_ID: usize = 1;
@@ -71,6 +76,10 @@ pub struct OverlaySession<'a> {
     pub snap_windows: bool,
     /// When the capture was asked for; the first frame is timed from here.
     pub requested_at: Instant,
+    /// The settings file the colour and tool sizes chosen on the overlay
+    /// are written back to, as they are chosen; `None` keeps them to this
+    /// capture.
+    pub settings_path: Option<PathBuf>,
 }
 
 /// How a capture ended, with the pixels of an export.
@@ -91,7 +100,10 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
         font,
         snap_windows,
         requested_at,
+        settings_path,
     } = session;
+    let mut config = config;
+    config.reduced_motion = !client_area_animation();
     let monitor = monitors
         .get(active)
         .cloned()
@@ -125,7 +137,13 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
     windows.push(first);
     PANICKED.with(|flag| flag.set(false));
     SHELL.with(|cell| {
-        *cell.borrow_mut() = Some(Shell::new(&monitors, font, theme, first_hwnd));
+        *cell.borrow_mut() = Some(Shell::new(
+            &monitors,
+            font,
+            theme,
+            first_hwnd,
+            settings_path,
+        ));
     });
     with_shell(|shell| {
         shell.attach(active, first_hwnd, frames[active].take(), &theme);
@@ -224,17 +242,22 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
         return Err(OverlayError::Panicked);
     };
     let outcome = shell.outcome.take().unwrap_or(Outcome::Cancelled);
-    let capture = match (&outcome, shell.state.as_ref()) {
-        (Outcome::Export(export), Some(state)) => {
+    let exported = match outcome {
+        Outcome::Export(export) => Some((export.monitor, export.region)),
+        Outcome::Deferred(deferred) => Some((deferred.monitor, deferred.region)),
+        Outcome::Cancelled => None,
+    };
+    let capture = match (exported, shell.state.as_ref()) {
+        (Some((index, region)), Some(state)) => {
             let frame = shell
                 .slots
-                .get_mut(export.monitor)
+                .get_mut(index)
                 .and_then(|slot| slot.as_mut())
                 .and_then(|slot| slot.frame.take());
-            match (frame, state.monitors().get(export.monitor)) {
+            match (frame, state.monitors().get(index)) {
                 (Some(frame), Some(monitor)) => Some((
-                    capture_region(state.document(), &frame, export.region, font)?,
-                    monitor.rect_to_physical(export.region),
+                    capture_region(state.document(), &frame, region, font)?,
+                    monitor.rect_to_physical(region),
                 )),
                 _ => None,
             }
@@ -286,6 +309,37 @@ fn capture_region(
         pixel.swap(0, 2);
     }
     Ok(image)
+}
+
+/// Whether Windows animates controls (Settings > Accessibility > Visual
+/// effects > Animation effects); off means reduced motion.
+fn client_area_animation() -> bool {
+    let mut enabled: i32 = 1;
+    // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL to the pointer,
+    // which points at a live i32.
+    let ok = unsafe {
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut enabled).cast(), 0)
+    };
+    ok == 0 || enabled != 0
+}
+
+/// Writes a choice made on the overlay to the settings file, as 15.0.0 did
+/// when it was made.
+fn persist(path: &std::path::Path, change: SettingChange) {
+    let mut settings = match phramer_core::config::Settings::load(path) {
+        Ok(settings) => settings,
+        Err(error) => {
+            log::error!("cannot read the settings to save {change:?}: {error}");
+            return;
+        }
+    };
+    if let Err(error) = change.apply(&mut settings) {
+        log::error!("cannot save {change:?}: {error}");
+        return;
+    }
+    if let Err(error) = settings.save(path) {
+        log::error!("cannot save {change:?}: {error}");
+    }
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -384,6 +438,7 @@ struct Shell {
     epoch: Instant,
     cursor: CursorShape,
     outcome: Option<Outcome>,
+    settings_path: Option<PathBuf>,
 }
 
 thread_local! {
@@ -412,7 +467,13 @@ fn with_shell<T>(f: impl FnOnce(&mut Shell) -> T) -> Option<T> {
 }
 
 impl Shell {
-    fn new(monitors: &[Monitor], font: &[u8], theme: Theme, timer_window: HWND) -> Self {
+    fn new(
+        monitors: &[Monitor],
+        font: &[u8],
+        theme: Theme,
+        timer_window: HWND,
+        settings_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             state: None,
             slots: monitors.iter().map(|_| None).collect(),
@@ -423,13 +484,14 @@ impl Shell {
             epoch: Instant::now(),
             cursor: CursorShape::Cross,
             outcome: None,
+            settings_path,
         }
     }
 
     fn attach(&mut self, monitor: usize, hwnd: HWND, frame: Option<Frame>, theme: &Theme) {
         let painter = frame
             .as_ref()
-            .map(|frame| Painter::new(FrameView::from_frame(frame), theme));
+            .map(|frame| Painter::new(FrameView::from_frame(frame), theme, &self.font));
         let buffer = frame
             .as_ref()
             .map(|frame| vec![0; frame.bgra().len()])
@@ -466,7 +528,7 @@ impl Shell {
         if !slot.dirty {
             return Ok(());
         }
-        let (Some(frame), Some(painter)) = (slot.frame.as_ref(), slot.painter.as_ref()) else {
+        let (Some(frame), Some(painter)) = (slot.frame.as_ref(), slot.painter.as_mut()) else {
             return Ok(());
         };
         let mut font = Font::parse(&self.font)?;
@@ -537,6 +599,10 @@ fn run_effects(effects: Vec<Effect>) {
                     let delay = u32::try_from(delay).unwrap_or(u32::MAX).max(1);
                     work.push(Work::Timer(shell.timer_window, delay));
                 }
+                Effect::Persist(change) => match &shell.settings_path {
+                    Some(path) => persist(path, change),
+                    None => log::debug!("not saved: {change:?}"),
+                },
                 Effect::Close(outcome) => shell.outcome = Some(outcome),
             }
         }
@@ -601,8 +667,12 @@ fn pump_until_closed() -> Result<(), OverlayError> {
         if got == -1 {
             return Err(last_error("GetMessageW"));
         }
-        // SAFETY: `message` was filled in by GetMessageW.
-        unsafe { DispatchMessageW(&message) };
+        // SAFETY: `message` was filled in by GetMessageW; translating key
+        // presses posts their WM_CHAR to this same queue.
+        unsafe {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
     }
 }
 
@@ -652,6 +722,35 @@ fn handle_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> O
                 left_down: wparam & MK_LBUTTON as usize != 0,
                 modifiers: pointer_modifiers(wparam),
             });
+            Some(0)
+        }
+        WM_MOUSEWHEEL => {
+            let monitor = with_shell(|shell| shell.monitor_of(hwnd))??;
+            let delta = i32::from((wparam >> 16) as u16 as i16);
+            // Wheel positions are on the screen; the window covers its
+            // monitor, so the monitor's corner makes them client positions
+            let origin = with_shell(|shell| {
+                shell
+                    .state
+                    .as_ref()
+                    .and_then(|state| state.monitors().get(monitor))
+                    .map(|monitor| monitor.bounds())
+            })??;
+            let x = (lparam & 0xffff) as u16 as i16 as i32 - origin.x;
+            let y = ((lparam >> 16) & 0xffff) as u16 as i16 as i32 - origin.y;
+            let client = ((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as LPARAM;
+            pointer(monitor, client, |at| Event::Wheel {
+                monitor,
+                at,
+                delta,
+                modifiers: pointer_modifiers(wparam),
+            });
+            Some(0)
+        }
+        WM_CHAR => {
+            let c = char::from_u32(u32::try_from(wparam).ok()?)?;
+            let effects = with_shell(|shell| shell.feed(Event::Text(c)))?;
+            run_effects(effects);
             Some(0)
         }
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
@@ -858,6 +957,8 @@ fn paint(hwnd: HWND) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use phramer_capture::{MonitorId, PhysicalRect};
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject,
@@ -865,60 +966,61 @@ mod tests {
 
     use super::*;
 
-    /// What one interactive redraw costs at 4K: the render, then the copy
-    /// GDI makes of the buffer (into a 4K DIB section standing in for the
-    /// window's surface).
-    #[test]
-    #[ignore = "timing; run with --release"]
-    fn render_and_present_a_4k_frame() {
-        let (width, height) = (3840u32, 2160u32);
-        let monitor = Monitor::new(
+    const ROUNDS: u32 = 10;
+
+    fn monitor_4k() -> Monitor {
+        Monitor::new(
             MonitorId::new("4k"),
-            PhysicalRect::new(0, 0, width as i32, height as i32),
+            PhysicalRect::new(0, 0, 3840, 2160),
             144,
             true,
-        );
-        let mut state =
-            OverlayState::new(vec![monitor], 0, Vec::new(), OverlayConfig::default()).unwrap();
-        state.handle(Event::Focus(true), 0);
-        for (event, x, y) in [("down", 300, 200), ("drag", 900, 700), ("drag", 1500, 1000)] {
-            let at = LogicalPoint::new(x, y);
-            let event = if event == "down" {
-                Event::PointerDown {
-                    monitor: 0,
-                    at,
-                    button: PointerButton::Left,
-                    modifiers: Modifiers::NONE,
-                }
-            } else {
-                Event::PointerMove {
-                    monitor: 0,
-                    at,
-                    left_down: true,
-                    modifiers: Modifiers::NONE,
-                }
-            };
-            state.handle(event, 0);
-        }
-        let frame: Vec<u8> = (0..width * height)
-            .flat_map(|i| [(i % 251) as u8, (i % 241) as u8, (i % 239) as u8, 255])
-            .collect();
-        let view = FrameView::new(width, height, &frame).unwrap();
-        let theme = Theme::default();
-        let started = Instant::now();
-        let painter = Painter::new(view, &theme);
-        let dimmed = started.elapsed();
-        let mut font = Font::parse(crate::BUNDLED_FONT).unwrap();
-        let mut buffer = vec![0u8; frame.len()];
-        const ROUNDS: u32 = 10;
-        let started = Instant::now();
-        for _ in 0..ROUNDS {
-            painter
-                .paint(&state, 0, view, &theme, &mut font, &mut buffer)
-                .unwrap();
-        }
-        let render = started.elapsed() / ROUNDS;
+        )
+    }
 
+    fn frame_4k() -> Vec<u8> {
+        (0..3840u32 * 2160)
+            .flat_map(|i| [(i % 251) as u8, (i % 241) as u8, (i % 239) as u8, 255])
+            .collect()
+    }
+
+    fn pointer(state: &mut OverlayState, kind: &str, x: i32, y: i32) {
+        let at = LogicalPoint::new(x, y);
+        let event = match kind {
+            "down" => Event::PointerDown {
+                monitor: 0,
+                at,
+                button: PointerButton::Left,
+                modifiers: Modifiers::NONE,
+            },
+            "up" => Event::PointerUp {
+                monitor: 0,
+                at,
+                button: PointerButton::Left,
+                modifiers: Modifiers::NONE,
+            },
+            _ => Event::PointerMove {
+                monitor: 0,
+                at,
+                left_down: kind == "drag",
+                modifiers: Modifiers::NONE,
+            },
+        };
+        state.handle(event, 0);
+    }
+
+    fn key(state: &mut OverlayState, c: char) {
+        state.handle(
+            Event::Key {
+                key: Key::Char(c),
+                modifiers: Modifiers::NONE,
+            },
+            0,
+        );
+    }
+
+    /// The time `SetDIBitsToDevice` takes to copy `buffer` into a DIB
+    /// section of its size, standing in for the window's surface.
+    fn present_time(buffer: &[u8], width: u32, height: u32) -> Duration {
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -931,9 +1033,9 @@ mod tests {
             },
             ..Default::default()
         };
-        // SAFETY: a memory DC with a 4K DIB section selected into it, all
-        // released below; the buffer matches `info`.
-        let present = unsafe {
+        // SAFETY: a memory DC with a DIB section of the buffer's size
+        // selected into it, all released below; the buffer matches `info`.
+        unsafe {
             let dc = CreateCompatibleDC(std::ptr::null_mut());
             let mut bits = std::ptr::null_mut();
             let bitmap = CreateDIBSection(
@@ -967,12 +1069,141 @@ mod tests {
             DeleteObject(bitmap);
             DeleteDC(dc);
             present
-        };
+        }
+    }
+
+    fn ms(duration: Duration) -> f64 {
+        duration.as_secs_f64() * 1000.0
+    }
+
+    /// What one interactive redraw costs at 4K: the render, then the copy
+    /// GDI makes of the buffer.
+    #[test]
+    #[ignore = "timing; run with --release"]
+    fn render_and_present_a_4k_frame() {
+        let (width, height) = (3840u32, 2160u32);
+        let mut state =
+            OverlayState::new(vec![monitor_4k()], 0, Vec::new(), OverlayConfig::default()).unwrap();
+        state.handle(Event::Focus(true), 0);
+        pointer(&mut state, "down", 300, 200);
+        pointer(&mut state, "drag", 900, 700);
+        pointer(&mut state, "drag", 1500, 1000);
+        let frame = frame_4k();
+        let view = FrameView::new(width, height, &frame).unwrap();
+        let theme = Theme::default();
+        let started = Instant::now();
+        let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+        let dimmed = started.elapsed();
+        let mut font = Font::parse(crate::BUNDLED_FONT).unwrap();
+        let mut buffer = vec![0u8; frame.len()];
+        let started = Instant::now();
+        for _ in 0..ROUNDS {
+            painter
+                .paint(&state, 0, view, &theme, &mut font, &mut buffer)
+                .unwrap();
+        }
+        let render = started.elapsed() / ROUNDS;
+        let present = present_time(&buffer, width, height);
         println!(
             "4K: dim once {} ms; per redraw: render {:.1} ms, SetDIBitsToDevice {:.1} ms",
             dimmed.as_millis(),
-            render.as_secs_f64() * 1000.0,
-            present.as_secs_f64() * 1000.0
+            ms(render),
+            ms(present)
+        );
+    }
+
+    /// A 4K redraw with the toolbar up and 50 objects placed, as a pointer
+    /// move over the toolbar causes it: the annotations come from the
+    /// painter's cache, so the cost does not grow with the objects. Also
+    /// times a redraw while a new rectangle is dragged out (its preview is
+    /// rendered again each frame) and the one-off rebuild of the cache.
+    #[test]
+    #[ignore = "timing; run with --release"]
+    fn redraw_a_4k_frame_with_the_toolbar_and_50_objects() {
+        let (width, height) = (3840u32, 2160u32);
+        let config = OverlayConfig {
+            show_help: false,
+            ..OverlayConfig::default()
+        };
+        let mut state = OverlayState::new(vec![monitor_4k()], 0, Vec::new(), config).unwrap();
+        state.handle(Event::Focus(true), 0);
+        // A selection of most of the monitor (logical, 150%)
+        pointer(&mut state, "down", 200, 150);
+        pointer(&mut state, "drag", 1200, 800);
+        pointer(&mut state, "drag", 2300, 1250);
+        pointer(&mut state, "up", 2300, 1250);
+        let tools = ['r', 'c', 'a', 'd', 'm', 'p'];
+        for index in 0..50usize {
+            key(&mut state, tools[index % tools.len()]);
+            let (x, y) = (
+                260 + (index as i32 % 10) * 200,
+                200 + (index as i32 / 10) * 200,
+            );
+            pointer(&mut state, "down", x, y);
+            pointer(&mut state, "drag", x + 60, y + 50);
+            pointer(&mut state, "drag", x + 150, y + 120);
+            pointer(&mut state, "up", x + 150, y + 120);
+        }
+        assert_eq!(state.document().objects().len(), 50);
+        assert!(!state.toolbar().is_empty());
+
+        let frame = frame_4k();
+        let view = FrameView::new(width, height, &frame).unwrap();
+        let theme = Theme::default();
+        let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+        let mut font = Font::parse(crate::BUNDLED_FONT).unwrap();
+        let mut buffer = vec![0u8; frame.len()];
+        let started = Instant::now();
+        painter
+            .paint(&state, 0, view, &theme, &mut font, &mut buffer)
+            .unwrap();
+        let rebuild = started.elapsed();
+
+        // In and out of the first toolbar button, one paint per move
+        let button = state.toolbar()[0].rect;
+        let started = Instant::now();
+        for round in 0..ROUNDS {
+            let (x, y) = if round % 2 == 0 {
+                (button.x + 4, button.y + 4)
+            } else {
+                (button.x - 30, button.y - 30)
+            };
+            pointer(&mut state, "move", x, y);
+            painter
+                .paint(&state, 0, view, &theme, &mut font, &mut buffer)
+                .unwrap();
+        }
+        let redraw = started.elapsed() / ROUNDS;
+
+        // A rectangle being dragged out across the selection
+        key(&mut state, 'r');
+        if state.active_tool().is_none() {
+            key(&mut state, 'r');
+        }
+        pointer(&mut state, "down", 400, 300);
+        let started = Instant::now();
+        for round in 0..ROUNDS as i32 {
+            pointer(&mut state, "drag", 900 + round * 20, 700 + round * 10);
+            painter
+                .paint(&state, 0, view, &theme, &mut font, &mut buffer)
+                .unwrap();
+        }
+        let drawing = started.elapsed() / ROUNDS;
+        let present = present_time(&buffer, width, height);
+        println!(
+            "4K, toolbar and 50 objects: cache rebuild once {:.1} ms; per redraw: \
+             pointer move {:.1} ms (+ SetDIBitsToDevice {:.1} ms = {:.1} ms), \
+             dragging a new rectangle {:.1} ms",
+            ms(rebuild),
+            ms(redraw),
+            ms(present),
+            ms(redraw + present),
+            ms(drawing)
+        );
+        assert!(
+            redraw + present < Duration::from_millis(16),
+            "a redraw took {:.1} ms",
+            ms(redraw + present)
         );
     }
 }

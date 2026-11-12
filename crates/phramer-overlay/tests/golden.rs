@@ -348,3 +348,177 @@ fn rendering_is_deterministic() {
     assert_eq!(first, second);
     assert_eq!((first.width, first.height), (800, 500));
 }
+
+// --- Tools ------------------------------------------------------------------
+
+fn key(state: &mut OverlayState, key: Key, modifiers: Modifiers) {
+    state.handle(Event::Key { key, modifiers }, 10);
+}
+
+fn right(state: &mut OverlayState, down: bool, x: i32, y: i32) {
+    let at = LogicalPoint::new(x, y);
+    let button = PointerButton::Right;
+    let modifiers = Modifiers::NONE;
+    let monitor = state.active_monitor();
+    let event = if down {
+        Event::PointerDown {
+            monitor,
+            at,
+            button,
+            modifiers,
+        }
+    } else {
+        Event::PointerUp {
+            monitor,
+            at,
+            button,
+            modifiers,
+        }
+    };
+    state.handle(event, 10);
+}
+
+fn drag(state: &mut OverlayState, from: (i32, i32), to: (i32, i32)) {
+    pointer(state, "down", from.0, from.1);
+    pointer(state, "drag", (from.0 + to.0) / 2, (from.1 + to.1) / 2);
+    pointer(state, "drag", to.0, to.1);
+    pointer(state, "up", to.0, to.1);
+}
+
+/// A focused overlay at `scale` with (120,60)-(420,300) selected and the
+/// pointer parked inside it.
+fn with_toolbar(scale: f64, dpi: u32) -> (u32, u32, Vec<u8>, OverlayState) {
+    let (width, height, bgra, windows) = desktop(scale);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, dpi)], 0, windows, no_help()).expect("state");
+    focused(&mut state);
+    drag(&mut state, (120, 60), (420, 300));
+    pointer(&mut state, "move", 300, 200);
+    // Past the size label's timeout and any fade
+    state.handle(Event::Tick, 10_000);
+    (width, height, bgra, state)
+}
+
+#[test]
+fn toolbar_idle() {
+    let (width, height, bgra, state) = with_toolbar(1.0, 96);
+    check("toolbar", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn toolbar_icons_stay_sharp_at_200_percent() {
+    let (width, height, bgra, state) = with_toolbar(2.0, 192);
+    check("toolbar_200", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn toolbar_hover_with_tooltip_and_active_tool() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    key(&mut state, Key::Char('a'), Modifiers::NONE);
+    let text = state
+        .toolbar()
+        .into_iter()
+        .find(|button| button.button == phramer_core::config::ButtonType::Text)
+        .expect("text button")
+        .rect;
+    state.handle(
+        Event::PointerMove {
+            monitor: 0,
+            at: LogicalPoint::new(text.x + 10, text.y + 10),
+            left_down: false,
+            modifiers: Modifiers::NONE,
+        },
+        20_000,
+    );
+    state.handle(Event::Tick, 20_200);
+    check("toolbar_hover", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn colour_wheel_open() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    right(&mut state, true, 300, 190);
+    let swatch = state.wheel().expect("wheel").swatches[9].0;
+    pointer(&mut state, "move", swatch.x, swatch.y);
+    check("color_wheel", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn drawn_shapes_with_one_selected() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    let tool = |state: &mut OverlayState, c: char| key(state, Key::Char(c), Modifiers::NONE);
+    tool(&mut state, 'p');
+    pointer(&mut state, "down", 140, 80);
+    for (x, y) in [(150, 95), (165, 100), (180, 90), (195, 110), (210, 100)] {
+        pointer(&mut state, "drag", x, y);
+    }
+    pointer(&mut state, "up", 210, 100);
+    tool(&mut state, 'a');
+    drag(&mut state, (240, 90), (330, 130));
+    tool(&mut state, 'r');
+    drag(&mut state, (140, 140), (200, 190));
+    tool(&mut state, 'c');
+    drag(&mut state, (220, 140), (300, 200));
+    tool(&mut state, 'm');
+    drag(&mut state, (320, 170), (400, 170));
+    tool(&mut state, 'b');
+    drag(&mut state, (300, 220), (400, 280));
+    tool(&mut state, 'i');
+    drag(&mut state, (140, 215), (190, 265));
+    // The counter has no default shortcut: from its button
+    let counter = state
+        .toolbar()
+        .into_iter()
+        .find(|button| button.button == phramer_core::config::ButtonType::CircleCount)
+        .expect("counter")
+        .rect;
+    pointer(&mut state, "down", counter.x + 5, counter.y + 5);
+    pointer(&mut state, "up", counter.x + 5, counter.y + 5);
+    pointer(&mut state, "down", 240, 250);
+    pointer(&mut state, "up", 240, 250);
+    pointer(&mut state, "down", 380, 110);
+    pointer(&mut state, "drag", 400, 70);
+    pointer(&mut state, "up", 400, 70);
+    // Off with the tool, then pick the ellipse
+    key(&mut state, Key::Escape, Modifiers::NONE);
+    pointer(&mut state, "down", 260, 141);
+    pointer(&mut state, "up", 260, 141);
+    assert!(state.selected_object().is_some());
+    pointer(&mut state, "move", 600, 360);
+    check("shapes", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn text_entry_with_caret() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    key(&mut state, Key::Char('t'), Modifiers::NONE);
+    pointer(&mut state, "down", 150, 100);
+    pointer(&mut state, "up", 150, 100);
+    for c in "Phramer".chars() {
+        state.handle(Event::Text(c), 10);
+    }
+    key(&mut state, Key::Return, Modifiers::NONE);
+    for c in "16".chars() {
+        state.handle(Event::Text(c), 10);
+    }
+    pointer(&mut state, "move", 600, 360);
+    check("text_entry", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn shape_menu_open() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    let shape = state
+        .toolbar()
+        .into_iter()
+        .find(|button| button.button == phramer_core::config::ButtonType::Shape)
+        .expect("shape")
+        .rect;
+    for _ in 0..2 {
+        pointer(&mut state, "down", shape.x + 5, shape.y + 5);
+        pointer(&mut state, "up", shape.x + 5, shape.y + 5);
+    }
+    assert_eq!(state.shape_menu().len(), 6);
+    pointer(&mut state, "move", 600, 360);
+    check("shape_menu", &draw(&state, 0, width, height, &bgra));
+}

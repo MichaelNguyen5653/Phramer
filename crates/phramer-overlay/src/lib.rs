@@ -4,10 +4,10 @@
 //! Three layers, each usable without the next:
 //!
 //! - [`OverlayState`]: the behaviour, a pure state machine. [`Event`]s in
-//!   (pointer, keys, time, focus) in the logical coordinates of one monitor,
-//!   [`Effect`]s out (redraw, cursor, switch monitor, close). It owns the
-//!   selection and the annotation [`Document`](phramer_annotate::Document)
-//!   the tools will edit.
+//!   (pointer, wheel, keys, text, time, focus) in the logical coordinates of
+//!   one monitor, [`Effect`]s out (redraw, cursor, switch monitor, settings
+//!   to save, close). It owns the selection, the toolbar and the annotation
+//!   [`Document`](phramer_annotate::Document) its tools edit.
 //! - [`render`]: the pixels of one monitor's window for a state, drawn with
 //!   `tiny-skia` and the caller's font bytes ([`BUNDLED_FONT`] is Inter
 //!   Variable).
@@ -21,6 +21,7 @@
 
 mod error;
 mod export;
+mod icons;
 mod input;
 mod render;
 mod state;
@@ -34,11 +35,14 @@ pub use export::{
     CaptureTasks, CapturedImage, ExportContext, ExportReport, Handoff, Notice, SaveTarget,
     TimeFormat, expand_pattern, export, screenshot_path,
 };
+pub use icons::{ICONS, has_icon};
 pub use input::{Bindings, Key, Modifiers, PointerButton};
 pub use render::{FrameView, RgbaImage, Theme, render};
+pub use state::tools::{ButtonInfo, MAX_TOOL_SIZE, TOOLBAR_ORDER, button_info, is_tool};
 pub use state::{
-    CursorShape, Effect, Event, Export, ExportAction, GeometryLabel, Millis, Outcome,
-    OverlayConfig, OverlayState,
+    CursorShape, Deferred, DeferredAction, Effect, Event, Export, ExportAction, GeometryLabel,
+    Millis, Outcome, OverlayConfig, OverlayState, SettingChange, ShapeKind, ShapeOption,
+    ToolSettings, ToolbarButton, WheelView,
 };
 #[cfg(windows)]
 pub use win::{Finished, OverlaySession, SystemClipboard, run_overlay, show_in_folder};

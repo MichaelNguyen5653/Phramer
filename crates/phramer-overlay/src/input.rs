@@ -1,7 +1,7 @@
 //! Keyboard and pointer input as the state machine sees it, and the
 //! `[Shortcuts]` bindings the overlay reacts to.
 
-use phramer_core::config::Settings;
+use phramer_core::config::{ButtonType, Settings};
 
 /// A key, independent of the keyboard layout's modifiers. Letters are
 /// lower case; digits and punctuation are their unshifted character.
@@ -204,6 +204,25 @@ pub(crate) enum KeyAction {
     Move(Direction),
     Resize(Direction),
     SymmetricResize(Direction),
+    /// A toolbar button's shortcut (tools, undo, redo and the actions that
+    /// are not exports).
+    Button(ButtonType),
+    /// Finishes the text being typed (`TYPE_COMMIT_CURRENT_TOOL`).
+    CommitTool,
+    /// Deletes the selected object (`TYPE_DELETE_CURRENT_TOOL`).
+    DeleteTool,
+}
+
+/// The key action a toolbar button shares its shortcut with.
+pub(crate) fn button_action(button: ButtonType) -> KeyAction {
+    match button {
+        ButtonType::Copy => KeyAction::Copy,
+        ButtonType::Save => KeyAction::Save,
+        ButtonType::CopyFile => KeyAction::CopyFile,
+        ButtonType::Accept => KeyAction::Accept,
+        ButtonType::Exit => KeyAction::Exit,
+        other => KeyAction::Button(other),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -248,6 +267,48 @@ const BOUND_ACTIONS: &[(&str, KeyAction)] = &[
         "TYPE_SYM_RESIZE_DOWN",
         KeyAction::SymmetricResize(Direction::Down),
     ),
+    ("TYPE_PENCIL", KeyAction::Button(ButtonType::Pencil)),
+    ("TYPE_DRAWER", KeyAction::Button(ButtonType::Line)),
+    ("TYPE_ARROW", KeyAction::Button(ButtonType::Arrow)),
+    ("TYPE_SELECTION", KeyAction::Button(ButtonType::Selection)),
+    ("TYPE_RECTANGLE", KeyAction::Button(ButtonType::Rectangle)),
+    ("TYPE_CIRCLE", KeyAction::Button(ButtonType::Circle)),
+    ("TYPE_MARKER", KeyAction::Button(ButtonType::Marker)),
+    ("TYPE_TEXT", KeyAction::Button(ButtonType::Text)),
+    ("TYPE_PIXELATE", KeyAction::Button(ButtonType::Pixelate)),
+    ("TYPE_INVERT", KeyAction::Button(ButtonType::Invert)),
+    (
+        "TYPE_CIRCLECOUNT",
+        KeyAction::Button(ButtonType::CircleCount),
+    ),
+    ("TYPE_SHAPE", KeyAction::Button(ButtonType::Shape)),
+    (
+        "TYPE_MOVE_OBJECT",
+        KeyAction::Button(ButtonType::MoveObject),
+    ),
+    (
+        "TYPE_MOVESELECTION",
+        KeyAction::Button(ButtonType::MoveSelection),
+    ),
+    ("TYPE_UNDO", KeyAction::Button(ButtonType::Undo)),
+    ("TYPE_REDO", KeyAction::Button(ButtonType::Redo)),
+    (
+        "TYPE_SIZEINCREASE",
+        KeyAction::Button(ButtonType::SizeIncrease),
+    ),
+    (
+        "TYPE_SIZEDECREASE",
+        KeyAction::Button(ButtonType::SizeDecrease),
+    ),
+    ("TYPE_OPEN_APP", KeyAction::Button(ButtonType::OpenApp)),
+    ("TYPE_OCR", KeyAction::Button(ButtonType::Ocr)),
+    ("TYPE_PIN", KeyAction::Button(ButtonType::Pin)),
+    (
+        "TYPE_OPEN_IN_EDITOR",
+        KeyAction::Button(ButtonType::OpenInEditor),
+    ),
+    ("TYPE_COMMIT_CURRENT_TOOL", KeyAction::CommitTool),
+    ("TYPE_DELETE_CURRENT_TOOL", KeyAction::DeleteTool),
 ];
 
 /// The overlay's key bindings, read from `[Shortcuts]`. Esc is fixed and
