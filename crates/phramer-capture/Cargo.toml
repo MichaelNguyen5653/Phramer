@@ -1,0 +1,24 @@
+[package]
+name = "phramer-capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = "2"
+
+# Monitor enumeration, GDI screen grabs, DWM window frames, DPI awareness.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Only examples/grab.rs, to write the grabs out for inspection.
+[dev-dependencies]
+png = "0.18"
