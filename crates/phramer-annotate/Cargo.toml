@@ -1,0 +1,21 @@
+[package]
+name = "phramer-annotate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# CPU rasteriser. Built without `std` and `simd` so native and wasm32 run the
+# same scalar code with the same `libm` float routines: identical pixels.
+tiny-skia = { version = "0.12", default-features = false, features = ["no-std-float"] }
+# Glyph outlines from caller-supplied font bytes; no system font access.
+ttf-parser = { version = "0.25", default-features = false, features = ["no-std-float"] }
+# atan2 for the shift-constraint rule, the same routine on every target.
+libm = "0.2"
+
+[dev-dependencies]
+png = "0.18"

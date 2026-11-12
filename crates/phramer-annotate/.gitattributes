@@ -1,0 +1,2 @@
+# Golden images are compared byte for byte; never let git touch them.
+*.png binary
