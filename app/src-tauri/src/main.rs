@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    phramer_lib::run()
+    std::process::exit(phramer_lib::run())
 }
