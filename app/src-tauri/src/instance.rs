@@ -51,7 +51,7 @@ pub(crate) fn spawn_daemon(command: &Forwarded) -> io::Result<()> {
 }
 
 /// Always the GUI binary, even when called from a `-cli` companion.
-fn daemon_executable(current: &Path) -> PathBuf {
+pub(crate) fn daemon_executable(current: &Path) -> PathBuf {
     match current.file_stem().and_then(|stem| stem.to_str()) {
         Some(stem) if stem.ends_with("-cli") => {
             let name = format!("{}.exe", &stem[..stem.len() - "-cli".len()]);

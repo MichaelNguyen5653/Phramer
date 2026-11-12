@@ -5,18 +5,30 @@
 mod actions;
 mod capture;
 mod cli;
+mod console;
 mod daemon;
+mod handoff;
 mod hotkeys;
 mod instance;
 mod logging;
 mod notify;
+mod reply;
 mod restart;
 mod settings;
+mod snipping;
 mod startup;
 mod tray;
+mod updater;
+
+use std::path::PathBuf;
 
 use cli::{CliError, Command, ConfigCommand, Parsed, Role};
 use instance::Forwarded;
+
+/// `phramer-cli.exe`: the console companion; returns the exit code.
+pub fn run_cli() -> i32 {
+    console::run()
+}
 
 /// Runs the process in the role its arguments give it; returns the exit
 /// code.
@@ -33,14 +45,30 @@ pub fn run() -> i32 {
     let args: Vec<String> = std::env::args_os()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    match cli::classify(&args) {
+    // From `phramer-cli`: parsed without its reply pipe, forwarded with it
+    let mut plain = args.clone();
+    let relayed = reply::take_reply(&mut plain).is_some();
+    match cli::classify(&plain) {
         Role::Daemon => daemon::run(start_command),
         Role::Recording => actions::start_recording_from_link(),
-        Role::Command(args) => run_command(args),
+        Role::Command(command) => {
+            let forwarded = if relayed { args } else { command.clone() };
+            run_command(command, move |_, cwd| {
+                forward(Forwarded {
+                    args: forwarded,
+                    cwd,
+                })
+            })
+        }
     }
 }
 
-fn run_command(args: Vec<String>) -> i32 {
+/// Parses `args` and carries the command out here, or hands it to `daemon`
+/// with the working directory; returns the exit code.
+pub(crate) fn run_command(
+    args: Vec<String>,
+    daemon: impl FnOnce(Vec<String>, PathBuf) -> i32,
+) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_default();
     let command = match cli::parse(&args, &cwd) {
         Ok(Parsed::Help(text)) => {
@@ -55,7 +83,7 @@ fn run_command(args: Vec<String>) -> i32 {
         Err(error) => return report(&error),
     };
     if command.runs_in_daemon() {
-        return forward(Forwarded { args, cwd });
+        return daemon(args, cwd);
     }
     match command {
         Command::Config(ConfigCommand::Check) => actions::check_configuration(),

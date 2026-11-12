@@ -777,3 +777,141 @@ fn overlay_opens_closes_and_full_capture_saves() {
     let _ = fs::remove_dir_all(&save_dir);
     let _ = fs::remove_file(&log_path);
 }
+
+/// `phramer-cli.exe` next to the binary under test.
+fn cli_exe() -> PathBuf {
+    match std::env::var_os("PHRAMER_SMOKE_EXE") {
+        Some(_) => exe().with_file_name("phramer-cli.exe"),
+        None => PathBuf::from(env!("CARGO_BIN_EXE_phramer-cli")),
+    }
+}
+
+/// Whether the interactive desktop is the user's, not the lock screen or
+/// a UAC prompt: only then can the screen be grabbed.
+fn desktop_is_unlocked() -> bool {
+    use windows_sys::Win32::System::StationsAndDesktops::{
+        CloseDesktop, DESKTOP_READOBJECTS, GetUserObjectInformationW, OpenInputDesktop, UOI_NAME,
+    };
+    // SAFETY: opens the input desktop for reading its name; closed below.
+    // A locked session refuses the open.
+    let desktop = unsafe { OpenInputDesktop(0, 0, DESKTOP_READOBJECTS) };
+    if desktop.is_null() {
+        return false;
+    }
+    let mut name = [0u16; 64];
+    let mut needed = 0u32;
+    // SAFETY: `name` is a writable buffer of the byte size given.
+    let ok = unsafe {
+        GetUserObjectInformationW(
+            desktop,
+            UOI_NAME,
+            name.as_mut_ptr().cast(),
+            (name.len() * 2) as u32,
+            &mut needed,
+        )
+    };
+    // SAFETY: the handle opened above, closed once.
+    unsafe { CloseDesktop(desktop) };
+    let name = String::from_utf16_lossy(&name);
+    ok != 0 && name.trim_end_matches('\0').eq_ignore_ascii_case("Default")
+}
+
+/// Runs `phramer-cli` with `args`; its exit code, stdout and stderr.
+fn run_cli(args: &[&str]) -> (Option<i32>, Vec<u8>, String) {
+    let start = Instant::now();
+    let output = Command::new(cli_exe())
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run phramer-cli");
+    println!(
+        "phramer-cli {args:?}: {} after {} ms, {} bytes out, stderr {:?}",
+        output.status,
+        start.elapsed().as_millis(),
+        output.stdout.len(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (
+        output.status.code(),
+        output.stdout,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+#[ignore = "live: starts the daemon through phramer-cli and grabs the screen"]
+fn cli_prints_raw_captures_and_exit_codes() {
+    let _live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !desktop_is_unlocked() {
+        println!("skipped: the session is locked or another desktop has the input");
+        return;
+    }
+    per_monitor_dpi_aware();
+    let exe = exe();
+    println!("binaries: {} and {}", exe.display(), cli_exe().display());
+    assert!(
+        processes_of(&exe).is_empty(),
+        "{} is already running",
+        exe.display()
+    );
+    assert!(!lock_exists(), "another Phramer 16 daemon holds the lock");
+    let mut cleanup = Cleanup {
+        exe: exe.clone(),
+        pids: Vec::new(),
+        before: user_state(),
+    };
+
+    // 1. Handled in the console process itself
+    let (code, stdout, _) = run_cli(&["--version"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&stdout).trim(),
+        format!("Phramer v{}", env!("CARGO_PKG_VERSION"))
+    );
+    let (code, _, stderr) = run_cli(&["full", "--bogus"]);
+    // 15.0.0 exits 0 after a parse error
+    assert_eq!(code, Some(0));
+    assert!(stderr.contains("phramer: error:"), "{stderr}");
+    assert!(
+        processes_of(&exe).is_empty(),
+        "a parse error started Phramer"
+    );
+
+    // SAFETY: plain metric queries.
+    let desktop = unsafe {
+        (
+            GetSystemMetrics(SM_CXVIRTUALSCREEN) as u32,
+            GetSystemMetrics(SM_CYVIRTUALSCREEN) as u32,
+        )
+    };
+    // 2. No daemon: one is started for the capture, which comes back as PNG
+    let (code, stdout, _) = run_cli(&["full", "--raw"]);
+    let daemons = processes_of(&exe);
+    cleanup.pids.extend(&daemons);
+    assert_eq!(code, Some(0));
+    assert_eq!(png_size(&stdout), Some(desktop), "not a desktop-sized PNG");
+    assert_eq!(daemons.len(), 1, "one daemon: {daemons:?}");
+    let daemon_pid = daemons[0];
+
+    // 3. Through the running daemon
+    let (code, stdout, _) = run_cli(&["full", "--raw"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(png_size(&stdout), Some(desktop));
+    assert_eq!(processes_of(&exe), [daemon_pid], "only the daemon remains");
+
+    // 4. A clean stop
+    assert!(
+        wait_until(Duration::from_secs(20), || windows_of(daemon_pid)
+            .iter()
+            .any(|w| w.class == "tray_icon_app")),
+        "the daemon has no tray icon"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    let tray = check_daemon(&exe, daemon_pid);
+    stop(daemon_pid, &tray);
+    assert!(
+        user_state() == cleanup.before,
+        "the settings file or startup registry entries changed"
+    );
+    println!("settings file and startup registry entries unchanged");
+}

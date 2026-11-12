@@ -64,6 +64,9 @@ pub struct ExportReport {
     /// The last file written, for Show in Folder.
     pub saved: Option<PathBuf>,
     pub notices: Vec<Notice>,
+    /// What 15.0.0 wrote to its standard output: `--print-geometry`'s line,
+    /// then `--raw`'s PNG. The caller relays it to whoever asked.
+    pub stdout: Vec<u8>,
 }
 
 impl ExportReport {
@@ -121,17 +124,19 @@ fn run_tasks(
     report: &mut ExportReport,
 ) {
     if tasks.print_geometry {
-        // The daemon has no console to print to
-        log::info!(
-            "{}x{}+{}+{}",
-            geometry.width,
-            geometry.height,
-            geometry.x,
-            geometry.y
+        let line = format!(
+            "{}x{}+{}+{}
+",
+            geometry.width, geometry.height, geometry.x, geometry.y
         );
+        log::info!("{}", line.trim_end());
+        report.stdout.extend_from_slice(line.as_bytes());
     }
     if tasks.print_raw {
-        log::warn!("--raw: the daemon cannot print the image to the calling console");
+        match encode(image, ImageFormat::Png, 0) {
+            Ok(png) => report.stdout.extend_from_slice(&png),
+            Err(error) => report.error(format!("--raw: {error}")),
+        }
     }
     match &tasks.save {
         Some(SaveTarget::Default) => save_to_default(image, context, report),
@@ -143,13 +148,7 @@ fn run_tasks(
     if tasks.copy {
         copy_image(image, context, report);
     }
-    if tasks.pin {
-        log::info!(
-            "pin: not implemented yet ({}x{})",
-            image.width,
-            image.height
-        );
-    }
+    // `pin` is the caller's: a pin outlives the export
 }
 
 /// `saveToFilesystem`: writes the image to `path` (a folder or a file

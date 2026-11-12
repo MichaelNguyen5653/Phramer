@@ -1,0 +1,25 @@
+[package]
+name = "phramer-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+log = "0.4"
+
+# Windows.Media.Ocr through WinRT; CoIncrementMTAUsage for its apartment.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_System_Com",
+] }
+
+# tests/live.rs renders known text with the annotation engine and Inter.
+[dev-dependencies]
+phramer-annotate = { path = "../phramer-annotate" }

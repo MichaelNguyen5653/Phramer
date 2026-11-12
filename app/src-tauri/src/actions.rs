@@ -10,7 +10,8 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::capture::{self, OverlayPlan, Placement};
 use crate::cli::{FullRequest, GuiRequest, ScreenRequest};
 use crate::daemon::DaemonState;
-use crate::{notify, settings};
+use crate::reply::Reply;
+use crate::{notify, settings, snipping, updater};
 
 fn not_implemented(feature: &str, detail: &dyn std::fmt::Debug) {
     log::info!("{feature}: not implemented yet ({detail:?})");
@@ -19,6 +20,15 @@ fn not_implemented(feature: &str, detail: &dyn std::fmt::Debug) {
 /// `Flameshot::gui` / `requestCapture` in graphical mode: the capture
 /// overlay.
 pub(crate) fn capture_gui<R: Runtime>(app: &AppHandle<R>, request: GuiRequest) {
+    capture_gui_replying(app, request, None);
+}
+
+/// [`capture_gui`] for a command that `reply` answers.
+pub(crate) fn capture_gui_replying<R: Runtime>(
+    app: &AppHandle<R>,
+    request: GuiRequest,
+    reply: Option<Reply>,
+) {
     capture::overlay(
         app,
         OverlayPlan {
@@ -27,12 +37,17 @@ pub(crate) fn capture_gui<R: Runtime>(app: &AppHandle<R>, request: GuiRequest) {
             initial_selection: request.initial_selection,
             tasks: request.tasks,
         },
+        reply,
     );
 }
 
 /// `Flameshot::screen`: one monitor without the overlay, or the overlay
 /// limited to it with `--edit`.
-pub(crate) fn capture_screen<R: Runtime>(app: &AppHandle<R>, request: ScreenRequest) {
+pub(crate) fn capture_screen<R: Runtime>(
+    app: &AppHandle<R>,
+    request: ScreenRequest,
+    reply: Option<Reply>,
+) {
     if request.edit {
         let initial_selection = request
             .region
@@ -45,15 +60,27 @@ pub(crate) fn capture_screen<R: Runtime>(app: &AppHandle<R>, request: ScreenRequ
                 initial_selection,
                 tasks: request.tasks,
             },
+            reply,
         );
     } else {
-        capture::screen(app, request.delay_ms, request.monitor, request.region, request.tasks);
+        capture::screen(
+            app,
+            request.delay_ms,
+            request.monitor,
+            request.region,
+            request.tasks,
+            reply,
+        );
     }
 }
 
 /// `Flameshot::full`: every monitor.
-pub(crate) fn capture_full<R: Runtime>(app: &AppHandle<R>, request: FullRequest) {
-    capture::full(app, request.delay_ms, request.tasks);
+pub(crate) fn capture_full<R: Runtime>(
+    app: &AppHandle<R>,
+    request: FullRequest,
+    reply: Option<Reply>,
+) {
+    capture::full(app, request.delay_ms, request.tasks, reply);
 }
 
 /// `Flameshot::launcher`.
@@ -77,8 +104,8 @@ pub(crate) fn open_editor<R: Runtime>(_app: &AppHandle<R>) {
 }
 
 /// `FlameshotDaemon::checkForUpdates`.
-pub(crate) fn check_for_updates<R: Runtime>(_app: &AppHandle<R>) {
-    not_implemented("updater", &());
+pub(crate) fn check_for_updates<R: Runtime>(app: &AppHandle<R>) {
+    updater::check_now(app);
 }
 
 /// `WelcomeTour::showNow`.
@@ -117,14 +144,41 @@ pub(crate) fn record_video<R: Runtime>(app: &AppHandle<R>) {
         );
         return;
     }
-    not_implemented("Snipping Tool recording", &());
+    if !snipping::is_available() {
+        notify::warning_message(
+            app,
+            &current,
+            "Video capture needs the Windows Snipping Tool, which is not installed on this \
+             computer.",
+        );
+        return;
+    }
+    let target = app.clone();
+    snipping::start_recording_async(move |launched| {
+        if launched {
+            return;
+        }
+        // The notification belongs to the main thread
+        let main = target.clone();
+        let posted = target.run_on_main_thread(move || {
+            let current = settings::load(&main.state::<DaemonState>().settings_path);
+            notify::warning_message(
+                &main,
+                &current,
+                "Windows did not allow the Snipping Tool to start. It may be blocked on this \
+                 computer.",
+            );
+        });
+        if let Err(error) = posted {
+            log::error!("cannot report the Snipping Tool failure: {error}");
+        }
+    });
 }
 
 /// An `ms-screenclip` recording link (Win+Shift+R): Snipping Tool's own
 /// recorder. Runs in the process Windows started, without a daemon.
 pub(crate) fn start_recording_from_link() -> i32 {
-    not_implemented("Snipping Tool recording", &"ms-screenclip link");
-    0
+    if snipping::start_recording() { 0 } else { 1 }
 }
 
 /// `Flameshot::openSavePath`.

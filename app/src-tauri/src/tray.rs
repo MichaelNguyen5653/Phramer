@@ -12,6 +12,7 @@ use crate::actions;
 use crate::cli::GuiRequest;
 use crate::notify;
 use crate::restart;
+use crate::updater;
 
 const TRAY_ID: &str = "phramer";
 const TOOLTIP: &str = "Phramer";
@@ -60,6 +61,8 @@ struct MenuFlags {
     /// One label per monitor, in capture-number order.
     monitors: Vec<String>,
     last_capture_available: bool,
+    /// A newer version the update check found.
+    update: Option<String>,
 }
 
 /// `TrayIcon::initMenu` and `initScreenMenu` on Windows.
@@ -95,12 +98,23 @@ fn menu_entries(flags: &MenuFlags) -> Vec<Entry> {
     entries.push(item("configuration", "&Configuration"));
     entries.push(Entry::Separator);
     // With automatic checks on, the entry appears only once an update has
-    // been found; the updater is not built yet, so it never is. The Store
-    // updates the Store build.
-    if cfg!(not(feature = "store")) && !flags.check_for_updates {
+    // been found, and then right above About. The Store updates the Store
+    // build.
+    if cfg!(not(feature = "store")) && !flags.check_for_updates && flags.update.is_none() {
         entries.push(item("check_for_updates", "Check for updates"));
     }
     entries.push(item("whats_new", "&What's New"));
+    if let Some(version) = flags
+        .update
+        .as_ref()
+        .filter(|_| cfg!(not(feature = "store")))
+    {
+        // Check only: the release page, where 15.0.0 installed in place
+        entries.push(item(
+            "check_for_updates",
+            &format!("Download version {version}"),
+        ));
+    }
     entries.push(item("about", "&About"));
     entries.push(Entry::Separator);
     entries.push(item("restart", "&Restart"));
@@ -138,6 +152,7 @@ fn flags(settings: &Settings) -> MenuFlags {
         check_for_updates: settings.check_for_updates(),
         monitors: monitor_labels(),
         last_capture_available: actions::last_capture().is_some(),
+        update: updater::available_version(),
     }
 }
 
@@ -219,7 +234,27 @@ pub(crate) fn refresh<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> ta
     app.state::<TrayState>()
         .visible
         .store(visible, Ordering::SeqCst);
+    show_update(app, &tray)?;
     tray.set_menu(Some(build_menu(app, settings)?))
+}
+
+/// `TrayIcon::showUpdateBadge`: the badged icon and its tooltip while a
+/// newer version is known.
+fn show_update<R: Runtime>(
+    app: &AppHandle<R>,
+    tray: &tauri::tray::TrayIcon<R>,
+) -> tauri::Result<()> {
+    let (Some(version), Some(icon)) = (updater::available_version(), app.default_window_icon())
+    else {
+        return Ok(());
+    };
+    let badged = updater::badge(icon.rgba(), icon.width(), icon.height());
+    tray.set_icon(Some(tauri::image::Image::new_owned(
+        badged,
+        icon.width(),
+        icon.height(),
+    )))?;
+    tray.set_tooltip(Some(format!("{TOOLTIP} \u{2014} update available ({version})")))
 }
 
 /// The window behind the icon while the icon is shown, for balloons.
@@ -321,6 +356,7 @@ mod tests {
             check_for_updates: false,
             monitors: vec!["Monitor 1: A (1920x1080)".into(), "Monitor 2: B (1280x1024)".into()],
             last_capture_available: true,
+            update: None,
         };
         assert_eq!(
             layout(&menu_entries(&flags)),
@@ -344,6 +380,24 @@ mod tests {
                 "&Quit",
             ]
         );
+    }
+
+    #[cfg(not(feature = "store"))]
+    #[test]
+    fn a_found_update_sits_above_about() {
+        for check_for_updates in [true, false] {
+            let flags = MenuFlags {
+                check_for_updates,
+                update: Some("16.0.1".into()),
+                ..MenuFlags::default()
+            };
+            let entries = layout(&menu_entries(&flags));
+            let at = |text: &str| entries.iter().position(|entry| entry == text);
+            assert_eq!(at("Check for updates"), None);
+            let update = at("Download version 16.0.1").expect("update entry");
+            assert_eq!(entries[update - 1], "&What's New");
+            assert_eq!(entries[update + 1], "&About");
+        }
     }
 
     #[test]

@@ -115,6 +115,14 @@ pub(crate) fn system_message<R: Runtime>(app: &AppHandle<R>, settings: &Settings
     }
 }
 
+/// `AbstractLogger::warning()`: only when desktop notifications are on.
+pub(crate) fn warning_message<R: Runtime>(app: &AppHandle<R>, settings: &Settings, text: &str) {
+    log::warn!("{text}");
+    if settings.show_desktop_notification() {
+        balloon(app, "Phramer Warning", text, None);
+    }
+}
+
 fn copy_into(target: &mut [u16], text: &str) {
     let capacity = target.len().saturating_sub(1);
     let mut length = 0;

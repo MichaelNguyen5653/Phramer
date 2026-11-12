@@ -2606,13 +2606,16 @@ dependencies = [
  "log",
  "phramer-capture",
  "phramer-core",
+ "phramer-ocr",
  "phramer-overlay",
  "regex",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "thiserror 2.0.21",
+ "windows",
  "windows-sys 0.61.2",
 ]
 
@@ -2644,6 +2647,15 @@ version = "16.0.0"
 dependencies = [
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "phramer-ocr"
+version = "16.0.0"
+dependencies = [
+ "log",
+ "phramer-annotate",
+ "windows",
 ]
 
 [[package]]

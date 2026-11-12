@@ -23,6 +23,7 @@ mod error;
 mod export;
 mod icons;
 mod input;
+mod pin;
 mod render;
 mod state;
 #[cfg(windows)]
@@ -32,11 +33,15 @@ pub use error::OverlayError;
 #[cfg(windows)]
 pub use export::LocalTime;
 pub use export::{
-    CaptureTasks, CapturedImage, ExportContext, ExportReport, Handoff, Notice, SaveTarget,
-    TimeFormat, expand_pattern, export, screenshot_path,
+    CaptureTasks, CapturedImage, ExportContext, ExportReport, Handoff, ImageFormat, Notice,
+    SaveTarget, TimeFormat, encode, expand_pattern, export, screenshot_path,
 };
 pub use icons::{ICONS, has_icon};
 pub use input::{Bindings, Key, Modifiers, PointerButton};
+pub use pin::{
+    PIN_MENU, PinEffect, PinEvent, PinKey, PinMenuItem, PinRequest, PinState, render_pin,
+    rotate_left, rotate_right, scale_image,
+};
 pub use render::{FrameView, RgbaImage, Theme, render};
 pub use state::tools::{ButtonInfo, MAX_TOOL_SIZE, TOOLBAR_ORDER, button_info, is_tool};
 pub use state::{
@@ -45,7 +50,10 @@ pub use state::{
     ToolSettings, ToolbarButton, WheelView,
 };
 #[cfg(windows)]
-pub use win::{Finished, OverlaySession, SystemClipboard, run_overlay, show_in_folder};
+pub use win::{
+    Finished, OverlaySession, PinHandler, PinOptions, SystemClipboard, open_pins, run_overlay,
+    show_in_folder, spawn_pin,
+};
 
 /// Inter Variable 4.1 (SIL Open Font License 1.1; see
 /// `assets/Inter-LICENSE.txt`), the overlay's UI font.

@@ -1,12 +1,14 @@
-//! Everything that talks to Win32: the overlay windows, the clipboard and
-//! Show in Folder. All `unsafe` of the crate lives here.
+//! Everything that talks to Win32: the overlay windows, the pins, the
+//! clipboard and Show in Folder. All `unsafe` of the crate lives here.
 
 mod clipboard;
 mod folder;
+mod pin;
 mod window;
 
 pub use clipboard::SystemClipboard;
 pub use folder::show_in_folder;
+pub use pin::{PinHandler, PinOptions, open_pins, spawn_pin};
 pub use window::{Finished, OverlaySession, run_overlay};
 
 use windows_sys::Win32::Foundation::GetLastError;

@@ -6,7 +6,11 @@
 //!
 //! As in 15.0.0 the overlay exports exactly once, after its windows are
 //! gone: [`phramer_overlay::run_overlay`] returns the one outcome, and this
-//! module is its only caller.
+//! module is its only caller. Its other outcomes (Pin, OCR, Open in Editor,
+//! App Launcher) are carried out here too.
+//!
+//! A capture asked for by `phramer-cli` carries a [`Reply`]: what 15.0.0
+//! printed to the console goes back through it, then the exit code.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -14,20 +18,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use phramer_capture::{
-    CaptureError, CaptureTarget, LocalRect, Monitor, PhysicalPoint, RegionMode, choose_target,
-    cursor_position, enumerate_monitors, grab_monitor, grab_virtual_desktop, monitor_at_or_primary,
+    CaptureError, CaptureTarget, LocalRect, Monitor, PhysicalPoint, PhysicalRect, RegionMode,
+    choose_target, cursor_position, enumerate_monitors, grab_monitor, grab_virtual_desktop,
+    monitor_at_or_primary,
 };
 use phramer_core::config::{CaptureRegionMode, Settings};
 use phramer_overlay::{
-    BUNDLED_FONT, CaptureTasks, CapturedImage, ExportAction, ExportContext, ExportReport,
-    LocalTime, OverlayConfig, OverlayError, OverlaySession, SaveTarget, SystemClipboard, Theme,
-    export, run_overlay,
+    BUNDLED_FONT, CaptureTasks, CapturedImage, DeferredAction, ExportAction, ExportContext,
+    ExportReport, LocalTime, Notice, OverlayConfig, OverlayError, OverlaySession, PinHandler,
+    PinOptions, PinRequest, SaveTarget, SystemClipboard, Theme, export, run_overlay, spawn_pin,
 };
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::cli::{InitialSelection, Rect, SaveTo, Tasks};
 use crate::daemon::DaemonState;
-use crate::{notify, settings, tray};
+use crate::reply::{EXIT_OK, Reply};
+use crate::{handoff, notify, settings, tray};
 
 /// Set while an overlay is open: like 15.0.0's single `CaptureWidget`, a
 /// second one is refused.
@@ -48,11 +54,16 @@ enum CaptureFailure {
     NoSuchScreen,
 }
 
+/// `Flameshot::exportCapture`'s notice for `screen --pin` and `full --pin`.
+const PINNED: &str = "Full screen screenshot pinned to screen";
+
 /// How a capture ended, for the main thread.
 enum Delivery {
     Exported(ExportReport),
     /// Cancelled, or refused (`captureFailed`).
     Aborted,
+    /// Open in Editor: the capture, saved for the editor.
+    Editor(PathBuf),
 }
 
 /// Which monitor the overlay opens on.
@@ -79,26 +90,35 @@ pub(crate) fn last_saved() -> Option<PathBuf> {
 }
 
 /// Opens the overlay.
-pub(crate) fn overlay<R: Runtime>(app: &AppHandle<R>, plan: OverlayPlan) {
+pub(crate) fn overlay<R: Runtime>(app: &AppHandle<R>, plan: OverlayPlan, reply: Option<Reply>) {
     let requested_at = Instant::now();
     if OVERLAY_OPEN.swap(true, Ordering::SeqCst) {
         log::warn!("a capture is already open");
+        drop(reply);
         deliver(app, Delivery::Aborted);
         return;
     }
     let delay = plan.delay_ms;
     // Colours and tool sizes picked on the overlay are saved here
     let settings_path = app.state::<DaemonState>().settings_path.clone();
-    let started = spawn(app, "capture-overlay", delay, move |settings, requested| {
-        // Reopened for the next capture however this one ends
-        let _open = OverlayOpen;
-        run_gui(
-            settings,
-            plan,
-            requested.unwrap_or(requested_at),
-            settings_path,
-        )
-    });
+    let handle = app.clone();
+    let started = spawn(
+        app,
+        "capture-overlay",
+        delay,
+        reply,
+        move |settings, requested| {
+            // Reopened for the next capture however this one ends
+            let _open = OverlayOpen;
+            run_gui(
+                &handle,
+                settings,
+                plan,
+                requested.unwrap_or(requested_at),
+                settings_path,
+            )
+        },
+    );
     if !started {
         OVERLAY_OPEN.store(false, Ordering::SeqCst);
     }
@@ -120,37 +140,49 @@ pub(crate) fn screen<R: Runtime>(
     monitor: Option<u32>,
     region: Option<Rect>,
     tasks: Tasks,
+    reply: Option<Reply>,
 ) {
-    spawn(app, "capture-screen", delay_ms, move |settings, _| {
-        let monitors = enumerate_monitors()?;
-        let index = match monitor {
-            Some(number) => number as usize,
-            None => under_cursor(&monitors),
-        };
-        let target = monitors.get(index).ok_or(CaptureFailure::NoSuchScreen)?;
-        let frame = grab_monitor(target)?;
-        let whole = LocalRect::new(0, 0, target.bounds().width, target.bounds().height);
-        let region = match region {
-            Some(rect) => LocalRect::new(rect.x, rect.y, rect.width, rect.height)
-                .intersection(&whole)
-                .unwrap_or(whole),
-            None => whole,
-        };
-        let image = crop(frame.bgra(), frame.width(), region);
-        Ok(run_export(
-            &settings,
-            &image,
-            target.rect_to_physical(region),
-            ExportAction::Accept,
-            &tasks,
-        ))
-    });
+    let handle = app.clone();
+    spawn(
+        app,
+        "capture-screen",
+        delay_ms,
+        reply,
+        move |settings, _| {
+            let monitors = enumerate_monitors()?;
+            let index = match monitor {
+                Some(number) => number as usize,
+                None => under_cursor(&monitors),
+            };
+            let target = monitors.get(index).ok_or(CaptureFailure::NoSuchScreen)?;
+            let frame = grab_monitor(target)?;
+            let whole = LocalRect::new(0, 0, target.bounds().width, target.bounds().height);
+            let region = match region {
+                Some(rect) => LocalRect::new(rect.x, rect.y, rect.width, rect.height)
+                    .intersection(&whole)
+                    .unwrap_or(whole),
+                None => whole,
+            };
+            let image = crop(frame.bgra(), frame.width(), region);
+            let geometry = target.rect_to_physical(region);
+            let delivery = run_export(&settings, &image, geometry, ExportAction::Accept, &tasks);
+            Ok(pin_requested(
+                &handle, &settings, &tasks, image, geometry, delivery,
+            ))
+        },
+    );
 }
 
 /// `Flameshot::full`: every monitor in one image the size of the virtual
 /// desktop.
-pub(crate) fn full<R: Runtime>(app: &AppHandle<R>, delay_ms: u32, tasks: Tasks) {
-    spawn(app, "capture-full", delay_ms, move |settings, _| {
+pub(crate) fn full<R: Runtime>(
+    app: &AppHandle<R>,
+    delay_ms: u32,
+    tasks: Tasks,
+    reply: Option<Reply>,
+) {
+    let handle = app.clone();
+    spawn(app, "capture-full", delay_ms, reply, move |settings, _| {
         let monitors = enumerate_monitors()?;
         let frame = grab_virtual_desktop(&monitors)?;
         let geometry = frame.bounds();
@@ -159,23 +191,94 @@ pub(crate) fn full<R: Runtime>(app: &AppHandle<R>, delay_ms: u32, tasks: Tasks) 
             height: frame.height(),
             bgra: frame.into_bgra(),
         };
-        Ok(run_export(
-            &settings,
-            &image,
-            geometry,
-            ExportAction::Accept,
-            &tasks,
+        let delivery = run_export(&settings, &image, geometry, ExportAction::Accept, &tasks);
+        Ok(pin_requested(
+            &handle, &settings, &tasks, image, geometry, delivery,
         ))
     });
 }
 
+/// `screen --pin`, `full --pin`: pinned after the export, with
+/// `exportCapture`'s notice.
+fn pin_requested<R: Runtime>(
+    app: &AppHandle<R>,
+    settings: &Settings,
+    tasks: &Tasks,
+    image: CapturedImage,
+    geometry: PhysicalRect,
+    delivery: Delivery,
+) -> Delivery {
+    if !tasks.pin {
+        return delivery;
+    }
+    pin(app, settings, image, geometry);
+    let Delivery::Exported(mut report) = delivery else {
+        return delivery;
+    };
+    log::info!("{PINNED}");
+    report.notices.push(Notice {
+        text: PINNED.to_owned(),
+        path: None,
+        error: false,
+    });
+    Delivery::Exported(report)
+}
+
+/// Pins `image` where it was on the desktop. The pin's menu copies, saves
+/// and opens the editor with the settings of the moment.
+fn pin<R: Runtime>(
+    app: &AppHandle<R>,
+    settings: &Settings,
+    image: CapturedImage,
+    geometry: PhysicalRect,
+) {
+    let rgb = |color: phramer_core::config::Color| (color.r, color.g, color.b);
+    let options = PinOptions {
+        accent: rgb(settings.ui_color()),
+        hover_accent: rgb(settings.contrast_ui_color()),
+        smooth: settings.antialiasing_pin_zoom(),
+    };
+    let settings_path = app.state::<DaemonState>().settings_path.clone();
+    let target = app.clone();
+    let handler: PinHandler = Box::new(move |request, image| {
+        let action = match request {
+            PinRequest::Copy => ExportAction::Copy,
+            PinRequest::Save => ExportAction::Save,
+            PinRequest::OpenInEditor => {
+                let delivery = match handoff::save_for_editor(image) {
+                    Ok(path) => Delivery::Editor(path),
+                    Err(report) => Delivery::Exported(report),
+                };
+                hand_to_main(&target, delivery);
+                return;
+            }
+        };
+        let current = settings::load(&settings_path);
+        let delivery = run_export(&current, image, geometry, action, &Tasks::default());
+        hand_to_main(&target, delivery);
+    });
+    match spawn_pin(image, geometry, options, handler) {
+        Ok(()) => log::info!("capture pinned at {geometry:?}"),
+        Err(error) => log::error!("cannot pin the capture: {error}"),
+    }
+}
+
+/// Hands `delivery` to [`deliver`] on the main thread.
+fn hand_to_main<R: Runtime>(app: &AppHandle<R>, delivery: Delivery) {
+    let main = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || deliver(&main, delivery)) {
+        log::error!("cannot report the capture: {error}");
+    }
+}
+
 /// Runs `work` on a new thread after `delay_ms`, with the current settings
 /// and, after a delay, the time the delay ended. Returns whether the thread
-/// started.
+/// started. `reply` hears how it went.
 fn spawn<R: Runtime>(
     app: &AppHandle<R>,
     name: &str,
     delay_ms: u32,
+    reply: Option<Reply>,
     work: impl FnOnce(Settings, Option<Instant>) -> Result<Delivery, CaptureFailure> + Send + 'static,
 ) -> bool {
     let settings_path = app.state::<DaemonState>().settings_path.clone();
@@ -192,10 +295,10 @@ fn spawn<R: Runtime>(
                 log::error!("capture failed: {error}");
                 Delivery::Aborted
             });
-            let main = target.clone();
-            if let Err(error) = target.run_on_main_thread(move || deliver(&main, delivery)) {
-                log::error!("cannot report the capture: {error}");
+            if let Some(reply) = reply {
+                answer(reply, &delivery);
             }
+            hand_to_main(&target, delivery);
         });
     match spawned {
         Ok(_) => true,
@@ -279,7 +382,26 @@ fn has_tasks(tasks: &Tasks) -> bool {
     tasks.copy || tasks.save.is_some() || tasks.print_raw || tasks.pin || tasks.accept_on_select
 }
 
-fn run_gui(
+/// Tells `phramer-cli` how the capture went: the output, the notices as
+/// 15.0.0's logger printed them, then the exit code.
+fn answer(mut reply: Reply, delivery: &Delivery) {
+    match delivery {
+        Delivery::Exported(report) => {
+            reply.stdout(&report.stdout);
+            for notice in &report.notices {
+                let level = if notice.error { "error" } else { "info" };
+                reply.log_line(level, &notice.text);
+            }
+            reply.finish(EXIT_OK);
+        }
+        Delivery::Editor(_) => reply.finish(EXIT_OK),
+        // Dropping it reports the abort
+        Delivery::Aborted => drop(reply),
+    }
+}
+
+fn run_gui<R: Runtime>(
+    app: &AppHandle<R>,
     settings: Settings,
     plan: OverlayPlan,
     requested_at: Instant,
@@ -313,16 +435,22 @@ fn run_gui(
         requested_at,
         settings_path: Some(settings_path),
     })?;
-    if let phramer_overlay::Outcome::Deferred(deferred) = finished.outcome {
-        // Pin, OCR, the editor and the app launcher come later
-        log::warn!(
-            "{:?}: not implemented yet; the capture is dropped",
-            deferred.action
-        );
-        return Ok(Delivery::Aborted);
+    let (outcome, capture) = (finished.outcome, finished.capture);
+    if let (phramer_overlay::Outcome::Deferred(deferred), Some((image, geometry))) =
+        (outcome, capture.as_ref())
+    {
+        if let Ok(mut last) = LAST_REGION.lock() {
+            *last = Some(deferred.region);
+        }
+        return Ok(deferred_action(
+            app,
+            &settings,
+            deferred.action,
+            image.clone(),
+            *geometry,
+        ));
     }
-    let (phramer_overlay::Outcome::Export(done), Some((image, geometry))) =
-        (finished.outcome, finished.capture)
+    let (phramer_overlay::Outcome::Export(done), Some((image, geometry))) = (outcome, capture)
     else {
         log::info!("capture cancelled");
         return Ok(Delivery::Aborted);
@@ -330,13 +458,35 @@ fn run_gui(
     if let Ok(mut last) = LAST_REGION.lock() {
         *last = Some(done.region);
     }
-    Ok(run_export(
-        &settings,
-        &image,
-        geometry,
-        done.action,
-        &plan.tasks,
-    ))
+    let delivery = run_export(&settings, &image, geometry, done.action, &plan.tasks);
+    // `gui --pin`: on Enter, after the export, as `exportCapture` ordered it
+    if plan.tasks.pin && done.action == ExportAction::Accept {
+        pin(app, &settings, image, geometry);
+    }
+    Ok(delivery)
+}
+
+/// The overlay's Pin, OCR, Open in Editor and App Launcher buttons.
+fn deferred_action<R: Runtime>(
+    app: &AppHandle<R>,
+    settings: &Settings,
+    action: DeferredAction,
+    image: CapturedImage,
+    geometry: PhysicalRect,
+) -> Delivery {
+    log::info!("{action:?}: {}x{}", image.width, image.height);
+    match action {
+        DeferredAction::Pin => {
+            pin(app, settings, image, geometry);
+            Delivery::Exported(ExportReport::default())
+        }
+        DeferredAction::Ocr => Delivery::Exported(handoff::read_text(settings, &image)),
+        DeferredAction::OpenInEditor => match handoff::save_for_editor(&image) {
+            Ok(path) => Delivery::Editor(path),
+            Err(report) => Delivery::Exported(report),
+        },
+        DeferredAction::OpenWith => Delivery::Exported(handoff::open_with(settings, &image)),
+    }
 }
 
 fn crop(frame: &[u8], frame_width: u32, region: LocalRect) -> CapturedImage {
@@ -369,7 +519,7 @@ fn export_tasks(tasks: &Tasks) -> CaptureTasks {
 fn run_export(
     settings: &Settings,
     image: &CapturedImage,
-    geometry: phramer_capture::PhysicalRect,
+    geometry: PhysicalRect,
     action: ExportAction,
     tasks: &Tasks,
 ) -> Delivery {
@@ -400,6 +550,7 @@ fn deliver<R: Runtime>(app: &AppHandle<R>, delivery: Delivery) {
                 notify::capture_message(app, &current, "Screenshot aborted.", None, false);
             }
         }
+        Delivery::Editor(path) => handoff::open_in_editor(app, &path),
         Delivery::Exported(report) => {
             if let Some(saved) = report.saved
                 && let Ok(mut last) = LAST_SAVED.lock()

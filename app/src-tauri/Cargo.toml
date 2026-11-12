@@ -4,6 +4,8 @@ version.workspace = true
 description = "Phramer screenshot tool"
 edition.workspace = true
 license.workspace = true
+# `src/bin/phramer-cli.rs` is the console companion
+default-run = "phramer"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -33,28 +35,51 @@ thiserror = "2"
 log = "0.4"
 # The C++ region syntax is a PCRE search; same leftmost-first captures.
 regex = "1"
+# The update check's release document (already in the tree through Tauri).
+serde_json = "1"
 
 phramer-core = { path = "../../crates/phramer-core" }
 phramer-capture = { path = "../../crates/phramer-capture" }
-# The capture overlay and the export.
+# The capture overlay, the export and pins.
 phramer-overlay = { path = "../../crates/phramer-overlay" }
+# OCR of the overlay's selection.
+phramer-ocr = { path = "../../crates/phramer-ocr" }
 
-# Run value, single-instance lock check, tray balloons.
+# Run value, single-instance lock check, tray balloons, the Open with
+# dialog, phramer-cli's reply pipe, the update check (WinHTTP) and whether
+# Snipping Tool is installed.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Networking_WinHttp",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# Snipping Tool's recorder: Launcher with a target package (WinRT), and
+# the app activation manager as the fallback.
+windows = { version = "0.62", features = [
+    "Foundation",
+    "System",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 
 # tests/smoke.rs lists processes by image path, finds the overlay's monitor
-# in physical pixels and sends the overlay keys.
+# in physical pixels, sends the overlay keys and skips a locked session.
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_StationsAndDesktops",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }

@@ -8,8 +8,9 @@ use tauri::{App, AppHandle, Manager, RunEvent, Runtime};
 
 use crate::cli::{self, Command, ConfigCommand, Parsed, Role};
 use crate::instance::Forwarded;
+use crate::reply::{self, EXIT_OK, Reply};
 use crate::restart::{self, Restart};
-use crate::{actions, hotkeys, settings, startup, tray};
+use crate::{actions, hotkeys, settings, startup, tray, updater};
 
 /// Shared with the actions.
 pub(crate) struct DaemonState {
@@ -91,6 +92,7 @@ fn setup(app: &mut App, settings_path: PathBuf, start: Option<Forwarded>) {
         log::error!("cannot create the tray icon: {error}");
     }
     hotkeys::apply(&handle, &current);
+    updater::start(&handle);
 
     let watcher = handle.clone();
     settings::watch(settings_path, move || {
@@ -121,7 +123,10 @@ fn settings_changed<R: Runtime>(app: &AppHandle<R>) {
 
 /// Arguments from another process (or this one's start command).
 fn receive<R: Runtime>(app: &AppHandle<R>, forwarded: Forwarded) {
-    let args = match cli::classify(&forwarded.args) {
+    let mut args = forwarded.args;
+    // Connected at once, so `phramer-cli` knows the command arrived
+    let reply = reply::take_reply(&mut args).and_then(|name| Reply::connect(&name));
+    let args = match cli::classify(&args) {
         // A second plain start: 15.0.0's second daemon quit silently
         Role::Daemon => return,
         Role::Recording => {
@@ -135,7 +140,7 @@ fn receive<R: Runtime>(app: &AppHandle<R>, forwarded: Forwarded) {
             // Deferred: the sender waits on this call, and the action can
             // open windows and wait on them
             let target = app.clone();
-            if let Err(error) = app.run_on_main_thread(move || dispatch(&target, command)) {
+            if let Err(error) = app.run_on_main_thread(move || dispatch(&target, command, reply)) {
                 log::error!("cannot run forwarded command: {error}");
             }
         }
@@ -143,12 +148,19 @@ fn receive<R: Runtime>(app: &AppHandle<R>, forwarded: Forwarded) {
     }
 }
 
-fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command) {
+fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command, reply: Option<Reply>) {
     log::info!("command: {command:?}");
+    let reply = match command {
+        Command::Gui(request) => return actions::capture_gui_replying(app, request, reply),
+        Command::Screen(request) => return actions::capture_screen(app, request, reply),
+        Command::Full(request) => return actions::capture_full(app, request, reply),
+        _ => reply,
+    };
+    if let Some(reply) = reply {
+        reply.finish(EXIT_OK);
+    }
     match command {
-        Command::Gui(request) => actions::capture_gui(app, request),
-        Command::Screen(request) => actions::capture_screen(app, request),
-        Command::Full(request) => actions::capture_full(app, request),
+        Command::Gui(_) | Command::Screen(_) | Command::Full(_) => {}
         Command::Launcher => actions::open_launcher(app),
         Command::Config(ConfigCommand::Open) => actions::open_configuration(app),
         Command::Config(ConfigCommand::Check) => actions::check_configuration(),
