@@ -1,0 +1,75 @@
+/* Phramer design tokens. Components use these; no raw sizes or colours. */
+:root {
+  --zoom: 1;
+  --px: calc(1px * var(--zoom));
+
+  --space-2: round(calc(2 * var(--px)), 1px);
+  --space-4: round(calc(4 * var(--px)), 1px);
+  --space-6: round(calc(6 * var(--px)), 1px);
+  --space-8: round(calc(8 * var(--px)), 1px);
+  --space-12: round(calc(12 * var(--px)), 1px);
+  --space-16: round(calc(16 * var(--px)), 1px);
+  --space-24: round(calc(24 * var(--px)), 1px);
+  --space-32: round(calc(32 * var(--px)), 1px);
+
+  --radius-4: 4px;
+  --radius-6: 6px;
+  --radius-8: 8px;
+  --radius-12: 12px;
+  --radius-full: 9999px;
+
+  --font-ui: "Inter Variable", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, monospace;
+  --text-11: round(calc(11 * var(--px)), 1px);
+  --text-13: round(calc(13 * var(--px)), 1px);
+  --text-16: round(calc(16 * var(--px)), 1px);
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --hairline: 1px;
+
+  --fg: #16171a;
+  --bg: #f7f7f8;
+  --accent: #e5484d;
+
+  --fg-5: rgb(from var(--fg) r g b / 5%);
+  --fg-10: rgb(from var(--fg) r g b / 10%);
+  --fg-20: rgb(from var(--fg) r g b / 20%);
+  --fg-60: rgb(from var(--fg) r g b / 60%);
+
+  --text-primary: var(--fg);
+  --text-secondary: var(--fg-60);
+  --surface-hover: var(--fg-5);
+  --surface-active: var(--fg-10);
+  --border: var(--fg-10);
+  --focus-ring: 2px solid var(--accent);
+
+  --blur-panel: 24px;
+  --shadow-panel: 0 0 0 var(--hairline) var(--fg-10), 0 8px 24px rgb(0 0 0 / 18%);
+
+  --dur-fast: 100ms;
+  --dur-base: 150ms;
+  --dur-panel: 250ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@media (min-resolution: 1.5dppx) {
+  :root { --hairline: 0.5px; }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #ededef;
+    --bg: #18191b;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-panel: 0ms;
+  }
+}
