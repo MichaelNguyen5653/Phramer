@@ -1,11 +1,13 @@
 <#
 .SYNOPSIS
-    Builds the Microsoft Store MSIX package from a `cmake --install` tree.
+    Builds the Microsoft Store MSIX package from the Store build's executables.
 
 .DESCRIPTION
-    Expects a Release build configured with
-        "-DPHRAMER_STORE_BUILD=ON" -DUSE_PORTABLE_CONFIG=OFF -DCMAKE_BUILD_TYPE=Release
-    and installed with `cmake --install <build> --config Release --prefix <dir>`.
+    Expects -InstallDir to hold phramer.exe and phramer-cli.exe from the
+    `store` feature build, made from app\ with
+        npm run tauri build -- --no-bundle --features store
+    (target\release). Only those two files are packed. They link the C
+    runtime statically (tauri-build), so the package carries no runtime DLLs.
 
     The package is left unsigned: the Store re-signs every package it
     certifies. For a sideload test, sign a copy with a certificate whose
@@ -48,10 +50,10 @@ if ([int]$Matches[1] -eq 0) { throw 'The major version must not be 0' }
 
 $here = $PSScriptRoot
 $repo = (Resolve-Path (Join-Path $here '..\..')).Path
-$bin = Join-Path $InstallDir 'bin'
-foreach ($exe in 'phramer.exe', 'phramer-cli.exe') {
-    if (-not (Test-Path (Join-Path $bin $exe))) {
-        throw "$exe not found in $bin; run cmake --install first"
+$executables = 'phramer.exe', 'phramer-cli.exe'
+foreach ($exe in $executables) {
+    if (-not (Test-Path (Join-Path $InstallDir $exe))) {
+        throw "$exe not found in $InstallDir; build with --features store first"
     }
 }
 
@@ -60,41 +62,7 @@ $OutDir = (Resolve-Path $OutDir).Path
 $layout = Join-Path $OutDir "layout-$Variant"
 if (Test-Path $layout) { Remove-Item -Recurse -Force $layout }
 New-Item -ItemType Directory -Path $layout | Out-Null
-Copy-Item -Path (Join-Path $bin '*') -Destination $layout -Recurse
-
-# windeployqt --compiler-runtime can leave the redistributable's installer
-# behind. A package carries the runtime DLLs themselves, since nothing may be
-# installed system-wide from inside it.
-Get-ChildItem $layout -Recurse -Filter 'vc_redist*.exe' | Remove-Item -Force
-
-$runtime = 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'
-$missing = @($runtime | Where-Object { -not (Test-Path (Join-Path $layout $_)) })
-if ($missing.Count -gt 0) {
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    $vs = & $vswhere -latest -property installationPath
-    $crt = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT') -Directory |
-        Sort-Object FullName | Select-Object -Last 1
-    if (-not $crt) { throw 'Could not find the MSVC runtime redistributable' }
-    Write-Host "Copying the C++ runtime from $($crt.FullName)"
-    Copy-Item (Join-Path $crt.FullName '*.dll') $layout
-}
-foreach ($dll in $runtime) {
-    if (-not (Test-Path (Join-Path $layout $dll))) { throw "$dll is missing from the package" }
-}
-
-# What certification rejects outright: debug binaries and signing material
-$debugBinaries = @(Get-ChildItem $layout -Recurse -File | Where-Object {
-        $_.Name -in 'Qt6Cored.dll', 'Qt6Guid.dll', 'Qt6Widgetsd.dll',
-        'msvcp140d.dll', 'vcruntime140d.dll', 'ucrtbased.dll'
-    })
-if ($debugBinaries.Count -gt 0) {
-    throw "Debug binaries in the package (configure with -DCMAKE_BUILD_TYPE=Release): $($debugBinaries.Name -join ', ')"
-}
-$signingFiles = @(Get-ChildItem $layout -Recurse -File -Include '*.pfx', '*.snk', '*.p12')
-if ($signingFiles.Count -gt 0) {
-    throw "Signing material in the package: $($signingFiles.Name -join ', ')"
-}
-Get-ChildItem $layout -Recurse -Filter '*.pdb' | Remove-Item -Force
+foreach ($exe in $executables) { Copy-Item (Join-Path $InstallDir $exe) $layout }
 
 Copy-Item -Path (Join-Path $here 'Assets') -Destination (Join-Path $layout 'Assets') -Recurse
 Copy-Item (Join-Path $repo 'packaging\win-installer\LICENSE\GPL-3.0.txt') (Join-Path $layout 'GPL-3.0.txt')
