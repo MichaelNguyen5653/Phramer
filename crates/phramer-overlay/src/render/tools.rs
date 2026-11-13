@@ -22,7 +22,7 @@ use crate::state::{OverlayState, ShapeKind, ShapeOption};
 const ICON: f32 = SPACE_16;
 
 /// An object's colour for the BGRA canvas.
-fn ink(color: InkColor, alpha: f32) -> Color {
+pub(super) fn ink(color: InkColor, alpha: f32) -> Color {
     bgra_color(
         (color.r, color.g, color.b),
         alpha * f32::from(color.a) / 255.0,
@@ -30,7 +30,7 @@ fn ink(color: InkColor, alpha: f32) -> Color {
 }
 
 /// `cubic-bezier(x1, y1, x2, y2)` at progress `t`, as CSS evaluates it.
-fn ease((x1, y1, x2, y2): (f32, f32, f32, f32), t: f32) -> f32 {
+pub(super) fn ease((x1, y1, x2, y2): (f32, f32, f32, f32), t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     let curve = |a: f32, b: f32, s: f32| {
         let u = 1.0 - s;
@@ -51,7 +51,7 @@ fn ease((x1, y1, x2, y2): (f32, f32, f32, f32), t: f32) -> f32 {
 
 /// A disc of hues: angle is the hue, distance the saturation, at full
 /// value; its edge anti-aliased over what is under it.
-fn hue_disc(canvas: &mut PixmapMut<'_>, cx: f32, cy: f32, radius: f32) {
+pub(super) fn hue_disc(canvas: &mut PixmapMut<'_>, cx: f32, cy: f32, radius: f32) {
     let (width, height) = (canvas.width() as i32, canvas.height() as i32);
     let data = canvas.data_mut();
     let left = ((cx - radius).floor() as i32).max(0);
@@ -83,7 +83,7 @@ fn hue_disc(canvas: &mut PixmapMut<'_>, cx: f32, cy: f32, radius: f32) {
 
 impl Mapping<'_> {
     /// A logical rectangle in canvas pixels, unclipped: (x, y, w, h).
-    fn rect(&self, rect: LogicalRect) -> (f32, f32, f32, f32) {
+    pub(super) fn rect(&self, rect: LogicalRect) -> (f32, f32, f32, f32) {
         let physical = self.monitor.logical_rect_to_physical(rect);
         let origin = self.monitor.bounds();
         (
@@ -94,7 +94,7 @@ impl Mapping<'_> {
         )
     }
 
-    fn point(&self, point: LogicalPoint) -> (f32, f32) {
+    pub(super) fn point(&self, point: LogicalPoint) -> (f32, f32) {
         let physical = self.monitor.logical_point_to_physical(point);
         let origin = self.monitor.bounds();
         (

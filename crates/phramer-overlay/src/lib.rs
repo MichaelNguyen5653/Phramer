@@ -45,9 +45,11 @@ pub use pin::{
 pub use render::{FrameView, RgbaImage, Theme, render};
 pub use state::tools::{ButtonInfo, MAX_TOOL_SIZE, TOOLBAR_ORDER, button_info, is_tool};
 pub use state::{
-    CursorShape, Deferred, DeferredAction, Effect, Event, Export, ExportAction, GeometryLabel,
-    Millis, Outcome, OverlayConfig, OverlayState, SettingChange, ShapeKind, ShapeOption,
-    ToolSettings, ToolbarButton, WheelView,
+    CursorShape, Deferred, DeferredAction, Effect, Event, Export, ExportAction, GRAB_KEYS,
+    GeometryLabel, GrabView, MagnifierShape, MagnifierView, Millis, Outcome, OverlayConfig,
+    OverlayState, PanelControl, PanelLayout, PanelRow, Pixels, SettingChange, ShapeKind,
+    ShapeOption, SidePanelView, ToolSettings, ToolbarButton, WheelView, Zoom, disc_position,
+    side_panel_layout, side_panel_tab,
 };
 #[cfg(windows)]
 pub use win::{

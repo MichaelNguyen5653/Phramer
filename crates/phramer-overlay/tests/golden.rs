@@ -6,9 +6,11 @@
 use std::path::{Path, PathBuf};
 
 use phramer_capture::{LogicalPoint, Monitor, MonitorId, PhysicalRect};
+use std::sync::Arc;
+
 use phramer_overlay::{
-    BUNDLED_FONT, Event, FrameView, Key, Modifiers, OverlayConfig, OverlayState, PointerButton,
-    RgbaImage, Theme, render,
+    BUNDLED_FONT, Event, FrameView, Key, Modifiers, OverlayConfig, OverlayState, Pixels,
+    PointerButton, RgbaImage, Theme, render,
 };
 
 const UPDATE_ENV: &str = "PHRAMER_UPDATE_GOLDEN";
@@ -17,8 +19,14 @@ const UPDATE_ENV: &str = "PHRAMER_UPDATE_GOLDEN";
 /// title bars and text-like lines, a taskbar. Returns BGRA pixels and the
 /// windows' rectangles (physical).
 fn desktop(scale: f64) -> (u32, u32, Vec<u8>, Vec<PhysicalRect>) {
+    desktop_of_height(scale, 400)
+}
+
+/// [`desktop`], `logical_height` tall (the taskbar stays at the bottom).
+fn desktop_of_height(scale: f64, logical_height: i32) -> (u32, u32, Vec<u8>, Vec<PhysicalRect>) {
     let s = |v: i32| (f64::from(v) * scale).round() as i32;
-    let (width, height) = (s(640) as u32, s(400) as u32);
+    let (width, height) = (s(640) as u32, s(logical_height) as u32);
+    let taskbar = logical_height - 30;
     let mut bgra = Vec::with_capacity(width as usize * height as usize * 4);
     for y in 0..height {
         for x in 0..width {
@@ -63,14 +71,14 @@ fn desktop(scale: f64) -> (u32, u32, Vec<u8>, Vec<PhysicalRect>) {
         );
     }
     // Taskbar
-    fill(0, 370, 640, 30, (24, 26, 32));
+    fill(0, taskbar, 640, 30, (24, 26, 32));
     for icon in 0..5 {
-        fill(240 + icon * 34, 376, 18, 18, (120, 160, 230));
+        fill(240 + icon * 34, taskbar + 6, 18, 18, (120, 160, 230));
     }
     let windows = vec![
         PhysicalRect::new(s(280), s(140), s(230), s(190)),
         PhysicalRect::new(s(60), s(50), s(260), s(170)),
-        PhysicalRect::new(0, s(370), s(640), s(30)),
+        PhysicalRect::new(0, s(taskbar), s(640), s(30)),
     ];
     (width, height, bgra, windows)
 }
@@ -521,4 +529,139 @@ fn shape_menu_open() {
     assert_eq!(state.shape_menu().len(), 6);
     pointer(&mut state, "move", 600, 360);
     check("shape_menu", &draw(&state, 0, width, height, &bgra));
+}
+
+// --- Side panel, magnifier, colour grab --------------------------------------
+
+/// [`with_toolbar`] on a desktop 600 logical pixels tall, so the side panel
+/// fits with its list, with the screenshot given for colour grab.
+fn tall_with_toolbar(
+    scale: f64,
+    dpi: u32,
+    config: OverlayConfig,
+) -> (u32, u32, Vec<u8>, OverlayState) {
+    let (width, height, bgra, windows) = desktop_of_height(scale, 600);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, dpi)], 0, windows, config).expect("state");
+    state.set_pixels(
+        0,
+        Pixels::new(width, height, Arc::new(bgra.clone())).expect("pixels"),
+    );
+    focused(&mut state);
+    drag(&mut state, (120, 60), (420, 300));
+    pointer(&mut state, "move", 300, 200);
+    state.handle(Event::Tick, 10_000);
+    (width, height, bgra, state)
+}
+
+#[test]
+fn side_panel_open() {
+    let (width, height, bgra, mut state) = tall_with_toolbar(1.0, 96, no_help());
+    key(&mut state, Key::Char('r'), Modifiers::NONE);
+    drag(&mut state, (300, 120), (380, 180));
+    key(&mut state, Key::Char('t'), Modifiers::NONE);
+    pointer(&mut state, "down", 150, 230);
+    pointer(&mut state, "up", 150, 230);
+    for c in "Phramer 16".chars() {
+        state.handle(Event::Text(c), 10);
+    }
+    key(&mut state, Key::Escape, Modifiers::NONE);
+    key(&mut state, Key::Escape, Modifiers::NONE);
+    // Select the rectangle, open the panel, let it fade in
+    pointer(&mut state, "down", 340, 150);
+    pointer(&mut state, "up", 340, 150);
+    assert!(state.selected_object().is_some());
+    state.handle(
+        Event::Key {
+            key: Key::Space,
+            modifiers: Modifiers::NONE,
+        },
+        20_000,
+    );
+    pointer(&mut state, "move", 600, 560);
+    state.handle(Event::Tick, 21_000);
+    assert!(
+        state
+            .side_panel()
+            .is_some_and(|panel| panel.progress >= 1.0)
+    );
+    check("side_panel", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn magnifier_round_while_selecting() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let config = OverlayConfig {
+        show_magnifier: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, config).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 120, 80);
+    pointer(&mut state, "drag", 250, 150);
+    pointer(&mut state, "drag", 281, 141);
+    assert!(state.magnifier().is_some());
+    check("magnifier_round", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn magnifier_square_at_150_percent_by_the_edge() {
+    let (width, height, bgra, windows) = desktop(1.5);
+    let config = OverlayConfig {
+        show_magnifier: true,
+        square_magnifier: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 144)], 0, windows, config).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 300, 200);
+    pointer(&mut state, "drag", 500, 300);
+    // By the bottom right corner: the magnifier goes above and to the left
+    pointer(&mut state, "drag", 636, 378);
+    assert!(state.magnifier().is_some());
+    check("magnifier_square", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn colour_grab_preview() {
+    let (width, height, bgra, mut state) = tall_with_toolbar(1.0, 96, no_help());
+    key(
+        &mut state,
+        Key::Char('g'),
+        Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        },
+    );
+    assert!(state.is_grabbing_color());
+    pointer(&mut state, "move", 455, 158);
+    check("color_grab", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn colour_grab_held_click_at_150_percent() {
+    let (width, height, bgra, mut state) = tall_with_toolbar(1.5, 144, no_help());
+    key(
+        &mut state,
+        Key::Char('g'),
+        Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        },
+    );
+    pointer(&mut state, "move", 300, 141);
+    state.handle(
+        Event::PointerDown {
+            monitor: 0,
+            at: phramer_capture::LogicalPoint::new(300, 141),
+            button: PointerButton::Left,
+            modifiers: Modifiers::NONE,
+        },
+        30_000,
+    );
+    state.handle(Event::Tick, 30_300);
+    assert!(state.color_grab().is_some_and(|grab| grab.precise));
+    check("color_grab_precise", &draw(&state, 0, width, height, &bgra));
 }

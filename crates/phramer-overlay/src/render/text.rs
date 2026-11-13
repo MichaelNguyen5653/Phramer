@@ -91,6 +91,38 @@ impl<'a> Font<'a> {
         weight: Weight,
         paint: &Paint<'_>,
     ) {
+        if let Some(path) = self.outline(text, x, baseline, size, weight) {
+            canvas.fill_path(&path, paint, FillRule::Winding, Transform::identity(), None);
+        }
+    }
+
+    /// Draws `text` reading from bottom to top, its baseline's lower end at
+    /// (x, y): the glyphs stand to the left of the baseline.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_vertical(
+        &mut self,
+        canvas: &mut PixmapMut<'_>,
+        text: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        weight: Weight,
+        paint: &Paint<'_>,
+    ) {
+        if let Some(path) = self.outline(text, 0.0, 0.0, size, weight) {
+            let transform = Transform::from_rotate(-90.0).post_translate(x, y);
+            canvas.fill_path(&path, paint, FillRule::Winding, transform, None);
+        }
+    }
+
+    fn outline(
+        &mut self,
+        text: &str,
+        x: f32,
+        baseline: f32,
+        size: f32,
+        weight: Weight,
+    ) -> Option<tiny_skia::Path> {
         self.set_weight(weight);
         let scale = self.scale(size);
         let mut sink = GlyphSink {
@@ -105,9 +137,7 @@ impl<'a> Font<'a> {
             let _ = self.face.outline_glyph(glyph, &mut sink);
             sink.x += f32::from(self.face.glyph_hor_advance(glyph).unwrap_or(0)) * scale;
         }
-        if let Some(path) = sink.builder.finish() {
-            canvas.fill_path(&path, paint, FillRule::Winding, Transform::identity(), None);
-        }
+        sink.builder.finish()
     }
 }
 

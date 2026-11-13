@@ -96,7 +96,8 @@ Lucide
 ------
 Lucide 0.468.0 (lucide-static), the capture overlay's toolbar icons, vendored
 as the original SVG files in crates/phramer-overlay/assets/icons/. The full
-licence is in crates/phramer-overlay/assets/icons/LICENSE.
+licence is in crates/phramer-overlay/assets/icons/LICENSE. The pipette and trash-2 icons there
+come from lucide-react 1.72.0 (same ISC licence; see Lucide React below).
 
 ISC License
 

@@ -255,7 +255,7 @@ fn translated(shape: &Shape, dx: i32, dy: i32) -> Shape {
 impl OverlayState {
     // --- Geometry ------------------------------------------------------------
 
-    fn scale(&self) -> f64 {
+    pub(crate) fn scale(&self) -> f64 {
         self.monitors[self.active].scale()
     }
 
@@ -528,7 +528,8 @@ impl OverlayState {
         let recolouring = self
             .tools
             .wheel
-            .is_some_and(|wheel| wheel.hovered.is_some());
+            .is_some_and(|wheel| wheel.hovered.is_some())
+            || self.recolouring_on_panel();
         (self.tools.moving.is_some() || recolouring).then_some(selected)
     }
 
@@ -542,7 +543,7 @@ impl OverlayState {
             let (dx, dy) = self.tools.moving.unwrap_or((0, 0));
             previews.push(Annotation {
                 id: PREVIEW_ID,
-                color: if self.tools.wheel.is_some() {
+                color: if self.tools.wheel.is_some() || self.recolouring_on_panel() {
                     self.tools.color
                 } else {
                     object.color
@@ -741,7 +742,7 @@ impl OverlayState {
         modifiers: Modifiers,
         effects: &mut Effects,
     ) {
-        let point = self.image_point(at);
+        let point = self.image_point(self.snapped(at));
         self.tools.selected = None;
         if tool == ButtonType::Text {
             let size = self.object_size(ToolKind::Text, self.tools.size);
@@ -774,7 +775,7 @@ impl OverlayState {
     /// The drawing follows the pointer; Shift keeps lines to 45 degrees and
     /// boxes square (`AbstractTwoPointTool`).
     fn draw_to(&mut self, at: LogicalPoint, modifiers: Modifiers, effects: &mut Effects) {
-        let point = self.image_point(at);
+        let point = self.image_point(self.snapped(at));
         let Some(tool) = self.tools.active else {
             return;
         };
@@ -988,6 +989,12 @@ impl OverlayState {
     /// `CaptureWidget::setToolSize`: clamps, applies to the selected object
     /// and what is being drawn, and shows the notice.
     pub(crate) fn set_size(&mut self, size: u32, effects: &mut Effects) {
+        self.apply_size(size, effects);
+        self.tools.notice_until = Some(self.now + SIZE_NOTICE_MS);
+    }
+
+    /// A new tool size without the notice: the side panel's slider.
+    pub(crate) fn apply_size(&mut self, size: u32, effects: &mut Effects) {
         let size = size.clamp(1, MAX_TOOL_SIZE);
         self.tools.size = size;
         if let Some(id) = self.tools.selected
@@ -1014,7 +1021,6 @@ impl OverlayState {
         {
             entry.1 = size;
         }
-        self.tools.notice_until = Some(self.now + SIZE_NOTICE_MS);
         effects.redraw(self.active);
     }
 
@@ -1215,7 +1221,7 @@ impl OverlayState {
     }
 
     /// Esc on the wheel: the colour from before it opened.
-    fn wheel_cancel(&mut self, effects: &mut Effects) {
+    pub(crate) fn wheel_cancel(&mut self, effects: &mut Effects) {
         if let Some(wheel) = self.tools.wheel.take() {
             self.tools.color = wheel.original;
             effects.redraw(self.active);
@@ -1238,6 +1244,8 @@ impl OverlayState {
             self.tools.active = None;
         } else if self.tools.selected.is_some() {
             self.tools.selected = None;
+        } else if self.side_panel_open() {
+            self.close_panel(effects);
         } else {
             return false;
         }
@@ -1349,8 +1357,30 @@ impl OverlayState {
     }
 
     pub(crate) fn next_frame(&self) -> Option<Millis> {
-        self.animating()
-            .then(|| (self.now + FRAME_MS).min(self.tools.hover_since + HOVER_FADE_MS))
+        let hover = self
+            .animating()
+            .then(|| (self.now + FRAME_MS).min(self.tools.hover_since + HOVER_FADE_MS));
+        let panel = self.panel_animating().then_some(self.now + FRAME_MS);
+        hover.into_iter().chain(panel).min()
+    }
+
+    /// The selected object takes the colour being dragged on the side
+    /// panel's disc, as a preview.
+    fn recolouring_on_panel(&self) -> bool {
+        self.panel.held == Some(super::panel::PanelControl::Disc)
+    }
+
+    /// `snapToGrid`: with Display grid on, where a tool draws goes to the
+    /// nearest grid point.
+    fn snapped(&self, at: LogicalPoint) -> LogicalPoint {
+        match self.grid() {
+            Some(size) => {
+                let size = f64::from(size);
+                let snap = |v: i32| ((f64::from(v) / size).round() * size) as i32;
+                LogicalPoint::new(snap(at.x), snap(at.y))
+            }
+            None => at,
+        }
     }
 }
 

@@ -47,7 +47,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SW_SHOW, SW_SHOWNOACTIVATE, SetCursor, SetForegroundWindow, SetTimer, ShowWindow,
     SystemParametersInfoW, TranslateMessage, WM_ACTIVATEAPP, WM_APP, WM_CHAR, WM_CLOSE,
     WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCHAR,
     WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -58,7 +58,7 @@ use crate::input::{Key, Modifiers, PointerButton};
 use crate::render::text::Font;
 use crate::render::{FrameView, Painter, Theme};
 use crate::state::{
-    CursorShape, Effect, Event, Millis, Outcome, OverlayConfig, OverlayState, SettingChange,
+    CursorShape, Effect, Event, Millis, Outcome, OverlayConfig, OverlayState, Pixels, SettingChange,
 };
 
 const CLASS_NAME: &str = "PhramerCaptureOverlay";
@@ -170,7 +170,10 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
             0,
         ));
     }
-    with_shell(|shell| shell.state = Some(state));
+    with_shell(|shell| {
+        shell.state = Some(state);
+        shell.share_pixels(active);
+    });
     run_effects(effects);
     let painted = with_shell(|shell| shell.paint_pending(active)).unwrap_or(Ok(()));
     painted?;
@@ -241,7 +244,7 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
                 .and_then(|slot| slot.frame.take());
             match (frame, state.monitors().get(index)) {
                 (Some(frame), Some(monitor)) => Some((
-                    capture_region(state.document(), &frame, region, font)?,
+                    capture_region(state.document(), &frame.0, region, font)?,
                     monitor.rect_to_physical(region),
                 )),
                 _ => None,
@@ -503,10 +506,19 @@ impl Drop for OverlayWindow {
     }
 }
 
+/// A monitor's screenshot, shared with the state for colour grab.
+struct SharedFrame(Frame);
+
+impl AsRef<[u8]> for SharedFrame {
+    fn as_ref(&self) -> &[u8] {
+        self.0.bgra()
+    }
+}
+
 /// One monitor's window and what it shows.
 struct Slot {
     hwnd: HWND,
-    frame: Option<Frame>,
+    frame: Option<Arc<SharedFrame>>,
     painter: Option<Painter>,
     buffer: Vec<u8>,
     dirty: bool,
@@ -594,11 +606,27 @@ impl Shell {
         if let Some(slot) = self.slots.get_mut(monitor) {
             *slot = Some(Slot {
                 hwnd,
-                frame,
+                frame: frame.map(|frame| Arc::new(SharedFrame(frame))),
                 painter,
                 buffer,
                 dirty: true,
             });
+        }
+        self.share_pixels(monitor);
+    }
+
+    /// Hands a monitor's screenshot to the state, for colour grab.
+    fn share_pixels(&mut self, monitor: usize) {
+        let Some(Some(slot)) = self.slots.get(monitor) else {
+            return;
+        };
+        let (Some(frame), Some(state)) = (slot.frame.as_ref(), self.state.as_mut()) else {
+            return;
+        };
+        let shared: Arc<dyn AsRef<[u8]> + Send + Sync> = frame.clone();
+        match Pixels::new(frame.0.width(), frame.0.height(), shared) {
+            Ok(pixels) => state.set_pixels(monitor, pixels),
+            Err(error) => log::warn!("colour grab unavailable on monitor {monitor}: {error}"),
         }
     }
 
@@ -630,7 +658,7 @@ impl Shell {
         painter.paint(
             state,
             monitor,
-            FrameView::from_frame(frame),
+            FrameView::from_frame(&frame.0),
             &self.theme,
             &mut font,
             &mut slot.buffer,
@@ -919,6 +947,8 @@ fn handle_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> O
             // WM_CLOSE (a cancel, below)
             (message == WM_KEYDOWN).then_some(0)
         }
+        // Alt+G and the like were handled as keys: no menu, no beep
+        WM_SYSCHAR => Some(0),
         // Alt+F4 and the like: a cancel, never a destroyed window
         WM_CLOSE => {
             let effects = with_shell(|shell| {
@@ -1042,7 +1072,7 @@ fn paint(hwnd: HWND) {
             log::error!("overlay paint failed: {error}");
         }
         let slot = shell.slots.get(monitor)?.as_ref()?;
-        let frame = slot.frame.as_ref()?;
+        let frame = &slot.frame.as_ref()?.0;
         let (width, height) = (frame.width(), frame.height());
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -1335,6 +1365,77 @@ mod tests {
             "a redraw took {:.1} ms",
             ms(redraw + present)
         );
+    }
+
+    /// A 4K pointer move while a selection is dragged out, without and with
+    /// the magnifier (round and square), and with the side panel open: the
+    /// magnifier draws only its own square, so it adds little.
+    #[test]
+    #[ignore = "timing; run with --release"]
+    fn redraw_a_4k_frame_with_the_magnifier_and_the_side_panel() {
+        let (width, height) = (3840u32, 2160u32);
+        let frame = frame_4k();
+        let view = FrameView::new(width, height, &frame).unwrap();
+        let theme = Theme::default();
+        let mut font = Font::parse(crate::BUNDLED_FONT).unwrap();
+        let mut buffer = vec![0u8; frame.len()];
+        let mut timed = |show_magnifier: bool, square_magnifier: bool, panel: bool| {
+            let config = OverlayConfig {
+                show_help: false,
+                show_magnifier,
+                square_magnifier,
+                ..OverlayConfig::default()
+            };
+            let mut state = OverlayState::new(vec![monitor_4k()], 0, Vec::new(), config).unwrap();
+            state.handle(Event::Focus(true), 0);
+            if panel {
+                state.handle(
+                    Event::Key {
+                        key: Key::Space,
+                        modifiers: Modifiers::NONE,
+                    },
+                    0,
+                );
+            }
+            let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+            pointer(&mut state, "down", 300, 200);
+            pointer(&mut state, "drag", 900, 700);
+            painter
+                .paint(&state, 0, view, &theme, &mut font, &mut buffer)
+                .unwrap();
+            assert_eq!(state.magnifier().is_some(), show_magnifier);
+            assert_eq!(state.side_panel().is_some(), panel);
+            let started = Instant::now();
+            for round in 0..ROUNDS as i32 {
+                pointer(&mut state, "drag", 1000 + round * 37, 800 + round * 23);
+                painter
+                    .paint(&state, 0, view, &theme, &mut font, &mut buffer)
+                    .unwrap();
+            }
+            started.elapsed() / ROUNDS
+        };
+        let plain = timed(false, false, false);
+        let round = timed(true, false, false);
+        let square = timed(true, true, false);
+        let panel = timed(true, false, true);
+        let present = present_time(&buffer, width, height);
+        println!(
+            "4K pointer move while selecting: render {:.1} ms without the magnifier, {:.1} ms \
+             round, {:.1} ms square, {:.1} ms round with the side panel open; \
+             + SetDIBitsToDevice {:.1} ms",
+            ms(plain),
+            ms(round),
+            ms(square),
+            ms(panel),
+            ms(present)
+        );
+        for redraw in [round, square, panel] {
+            assert!(
+                redraw + present < Duration::from_millis(16),
+                "a redraw took {:.1} ms",
+                ms(redraw + present)
+            );
+        }
     }
 
     /// While the overlay follows the cursor, the other monitors get their

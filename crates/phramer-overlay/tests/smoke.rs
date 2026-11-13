@@ -13,11 +13,12 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use phramer_capture::{LocalRect, enumerate_monitors};
+use phramer_capture::{LocalRect, LogicalRect, enumerate_monitors};
 use phramer_core::config::Settings;
 use phramer_overlay::{
     BUNDLED_FONT, CaptureTasks, CapturedImage, ExportAction, ExportContext, Handoff, LocalTime,
     Outcome, OverlayConfig, OverlayError, OverlaySession, SaveTarget, Theme, export, run_overlay,
+    side_panel_layout,
 };
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::StationsAndDesktops::{
@@ -27,7 +28,7 @@ use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN, VK_SPACE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, FindWindowW, GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE,
@@ -378,5 +379,135 @@ fn toolbar_follows_a_selection_while_the_monitors_open() {
     assert!(
         toolbar < TOOLBAR_BUDGET_MS,
         "the toolbar took {toolbar} ms (budget {TOOLBAR_BUDGET_MS} ms)"
+    );
+}
+
+/// The side panel and colour grab, live: Space opens the panel, its Grab
+/// Color button starts grabbing, a click picks a screenshot pixel, which
+/// becomes the draw colour (saved to the settings file) and fills a
+/// rectangle drawn after. Only messages posted to the overlay's own window;
+/// no real input.
+#[test]
+#[ignore = "live: shows the capture overlay"]
+fn side_panel_and_colour_grab() {
+    if !desktop_is_unlocked() {
+        println!("skipped: the session is locked or another desktop has the input");
+        return;
+    }
+    // SAFETY: sets this test process's DPI awareness before any window.
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    let monitors = enumerate_monitors().expect("monitors");
+    let active = monitors
+        .iter()
+        .position(|monitor| monitor.is_primary())
+        .unwrap_or(0);
+    let monitor = monitors[active].clone();
+    let scale = monitor.scale();
+    let (logical_width, logical_height) = monitor.logical_size();
+    let physical = |logical: i32| (f64::from(logical) * scale).round() as i32;
+    let dir = std::env::temp_dir().join(format!("phramer-overlay-grab-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp folder");
+    let settings_path = dir.join("phramer.ini");
+    Settings::default().save(&settings_path).expect("settings");
+    let config = OverlayConfig {
+        show_help: false,
+        has_tasks: true,
+        ..OverlayConfig::default()
+    };
+    let settings_for_overlay = settings_path.clone();
+    let overlay = std::thread::spawn(move || {
+        run_overlay(OverlaySession {
+            monitors,
+            active,
+            config,
+            theme: Theme::default(),
+            font: BUNDLED_FONT,
+            snap_windows: false,
+            requested_at: Instant::now(),
+            settings_path: Some(settings_for_overlay),
+        })
+    });
+    let Some(hwnd) = find_own_overlay(Duration::from_secs(10)) else {
+        let result = overlay.join().expect("overlay thread");
+        match result {
+            Err(OverlayError::Capture(error)) => {
+                println!("skipped: the screen cannot be grabbed here ({error})");
+                return;
+            }
+            other => panic!("no overlay window; run_overlay returned {:?}", other.err()),
+        }
+    };
+    // A selection, then the panel (Space) and its Grab Color button
+    drag(hwnd, (100, 100), (600, 400));
+    key(hwnd, VK_SPACE);
+    let layout = side_panel_layout(LogicalRect::new(0, 0, logical_width, logical_height), 1);
+    let grab = (
+        physical(layout.grab.x + layout.grab.width / 2),
+        physical(layout.grab.y + layout.grab.height / 2),
+    );
+    post(hwnd, WM_MOUSEMOVE, 0, at(grab.0, grab.1));
+    post(
+        hwnd,
+        WM_LBUTTONDOWN,
+        MK_LBUTTON as WPARAM,
+        at(grab.0, grab.1),
+    );
+    post(hwnd, WM_LBUTTONUP, 0, at(grab.0, grab.1));
+    // Pick the pixel at logical (150, 150), inside the selection: a point
+    // that maps to whole physical pixels both ways at any scale
+    let pick = (physical(150), physical(150));
+    post(hwnd, WM_MOUSEMOVE, 0, at(pick.0, pick.1));
+    post(
+        hwnd,
+        WM_LBUTTONDOWN,
+        MK_LBUTTON as WPARAM,
+        at(pick.0, pick.1),
+    );
+    post(hwnd, WM_LBUTTONUP, 0, at(pick.0, pick.1));
+    // The panel came back: Space hides it; then a rectangle in the picked
+    // colour, away from the picked pixel, and Enter
+    key(hwnd, VK_SPACE);
+    key(hwnd, u16::from(b'R'));
+    drag(
+        hwnd,
+        (physical(200), physical(140)),
+        (physical(260), physical(180)),
+    );
+    key(hwnd, VK_RETURN);
+    let finished = match overlay.join().expect("overlay thread") {
+        Ok(finished) => finished,
+        Err(error) => {
+            if let Some(hwnd) = find_own_overlay(Duration::from_millis(100)) {
+                key(hwnd, VK_ESCAPE);
+            }
+            panic!("overlay failed: {error}");
+        }
+    };
+    let Outcome::Export(done) = finished.outcome else {
+        panic!("not exported: {:?}", finished.outcome);
+    };
+    let (image, _) = finished.capture.expect("pixels");
+    let pixel = |x: i32, y: i32| {
+        let at =
+            (((y - done.region.y) as u32 * image.width + (x - done.region.x) as u32) * 4) as usize;
+        [image.bgra[at + 2], image.bgra[at + 1], image.bgra[at]]
+    };
+    // The screenshot's pixel where the click was, and the rectangle's fill
+    let picked = pixel(pick.0, pick.1);
+    let filled = pixel(physical(230), physical(160));
+    let saved = Settings::load(&settings_path)
+        .expect("settings")
+        .draw_color();
+    println!(
+        "monitor at {scale}x: picked #{:02x}{:02x}{:02x} at {pick:?}; rectangle #{:02x}{:02x}{:02x}; \
+         saved drawColor #{:02x}{:02x}{:02x}",
+        picked[0], picked[1], picked[2], filled[0], filled[1], filled[2], saved.r, saved.g, saved.b
+    );
+    std::fs::remove_dir_all(&dir).expect("temp folder removed");
+    assert_eq!(filled, picked, "the rectangle is not in the picked colour");
+    assert_eq!(
+        [saved.r, saved.g, saved.b],
+        picked,
+        "drawColor was not saved"
     );
 }

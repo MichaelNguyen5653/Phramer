@@ -11,6 +11,8 @@
 //! at every DPI.
 
 pub(crate) mod layer;
+mod magnify;
+mod panel;
 pub(crate) mod text;
 mod tools;
 
@@ -168,6 +170,7 @@ pub(crate) struct Painter {
     dim_alpha: u8,
     layer: Layer,
     fonts: FontLibrary,
+    panel: panel::PanelCache,
 }
 
 impl Painter {
@@ -182,6 +185,7 @@ impl Painter {
             dim_alpha: theme.dim_alpha,
             layer: Layer::new(),
             fonts,
+            panel: panel::PanelCache::default(),
         }
     }
 
@@ -338,12 +342,17 @@ impl Painter {
         } else if let Some(window) = hover {
             ui.window_frame(&mut canvas, window, accent);
         }
+        ui.grid(&mut canvas, state, &mapping, selection, theme);
         ui.toolbar(&mut canvas, font, state, &mapping, theme);
         ui.wheel(&mut canvas, state, &mapping, theme);
         ui.size_notice(&mut canvas, font, state);
         if state.help_visible() {
             ui.help(&mut canvas, font, &state.help_rows());
         }
+        ui.side_panel_tab(&mut canvas, font, state, &mapping);
+        ui.side_panel(&mut canvas, font, state, &mapping, theme, &mut self.panel);
+        ui.magnifier(&mut canvas, state, frame, theme);
+        ui.color_grab(&mut canvas, font, state, frame);
         if !state.is_focused() {
             ui.focus_hint(&mut canvas, font);
         }
@@ -613,6 +622,32 @@ impl Ui {
                 &text_paint,
             );
         }
+    }
+
+    /// Where [`Ui::help`] puts the key list: (x, y, w, h).
+    fn help_rect(&self, font: &mut Font<'_>, rows: &[(String, String)]) -> (f32, f32, f32, f32) {
+        let size = self.px(TEXT_13);
+        let metrics = font.metrics(size);
+        let chip_pad = self.px(SPACE_6);
+        let chip_h = metrics.height + 2.0 * self.px(2.0);
+        let row_h = self.px(24.0).max(chip_h);
+        let keys_w = rows
+            .iter()
+            .map(|(keys, _)| font.measure(keys, size, Weight::Semibold).ceil() + 2.0 * chip_pad)
+            .fold(0.0, f32::max);
+        let text_w = rows
+            .iter()
+            .map(|(_, text)| font.measure(text, size, Weight::Regular).ceil())
+            .fold(0.0, f32::max);
+        let (pad_x, pad_y) = (self.px(SPACE_16), self.px(SPACE_12));
+        let w = pad_x + keys_w + self.px(SPACE_12) + text_w + pad_x;
+        let h = pad_y + row_h * rows.len() as f32 + pad_y;
+        (
+            ((self.width - w) / 2.0).round(),
+            ((self.height - h) / 2.0).round(),
+            w,
+            h,
+        )
     }
 
     /// 15.0.0's "lost focus" notice, bottom right.

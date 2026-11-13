@@ -43,6 +43,7 @@ pub const ICONS: &[(&str, &str)] = &[
     ("move", include_str!("../assets/icons/move.svg")),
     ("pencil", include_str!("../assets/icons/pencil.svg")),
     ("pin", include_str!("../assets/icons/pin.svg")),
+    ("pipette", include_str!("../assets/icons/pipette.svg")),
     ("plus", include_str!("../assets/icons/plus.svg")),
     (
         "rectangle-horizontal",
@@ -55,6 +56,7 @@ pub const ICONS: &[(&str, &str)] = &[
     ("slash", include_str!("../assets/icons/slash.svg")),
     ("square", include_str!("../assets/icons/square.svg")),
     ("square-pen", include_str!("../assets/icons/square-pen.svg")),
+    ("trash-2", include_str!("../assets/icons/trash-2.svg")),
     ("type", include_str!("../assets/icons/type.svg")),
     ("undo-2", include_str!("../assets/icons/undo-2.svg")),
     ("x", include_str!("../assets/icons/x.svg")),

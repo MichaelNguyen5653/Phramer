@@ -211,6 +211,10 @@ pub(crate) enum KeyAction {
     CommitTool,
     /// Deletes the selected object (`TYPE_DELETE_CURRENT_TOOL`).
     DeleteTool,
+    /// Shows or hides the side panel (`TYPE_TOGGLE_PANEL`).
+    TogglePanel,
+    /// Picks the draw colour from the screen (`TYPE_GRAB_COLOR`).
+    GrabColor,
 }
 
 /// The key action a toolbar button shares its shortcut with.
@@ -309,6 +313,8 @@ const BOUND_ACTIONS: &[(&str, KeyAction)] = &[
     ),
     ("TYPE_COMMIT_CURRENT_TOOL", KeyAction::CommitTool),
     ("TYPE_DELETE_CURRENT_TOOL", KeyAction::DeleteTool),
+    ("TYPE_TOGGLE_PANEL", KeyAction::TogglePanel),
+    ("TYPE_GRAB_COLOR", KeyAction::GrabColor),
 ];
 
 /// The overlay's key bindings, read from `[Shortcuts]`. Esc is fixed and

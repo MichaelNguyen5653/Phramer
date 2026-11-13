@@ -11,6 +11,8 @@
 //! [`Editor`](phramer_annotate::Editor) with its undo history.
 
 mod annotate;
+mod grab;
+mod panel;
 mod selection;
 pub(crate) mod toolbar;
 pub mod tools;
@@ -23,6 +25,12 @@ use crate::error::OverlayError;
 use crate::input::{Bindings, Direction, Key, KeyAction, Modifiers, PointerButton};
 pub(crate) use annotate::{HOVER_FADE_MS, disc_color};
 pub use annotate::{ShapeOption, ToolbarButton, WheelView};
+pub use grab::{GRAB_KEYS, GrabView, MagnifierShape, MagnifierView, Pixels, Zoom};
+pub(crate) use panel::THUMB;
+pub use panel::{
+    PanelControl, PanelLayout, PanelRow, SidePanelView, disc_position, side_panel_layout,
+    side_panel_tab,
+};
 pub use selection::Side;
 use selection::{CLICK_DISTANCE, nudged, resize, side_at, spanned, translated};
 pub use tools::{SettingChange, ShapeKind, ToolSettings};
@@ -84,6 +92,12 @@ pub struct OverlayConfig {
     pub tools: ToolSettings,
     /// The system asks for no animation: hover changes are instant.
     pub reduced_motion: bool,
+    /// `showSidePanelButton`: the Tool Settings tab on the left edge.
+    pub side_panel_button: bool,
+    /// `showMagnifier`: a zoomed view of the pixels at the pointer.
+    pub show_magnifier: bool,
+    /// `squareMagnifier`: square rather than round.
+    pub square_magnifier: bool,
 }
 
 impl OverlayConfig {
@@ -102,6 +116,9 @@ impl OverlayConfig {
             initial_selection: None,
             tools: ToolSettings::from_settings(settings),
             reduced_motion: false,
+            side_panel_button: settings.show_side_panel_button(),
+            show_magnifier: settings.show_magnifier(),
+            square_magnifier: settings.square_magnifier(),
         }
     }
 }
@@ -271,6 +288,8 @@ pub(crate) enum Drag {
     },
     /// A toolbar button (or Shape menu entry) is held.
     Button(usize),
+    /// A press on the side panel or its tab.
+    Panel,
 }
 
 /// One capture's overlay.
@@ -300,6 +319,12 @@ pub struct OverlayState {
     /// The time of the event being handled, for fades.
     now: Millis,
     tools: annotate::Tools,
+    /// Where the pointer last was on the active monitor.
+    pointer: Option<LogicalPoint>,
+    /// Each monitor's screenshot, for colour grab.
+    pixels: Vec<Option<grab::Pixels>>,
+    grab: Option<grab::Grab>,
+    panel: panel::Panel,
 }
 
 /// Collects effects, one redraw per monitor.
@@ -333,6 +358,7 @@ impl OverlayState {
         let editor = Editor::with_undo_limit(document_for(monitor), config.tools.undo_limit);
         let tools = annotate::Tools::new(editor, &config.tools, config.has_tasks);
         let following = config.follow_cursor && monitors.len() > 1;
+        let monitors_len = monitors.len();
         let selection = match config.initial_selection {
             Some(local) if !following => monitor.rect_to_logical(monitor.rect_to_physical(local)),
             _ => None,
@@ -355,6 +381,10 @@ impl OverlayState {
             closed: false,
             now: 0,
             tools,
+            pointer: None,
+            pixels: vec![None; monitors_len],
+            grab: None,
+            panel: panel::Panel::new(),
             config,
         })
     }
@@ -400,14 +430,24 @@ impl OverlayState {
                 ..
             } => self.pointer_up(monitor, at, button, now, &mut effects),
             Event::Key { key, modifiers } => self.key(key, modifiers, now, &mut effects),
-            Event::Text(c) => self.typed(c, &mut effects),
+            Event::Text(c) => {
+                if self.typing_hex() {
+                    self.hex_typed(c, &mut effects);
+                } else if self.grab.is_none() {
+                    self.typed(c, &mut effects);
+                }
+            }
             Event::Wheel {
                 monitor,
+                at,
                 delta,
                 modifiers,
-                ..
             } => {
-                if monitor == self.active && self.selection.is_some() {
+                if monitor == self.active
+                    && self.grab.is_none()
+                    && !self.panel_wheel(at, delta, &mut effects)
+                    && self.selection.is_some()
+                {
                     self.wheel_turned(delta, modifiers, &mut effects);
                 }
             }
@@ -585,9 +625,35 @@ impl OverlayState {
         if !self.claim(monitor, effects) {
             return;
         }
+        let magnified = self.magnifier();
+        self.pointer = Some(at);
+        self.pointer_moved(at, left_down, modifiers, now, effects);
+        if self.magnifier() != magnified {
+            effects.redraw(self.active);
+        }
+    }
+
+    fn pointer_moved(
+        &mut self,
+        at: LogicalPoint,
+        left_down: bool,
+        modifiers: Modifiers,
+        now: Millis,
+        effects: &mut Effects,
+    ) {
+        if self.grab.is_some() {
+            self.grab_hover(at, effects);
+            self.update_cursor(Some(at), effects);
+            return;
+        }
         if self.drag != Drag::Idle && !left_down {
             // The release went somewhere else; finish the drag here
-            self.pointer_up(monitor, at, PointerButton::Left, now, effects);
+            self.pointer_up(self.active, at, PointerButton::Left, now, effects);
+            return;
+        }
+        if self.drag == Drag::Panel {
+            self.panel_drag(at, effects);
+            self.update_cursor(Some(at), effects);
             return;
         }
         if self.tools_drag(at, modifiers, effects) {
@@ -596,8 +662,18 @@ impl OverlayState {
         }
         match self.drag {
             Drag::Idle => {
-                self.update_hover(at, effects);
-                self.update_tools_hover(at, effects);
+                self.panel_hover(at, effects);
+                if self.over_panel(at) {
+                    if self.hover.take().is_some() {
+                        effects.redraw(self.active);
+                    }
+                    if self.tools.hover.take().is_some() {
+                        effects.redraw(self.active);
+                    }
+                } else {
+                    self.update_hover(at, effects);
+                    self.update_tools_hover(at, effects);
+                }
             }
             Drag::Pending { start, .. } => {
                 if manhattan(at, start) > CLICK_DISTANCE {
@@ -611,8 +687,8 @@ impl OverlayState {
                 }
             }
             Drag::Resizing { .. } => self.resize_to(at, modifiers, now, effects),
-            // Handled by the tools above
-            Drag::Drawing | Drag::MovingObject { .. } | Drag::Button(_) => {}
+            // Handled above
+            Drag::Drawing | Drag::MovingObject { .. } | Drag::Button(_) | Drag::Panel => {}
             Drag::Moving { last } => {
                 if let Some(selection) = self.selection {
                     self.selection = Some(translated(selection, at.x - last.x, at.y - last.y));
@@ -654,18 +730,29 @@ impl OverlayState {
         if !self.claim(monitor, effects) {
             return;
         }
+        self.pointer = Some(at);
         if self.following {
             // The press commits the capture to this monitor
             self.following = false;
             effects.push(Effect::ReleaseMonitors);
             effects.redraw(self.active);
         }
+        if self.grab.is_some() {
+            self.grab_press(at, button, effects);
+            return;
+        }
         if button == PointerButton::Right {
-            // The colour wheel, centred on the press
-            self.open_wheel(at, effects);
+            // The colour wheel, centred on the press; not over the panel
+            if !self.over_panel(at) {
+                self.open_wheel(at, effects);
+            }
             return;
         }
         if button != PointerButton::Left {
+            return;
+        }
+        if self.panel_press(at, effects) {
+            self.update_cursor(Some(at), effects);
             return;
         }
         if self.tools_press(at, modifiers, effects) {
@@ -697,6 +784,19 @@ impl OverlayState {
         effects: &mut Effects,
     ) {
         if monitor != self.active {
+            return;
+        }
+        if self.grab.is_some() {
+            self.grab_release(at, button, effects);
+            self.update_cursor(Some(at), effects);
+            return;
+        }
+        if self.drag == Drag::Panel {
+            if button == PointerButton::Left {
+                self.drag = Drag::Idle;
+                self.panel_release(effects);
+            }
+            self.update_cursor(Some(at), effects);
             return;
         }
         if button == PointerButton::Right && self.wheel_release(at, effects) {
@@ -747,6 +847,14 @@ impl OverlayState {
     }
 
     fn key(&mut self, key: Key, modifiers: Modifiers, now: Millis, effects: &mut Effects) {
+        if self.grab.is_some() {
+            self.grab_key(key, effects);
+            return;
+        }
+        if self.typing_hex() {
+            self.hex_key(key, effects);
+            return;
+        }
         if self.tools.text.is_some() {
             self.text_key(key, modifiers, effects);
             return;
@@ -802,6 +910,10 @@ impl OverlayState {
             KeyAction::Button(button) => self.press_button(button, effects),
             KeyAction::CommitTool => self.commit_current(effects),
             KeyAction::DeleteTool => self.delete_selected(effects),
+            KeyAction::TogglePanel => self.toggle_panel(effects),
+            // Not in the middle of a drag: what it draws would be left behind
+            KeyAction::GrabColor if self.drag == Drag::Idle => self.start_grab(effects),
+            KeyAction::GrabColor => {}
         }
     }
 
@@ -832,6 +944,17 @@ impl OverlayState {
         if self.tools.hover.is_some() && now <= self.tools.hover_since + HOVER_FADE_MS {
             effects.redraw(self.active);
         }
+        if self
+            .panel
+            .since
+            .is_some_and(|since| now <= since + panel::PANEL_FADE_MS)
+        {
+            effects.redraw(self.active);
+        }
+        if self.grab.is_some() {
+            // The larger view of a held click comes up
+            effects.redraw(self.active);
+        }
     }
 
     fn next_wake(&self) -> Option<Millis> {
@@ -840,6 +963,7 @@ impl OverlayState {
             self.settle_at,
             self.tools.notice_until,
             self.next_frame(),
+            self.grab_wake(),
         ]
         .into_iter()
         .flatten()
@@ -946,12 +1070,17 @@ impl OverlayState {
 
     fn update_cursor(&mut self, at: Option<LogicalPoint>, effects: &mut Effects) {
         let shape = match self.drag {
+            // `setOverrideCursor(Qt::CrossCursor)`
+            _ if self.grab.is_some() => CursorShape::Cross,
+            Drag::Panel => CursorShape::Arrow,
             Drag::Moving { .. } | Drag::MovingObject { .. } => CursorShape::Grabbing,
             Drag::Resizing { side } => side_cursor(side),
             Drag::Drawing => CursorShape::Cross,
             Drag::Button(_) => CursorShape::Arrow,
             Drag::Idle | Drag::Pending { .. }
-                if at.is_some_and(|at| self.over_toolbar(at) || self.tools.wheel.is_some()) =>
+                if at.is_some_and(|at| {
+                    self.over_toolbar(at) || self.over_panel(at) || self.tools.wheel.is_some()
+                }) =>
             {
                 CursorShape::Arrow
             }
