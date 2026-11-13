@@ -58,7 +58,7 @@ enum CaptureFailure {
 const PINNED: &str = "Full screen screenshot pinned to screen";
 
 /// How a capture ended, for the main thread.
-enum Delivery {
+pub(crate) enum Delivery {
     Exported(ExportReport),
     /// Cancelled, or refused (`captureFailed`).
     Aborted,
@@ -226,7 +226,7 @@ fn pin_requested<R: Runtime>(
 
 /// Pins `image` where it was on the desktop. The pin's menu copies, saves
 /// and opens the editor with the settings of the moment.
-fn pin<R: Runtime>(
+pub(crate) fn pin<R: Runtime>(
     app: &AppHandle<R>,
     settings: &Settings,
     image: CapturedImage,
@@ -261,6 +261,12 @@ fn pin<R: Runtime>(
         Ok(()) => log::info!("capture pinned at {geometry:?}"),
         Err(error) => log::error!("cannot pin the capture: {error}"),
     }
+}
+
+/// The editor's exports: reported like a capture's (notifications, Show
+/// Last Capture in Folder), on the main thread.
+pub(crate) fn deliver_report<R: Runtime>(app: &AppHandle<R>, report: ExportReport) {
+    hand_to_main(app, Delivery::Exported(report));
 }
 
 /// Hands `delivery` to [`deliver`] on the main thread.
@@ -516,7 +522,7 @@ fn export_tasks(tasks: &Tasks) -> CaptureTasks {
     }
 }
 
-fn run_export(
+pub(crate) fn run_export(
     settings: &Settings,
     image: &CapturedImage,
     geometry: PhysicalRect,

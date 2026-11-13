@@ -7,6 +7,7 @@ mod capture;
 mod cli;
 mod console;
 mod daemon;
+mod editor;
 mod handoff;
 mod hotkeys;
 mod instance;

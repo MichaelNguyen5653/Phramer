@@ -49,6 +49,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, WM_ENDSESSION, WM_KEYDOWN, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextW, WM_CLOSE};
 
 const LOCK: &str = "app.phramer.desktop-sim";
 /// The overlay's window class (`phramer-overlay`).
@@ -914,4 +915,253 @@ fn cli_prints_raw_captures_and_exit_codes() {
         "the settings file or startup registry entries changed"
     );
     println!("settings file and startup registry entries unchanged");
+}
+
+/// The editor window's title (`editor::TITLE`).
+const EDITOR_TITLE: &str = "Phramer Editor";
+
+fn window_title(hwnd: isize) -> String {
+    let mut text = [0u16; 256];
+    // SAFETY: `text` holds 256 characters; a stale handle just fails.
+    let length = unsafe { GetWindowTextW(hwnd as HWND, text.as_mut_ptr(), 256) };
+    String::from_utf16_lossy(&text[..length.max(0) as usize])
+}
+
+/// The daemon's editor windows that are showing.
+fn editors(pid: u32) -> Vec<Window> {
+    windows_of(pid)
+        .into_iter()
+        .filter(|window| window.user_visible() && window_title(window.hwnd) == EDITOR_TITLE)
+        .collect()
+}
+
+/// Every process started under `pid`, at any depth (the WebView2 browser
+/// process and its renderer, GPU and utility processes).
+fn children_of(pid: u32) -> Vec<u32> {
+    // SAFETY: snapshot of all processes; closed below.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    let mut pairs = Vec::new();
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `entry.dwSize` is set as the API requires.
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) };
+    while more != 0 {
+        pairs.push((entry.th32ProcessID, entry.th32ParentProcessID));
+        // SAFETY: as above.
+        more = unsafe { Process32NextW(snapshot, &mut entry) };
+    }
+    // SAFETY: the snapshot handle is closed once.
+    unsafe { CloseHandle(snapshot) };
+    let mut found = vec![pid];
+    let mut index = 0;
+    while index < found.len() {
+        let parent = found[index];
+        found.extend(
+            pairs
+                .iter()
+                .filter(|(child, of)| *of == parent && *child != parent && !found.contains(child))
+                .map(|(child, _)| *child)
+                .collect::<Vec<_>>(),
+        );
+        index += 1;
+    }
+    found.remove(0);
+    found
+}
+
+/// The private working set of `pids` together, in MB, as Task Manager's
+/// Memory column shows it.
+fn memory_mb(pids: &[u32]) -> Option<f64> {
+    if pids.is_empty() {
+        return Some(0.0);
+    }
+    let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let script = format!(
+        "(Get-CimInstance Win32_PerfRawData_PerfProc_Process | Where-Object {{ @({list}) -contains $_.IDProcess }} | Measure-Object WorkingSetPrivate -Sum).Sum"
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", &script])
+        .output()
+        .ok()?;
+    let bytes: f64 = String::from_utf8_lossy(&output.stdout).trim().parse().ok()?;
+    Some(bytes / 1_048_576.0)
+}
+
+/// The open time the daemon logged last, in milliseconds.
+fn logged_editor_open(log: &str) -> Option<u128> {
+    log.lines()
+        .rev()
+        .filter_map(|line| line.split(" visible ").nth(1))
+        .find_map(|rest| rest.split(' ').next()?.parse().ok())
+}
+
+#[test]
+#[ignore = "live: starts the daemon, captures a region and opens the editor"]
+fn open_in_editor_shows_the_editor_window() {
+    let _live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !desktop_is_unlocked() {
+        println!("skipped: the session is locked or another desktop has the input");
+        return;
+    }
+    // A debug build loads the page from the Vite dev server, which is not
+    // running here
+    if std::env::var_os("PHRAMER_SMOKE_EXE").is_none() {
+        println!("skipped: set PHRAMER_SMOKE_EXE to a release build (npm run tauri build -- --no-bundle)");
+        return;
+    }
+    per_monitor_dpi_aware();
+    let exe = exe();
+    println!("binary: {}", exe.display());
+    assert!(
+        processes_of(&exe).is_empty(),
+        "{} is already running",
+        exe.display()
+    );
+    assert!(!lock_exists(), "another Phramer 16 daemon holds the lock");
+    let mut cleanup = Cleanup {
+        exe: exe.clone(),
+        pids: Vec::new(),
+        before: user_state(),
+    };
+
+    // 1. The daemon, with no webview
+    let log_path =
+        std::env::temp_dir().join(format!("phramer-editor-smoke-{}.log", std::process::id()));
+    let log = fs::File::create(&log_path).expect("log file");
+    let daemon = Command::new(&exe)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log)
+        .spawn()
+        .expect("start the daemon");
+    let daemon_pid = daemon.id();
+    cleanup.pids.push(daemon_pid);
+    assert!(
+        wait_until(Duration::from_secs(20), || {
+            lock_exists()
+                && windows_of(daemon_pid)
+                    .iter()
+                    .any(|w| w.class == "tray_icon_app")
+        }),
+        "the daemon did not come up"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    let tray = check_daemon(&exe, daemon_pid);
+    assert!(
+        children_of(daemon_pid).is_empty(),
+        "the idle daemon runs child processes: {:?}",
+        children_of(daemon_pid)
+    );
+    println!("memory, idle daemon: {:.1} MB", memory_mb(&[daemon_pid]).unwrap_or(-1.0));
+
+    // Twice: the first open starts WebView2, the second finds out whether
+    // anything was kept warm
+    let target = monitor_under_cursor();
+    for round in 1..=2 {
+        println!("--- editor open {round} ---");
+        // 2. A capture of a small region, sent to the editor with its key (E)
+        let cli = Command::new(&exe)
+            .args(["gui", "--region", "320x200+40+40"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start the CLI");
+        cleanup.pids.push(cli.id());
+        let (overlay, _) = wait_for_overlay(daemon_pid, target, Duration::from_secs(10))
+            .expect("no overlay covering the target monitor");
+        wait_cli(cli);
+        let sent = Instant::now();
+        // SAFETY: posting a message to a window handle; a stale one just fails.
+        let posted = unsafe { PostMessageW(overlay.hwnd as HWND, WM_KEYDOWN, usize::from(b'E'), 0) };
+        assert_ne!(posted, 0, "E could not be posted");
+
+        // 3. The editor window shows
+        let mut shown = Vec::new();
+        assert!(
+            wait_until(Duration::from_secs(15), || {
+                shown = editors(daemon_pid);
+                !shown.is_empty()
+            }),
+            "no editor window appeared; windows: {:?}\n--- log ---\n{}",
+            windows_of(daemon_pid),
+            fs::read_to_string(&log_path).unwrap_or_default()
+        );
+        println!(
+            "editor {:#x} at {:?}, seen {} ms after E",
+            shown[0].hwnd,
+            shown[0].rect,
+            sent.elapsed().as_millis()
+        );
+        assert_eq!(shown.len(), 1, "one window per image");
+        assert!(
+            wait_until(Duration::from_secs(5), || fs::read_to_string(&log_path)
+                .is_ok_and(|text| logged_editor_open(&text).is_some())),
+            "the daemon logged no open time"
+        );
+        let text = fs::read_to_string(&log_path).unwrap_or_default();
+        println!("daemon: editor visible {:?} ms after open", logged_editor_open(&text));
+        std::thread::sleep(Duration::from_secs(2));
+        let mut everything = vec![daemon_pid];
+        everything.extend(children_of(daemon_pid));
+        println!(
+            "memory, daemon + editor ({} processes): {:.1} MB",
+            everything.len(),
+            memory_mb(&everything).unwrap_or(-1.0)
+        );
+        let image = text
+            .lines()
+            .rev()
+            .find_map(|line| line.split("editor: opening ").nth(1))
+            .map(|path| PathBuf::from(path.trim()))
+            .expect("the daemon logged the image it opened");
+        assert!(image.exists(), "{} is missing", image.display());
+
+        // 4. Closing it (nothing drawn, so no question) frees the webview and
+        // the temporary image
+        // SAFETY: posting a message to a window handle; a stale one just fails.
+        let posted = unsafe { PostMessageW(shown[0].hwnd as HWND, WM_CLOSE, 0, 0) };
+        assert_ne!(posted, 0, "WM_CLOSE could not be posted");
+        assert!(
+            wait_until(Duration::from_secs(10), || editors(daemon_pid).is_empty()),
+            "the editor did not close"
+        );
+        assert!(
+            wait_until(Duration::from_secs(5), || !image.exists()),
+            "{} was left behind",
+            image.display()
+        );
+        std::thread::sleep(Duration::from_secs(3));
+        let left = children_of(daemon_pid);
+        let mut everything = vec![daemon_pid];
+        everything.extend(&left);
+        println!(
+            "after closing: {} child processes, {:.1} MB in all",
+            left.len(),
+            memory_mb(&everything).unwrap_or(-1.0)
+        );
+    }
+
+    // 5. A clean stop leaves nothing running
+    let children = children_of(daemon_pid);
+    println!("daemon children before the stop: {children:?}");
+    stop(daemon_pid, &tray);
+    drop(daemon);
+    assert!(
+        wait_until(Duration::from_secs(15), || children
+            .iter()
+            .all(|pid| image_path(*pid).is_none())),
+        "child processes outlived the daemon: {children:?}"
+    );
+    println!(
+        "--- daemon log ---\n{}",
+        fs::read_to_string(&log_path).unwrap_or_default()
+    );
+    assert!(
+        user_state() == cleanup.before,
+        "the settings file or startup registry entries changed"
+    );
+    let _ = fs::remove_file(&log_path);
 }

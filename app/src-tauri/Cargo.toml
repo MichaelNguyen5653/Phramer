@@ -37,6 +37,13 @@ log = "0.4"
 regex = "1"
 # The update check's release document (already in the tree through Tauri).
 serde_json = "1"
+# The editor's commands: its settings and exports (already in the tree
+# through Tauri).
+serde = { version = "1", features = ["derive"] }
+# The editor's Save As dialog.
+tauri-plugin-dialog = "2"
+# The editor reads the capture's PNG (already in the tree through the overlay).
+png = "0.18"
 
 phramer-core = { path = "../../crates/phramer-core" }
 phramer-capture = { path = "../../crates/phramer-capture" }
@@ -44,6 +51,8 @@ phramer-capture = { path = "../../crates/phramer-capture" }
 phramer-overlay = { path = "../../crates/phramer-overlay" }
 # OCR of the overlay's selection.
 phramer-ocr = { path = "../../crates/phramer-ocr" }
+# The editor's tool settings use the engine's types.
+phramer-annotate = { path = "../../crates/phramer-annotate" }
 
 # Run value, single-instance lock check, tray balloons, the Open with
 # dialog, phramer-cli's reply pipe, the update check (WinHTTP) and whether

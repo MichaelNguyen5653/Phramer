@@ -15,8 +15,8 @@ use phramer_overlay::{
 };
 use tauri::{AppHandle, Emitter, Runtime};
 
-/// The event the editor window (phase 5) listens for; the payload is the
-/// path of a PNG of the capture.
+/// The event the editor window listens for (`editor::listen`); the payload
+/// is the path of a PNG of the capture.
 pub(crate) const EDITOR_OPEN_EVENT: &str = "editor:open";
 /// What the user is told once the text is on the clipboard.
 const TEXT_COPIED: &str = "Text copied to clipboard.";
@@ -106,8 +106,9 @@ fn write_png(image: &CapturedImage, folder: &Path, stem: &str) -> io::Result<Pat
     Err(last)
 }
 
-/// Open in Editor: the capture as a PNG for the editor, which is not built
-/// yet. Kept in the temporary folder, as 15.0.0 kept App Launcher's.
+/// Open in Editor: the capture as a PNG for the editor. Kept in the
+/// temporary folder, as 15.0.0 kept App Launcher's; the editor removes it
+/// when its window closes.
 pub(crate) fn save_for_editor(image: &CapturedImage) -> Result<PathBuf, ExportReport> {
     let folder = std::env::temp_dir().join("phramer");
     write_png(image, &folder, "editor-").map_err(|error| {
@@ -121,7 +122,7 @@ pub(crate) fn save_for_editor(image: &CapturedImage) -> Result<PathBuf, ExportRe
 /// On the main thread: tells the editor to open `path`.
 pub(crate) fn open_in_editor<R: Runtime>(app: &AppHandle<R>, path: &Path) {
     let path = path.display().to_string();
-    log::info!("editor: opening {path} (the editor window is not built yet)");
+    log::info!("editor: opening {path}");
     if let Err(error) = app.emit(EDITOR_OPEN_EVENT, &path) {
         log::error!("cannot send {EDITOR_OPEN_EVENT}: {error}");
     }

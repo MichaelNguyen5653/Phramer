@@ -1,0 +1,20 @@
+[package]
+name = "phramer-annotate-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The annotation engine for the editor's webview, as a plain WebAssembly module"
+
+[lib]
+# cdylib: the `.wasm` the editor loads (built for wasm32-unknown-unknown);
+# rlib: the same session API, tested natively.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+phramer-annotate = { path = "../phramer-annotate" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+png = "0.18"

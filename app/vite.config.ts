@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-expect-error type error without @types/node package
@@ -7,6 +8,22 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react()],
+
+  // One entry per window: the editor loads only its own bundle
+  build: {
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        editor: "editor.html",
+      },
+    },
+  },
+
+  // Unit tests (vitest); the browser tests under tests/ run with Playwright
+  test: {
+    include: ["src/**/*.test.ts"],
+    environment: "node",
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

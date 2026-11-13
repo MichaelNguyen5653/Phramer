@@ -10,7 +10,7 @@ use crate::cli::{self, Command, ConfigCommand, Parsed, Role};
 use crate::instance::Forwarded;
 use crate::reply::{self, EXIT_OK, Reply};
 use crate::restart::{self, Restart};
-use crate::{actions, hotkeys, settings, startup, tray, updater};
+use crate::{actions, editor, hotkeys, settings, startup, tray, updater};
 
 /// Shared with the actions.
 pub(crate) struct DaemonState {
@@ -44,6 +44,15 @@ pub(crate) fn run(start: Option<Forwarded>) -> i32 {
             );
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // The editor's Save As dialog, called from Rust only
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            editor::editor_image,
+            editor::editor_ready,
+            editor::editor_settings,
+            editor::editor_set,
+            editor::editor_export,
+        ])
         .setup(move |app| {
             app.manage(managed_restart);
             setup(app, settings_path, start);
@@ -87,6 +96,8 @@ fn setup(app: &mut App, settings_path: PathBuf, start: Option<Forwarded>) {
         settings_path: settings_path.clone(),
     });
     app.manage(hotkeys::Registered::default());
+    app.manage(editor::Editors::default());
+    editor::listen(&handle);
 
     if let Err(error) = tray::create(&handle, &current) {
         log::error!("cannot create the tray icon: {error}");

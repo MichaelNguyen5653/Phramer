@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Built by scripts/build-wasm.mjs from crates/phramer-annotate-wasm
+src/editor/phramer_annotate.wasm
+# Playwright's run output (the reference screenshots in tests/screenshots are kept)
+test-results
+playwright-report
