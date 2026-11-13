@@ -25,10 +25,8 @@ build the MSI first, or again afterwards.
 `packaging/windows/sandbox/` installs, updates and removes the package in
 Windows Sandbox (`Invoke-SandboxScenario.ps1 -Scenario msix`).
 
-CI does the same in the `windows-msix` job of `Windows-pack.yml` (every
-pull request and push to master) and of `Windows-release.yml` (every `v*`
-tag). Both upload the packages as workflow artifacts, never as release
-assets.
+No CI workflow builds the packages on this branch; build them locally as
+above. They are never release assets.
 
 Two variants are produced:
 
@@ -58,16 +56,15 @@ with every submission.
 ## Testing before submission
 
 Windows installs only signed packages; the Store signs its own copy after
-certification. To try a build first, take the `sideload` files from the CI
-artifact (or run `sign-for-sideload.ps1` yourself), then in an elevated
-PowerShell:
+certification. To try a build first, make the `sideload` files with
+`sign-for-sideload.ps1`, then in an elevated PowerShell:
 
 ```powershell
 Import-Certificate -FilePath Phramer_<ver>.0_x64_sideload.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
 Add-AppxPackage Phramer_<ver>.0_x64_sideload.msix
 ```
 
-Each CI run makes a new throwaway certificate whose private key is deleted
+Each run makes a new throwaway certificate whose private key is deleted
 straight after signing. Run the Windows App Certification Kit against the
 sideload copy (WACK installs the package, and Windows installs only signed
 ones; the contents are identical to the unsigned package), before

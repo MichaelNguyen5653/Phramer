@@ -25,6 +25,7 @@ Add-Check 'phramer-cli --version reports 16.0.0' ($version.stdout -match '16\.0\
 
 $daemon = Start-Daemon $PhramerExe 'daemon'
 Add-Check 'daemon starts and keeps running' (-not $daemon.HasExited) ([ordered]@{ pid = $daemon.Id; titles = (Get-VisibleTitles $daemon.Id) })
+Add-Check 'welcome on a first run is mandatory' (Test-LogLine 'daemon' 'welcome: window created (mandatory: true)') (Get-VisibleTitles $daemon.Id)
 Start-Sleep -Seconds 2
 Add-Fact 'launchEntriesAfterFirstStart' (Get-LaunchEntries)
 Add-Fact 'settingsAfterFirstStart' (Get-Lines $SettingsFile)

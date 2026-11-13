@@ -13,7 +13,6 @@ export default defineConfig(() => ({
   build: {
     rollupOptions: {
       input: {
-        main: "index.html",
         editor: "editor.html",
         settings: "settings.html",
         welcome: "welcome.html",

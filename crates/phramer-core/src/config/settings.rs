@@ -10,6 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::buttons::{self, ButtonType};
+use super::check::Rule;
 use super::color::Color;
 use super::error::ConfigError;
 use super::ini::IniDocument;
@@ -68,7 +69,7 @@ const LARGE_PALETTE: &[Option<Color>] = &[
 
 /// Shortcut names and their default key sequences (`recognizedShortcuts`).
 /// The C++ spells the last default `Delete`; `QKeySequence` renders it `Del`.
-const SHORTCUTS: &[(&str, &str)] = &[
+pub(super) const SHORTCUTS: &[(&str, &str)] = &[
     ("TYPE_PENCIL", "P"),
     ("TYPE_DRAWER", "D"),
     ("TYPE_ARROW", "A"),
@@ -134,7 +135,7 @@ pub enum CaptureRegionMode {
 /// The user's settings, backed by the INI file the C++ builds read and write.
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
-    doc: IniDocument,
+    pub(super) doc: IniDocument,
 }
 
 /// Generates the getter and setter for one key from its C++ value handler.
@@ -227,7 +228,18 @@ macro_rules! accessor {
         }
     };
     // Accessors written by hand below.
-    ($get:ident, $set:ident, $key:literal, Custom()) => {};
+    ($get:ident, $set:ident, $key:literal, Custom($rule:expr)) => {};
+}
+
+/// The `config --check` rule of one key's value handler.
+macro_rules! rule {
+    (Bool($default:expr)) => { Rule::Bool };
+    (Text($default:expr)) => { Rule::Any };
+    (Rgb($r:expr, $g:expr, $b:expr)) => { Rule::Color };
+    (Bounded($min:expr, $max:expr, $default:expr)) => { Rule::Bounded($min, $max) };
+    (AtLeast($min:expr, $default:expr)) => { Rule::AtLeast($min) };
+    (ToolSize($min:expr, $default:expr)) => { Rule::AtLeast($min) };
+    (Custom($rule:expr)) => { $rule };
 }
 
 /// Declares every key of the General section (`recognizedGeneralOptions`).
@@ -235,6 +247,9 @@ macro_rules! general_options {
     ($($get:ident / $set:ident: $key:literal => $kind:ident($($arg:expr),*);)*) => {
         #[cfg(test)]
         const GENERAL_KEYS: &[&str] = &[$($key),*];
+
+        /// Each key with the rule `config --check` applies to its value.
+        pub(super) const GENERAL_RULES: &[(&str, Rule)] = &[$(($key, rule!($kind($($arg),*)))),*];
 
         impl Settings {
             $(accessor!($get, $set, $key, $kind($($arg),*));)*
@@ -265,9 +280,9 @@ general_options! {
     use_jpg_for_clipboard / set_use_jpg_for_clipboard: "useJpgForClipboard" => Bool(false);
     upload_without_confirmation / set_upload_without_confirmation: "uploadWithoutConfirmation" => Bool(false);
     save_after_copy / set_save_after_copy: "saveAfterCopy" => Bool(false);
-    save_path / set_save_path: "savePath" => Custom();
+    save_path / set_save_path: "savePath" => Custom(Rule::ExistingDir);
     save_path_fixed / set_save_path_fixed: "savePathFixed" => Bool(true);
-    save_as_file_extension / set_save_as_file_extension: "saveAsFileExtension" => Custom();
+    save_as_file_extension / set_save_as_file_extension: "saveAsFileExtension" => Custom(Rule::SaveFileExtension);
     save_last_region / set_save_last_region: "saveLastRegion" => Bool(false);
     upload_history_max / set_upload_history_max: "uploadHistoryMax" => AtLeast(0, 25);
     undo_limit / set_undo_limit: "undoLimit" => Bounded(0, 999, 100);
@@ -275,8 +290,8 @@ general_options! {
     ui_color / set_ui_color: "uiColor" => Rgb(56, 153, 194);
     contrast_ui_color / set_contrast_ui_color: "contrastUiColor" => Rgb(17, 60, 79);
     contrast_opacity / set_contrast_opacity: "contrastOpacity" => Bounded(0, 255, 190);
-    buttons / set_buttons: "buttons" => Custom();
-    filename_pattern / set_filename_pattern: "filenamePattern" => Custom();
+    buttons / set_buttons: "buttons" => Custom(Rule::ButtonList);
+    filename_pattern / set_filename_pattern: "filenamePattern" => Custom(Rule::Any);
     draw_thickness / set_draw_thickness: "drawThickness" => AtLeast(1, 3);
     draw_pencil_size / set_draw_pencil_size: "drawPencilSize" => ToolSize(1, 3);
     draw_line_size / set_draw_line_size: "drawLineSize" => ToolSize(1, 3);
@@ -290,7 +305,7 @@ general_options! {
     draw_rectangle_size / set_draw_rectangle_size: "drawRectangleSize" => AtLeast(1, 1);
     draw_marker_size / set_draw_marker_size: "drawMarkerSize" => AtLeast(1, 5);
     draw_color / set_draw_color: "drawColor" => Rgb(255, 0, 0);
-    user_colors / set_user_colors: "userColors" => Custom();
+    user_colors / set_user_colors: "userColors" => Custom(Rule::UserColors(3, 17));
     ignore_update_to_version / set_ignore_update_to_version: "ignoreUpdateToVersion" => Text("");
     keep_open_app_launcher / set_keep_open_app_launcher: "keepOpenAppLauncher" => Bool(false);
     font_family / set_font_family: "fontFamily" => Text("");
@@ -316,7 +331,7 @@ general_options! {
     show_welcome_message / set_show_welcome_message: "showWelcomeMessage" => Bool(true);
     video_capture_enabled / set_video_capture_enabled: "videoCaptureEnabled" => Bool(false);
     capture_active_monitor / set_capture_active_monitor: "captureActiveMonitor" => Bool(false);
-    capture_region_mode / set_capture_region_mode: "captureRegionMode" => Custom();
+    capture_region_mode / set_capture_region_mode: "captureRegionMode" => Custom(Rule::Bounded(0, 2));
 }
 
 impl Settings {
@@ -636,7 +651,7 @@ fn default_shortcut(action: &str) -> Option<&'static str> {
 
 /// `SaveFileExtension`: the extension without its dot, if it is a format the
 /// application can write.
-fn checked_extension(text: &str) -> Option<String> {
+pub(super) fn checked_extension(text: &str) -> Option<String> {
     let extension = text.strip_prefix('.').unwrap_or(text);
     SAVE_EXTENSIONS
         .contains(&extension)

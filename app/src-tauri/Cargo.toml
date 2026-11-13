@@ -14,7 +14,9 @@ default-run = "phramer"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "phramer_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# No cdylib: Tauri's MSI bundles every DLL beside the exe, and nothing
+# loads phramer_lib.dll
+crate-type = ["staticlib", "rlib"]
 
 [features]
 # Microsoft Store build: launch at sign-in comes from the package manifest's

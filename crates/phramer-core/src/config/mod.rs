@@ -4,6 +4,7 @@
 //! [`settings_path`] locates the file, [`Settings`] reads and writes it.
 
 mod buttons;
+mod check;
 mod color;
 mod error;
 mod escape;

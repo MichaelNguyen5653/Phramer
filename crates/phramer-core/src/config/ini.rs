@@ -204,6 +204,14 @@ impl IniDocument {
             .map(|entry| &entry.value)
     }
 
+    /// Every key once, sorted, as `QSettings::allKeys` lists them.
+    pub(super) fn keys(&self) -> Vec<&str> {
+        let mut keys: Vec<&str> = self.entries().map(|entry| entry.key.as_str()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    }
+
     /// Names and values of the keys directly inside `section`.
     pub(super) fn section_entries<'a>(
         &'a self,

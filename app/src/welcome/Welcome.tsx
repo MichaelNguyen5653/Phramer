@@ -1,7 +1,7 @@
 // The welcome: three short steps. It names the capture hotkey, offers
 // Print Screen and launch at sign-in (each applied the moment it is
-// switched), and ends with a way into Settings. On a new major version it
-// must be seen to its last step, as 15.0.0's tour had to be.
+// switched), and ends with a way into Settings. On a first run it must be
+// seen to its last step (`mandatory`); after an upgrade it can be skipped.
 
 import { useEffect, useState } from "react";
 import { Keys, Switch } from "../settings/controls";

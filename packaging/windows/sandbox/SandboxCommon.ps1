@@ -270,10 +270,54 @@ function Wait-Window([int] $ProcessId, [string] $Title, [int] $Seconds = 30) {
     $false
 }
 
+# Waits until no visible window with this title is left in the process
+function Wait-NoWindow([int] $ProcessId, [string] $Title, [int] $Seconds = 15) {
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if ((Get-VisibleTitles $ProcessId) -notcontains $Title) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    $false
+}
+
+# Clicks a button inside a window of the process through UI Automation,
+# which reaches into WebView2 pages; returns whether it was found.
+function Invoke-WindowButton([int] $ProcessId, [string] $Window, [string] $Button, [int] $Seconds = 30) {
+    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+    $element = [System.Windows.Automation.AutomationElement]
+    $and = {
+        param($a, $b)
+        [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@($a, $b))
+    }
+    $is = { param($property, $value) [System.Windows.Automation.PropertyCondition]::new($property, $value) }
+    $windowCondition = & $and (& $is $element::ProcessIdProperty $ProcessId) (& $is $element::NameProperty $Window)
+    $buttonCondition = & $and (& $is $element::ControlTypeProperty ([System.Windows.Automation.ControlType]::Button)) (& $is $element::NameProperty $Button)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        $win = $element::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $windowCondition)
+        if ($win) {
+            $found = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+            if ($found) {
+                $found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                return $true
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    $false
+}
+
+# Whether the daemon's log (still being written) has this line
+function Test-LogLine([string] $LogName, [string] $Line) {
+    $path = Join-Path $Results "$LogName-stderr.log"
+    $stream = [System.IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+    try { (New-Object System.IO.StreamReader $stream).ReadToEnd().Contains($Line) } finally { $stream.Dispose() }
+}
+
 # Settings as 15.0.0 left them for a user who finished its welcome tour,
 # plus keys 16 does not know. Written byte for byte; QSettings' layout.
-# 16, a new major version, shows its tour again and records
-# welcomeTourShownFor only once the tour's last step is reached, as 15 did.
+# 16, a new major version, shows its welcome again; after an upgrade it can
+# be skipped, so it records welcomeTourShownFor as it opens.
 function Get-KnownSettingsText {
     @(
         '[General]',

@@ -90,7 +90,7 @@ pub(crate) fn run_command(
         return daemon(args, cwd);
     }
     match command {
-        Command::Config(ConfigCommand::Check) => actions::check_configuration(),
+        Command::Config(ConfigCommand::Check) => return actions::check_configuration(),
         Command::Config(ConfigCommand::Set(changes)) => {
             if let Err(error) = settings::apply_config_changes(&changes) {
                 eprintln!("phramer: error: {error}");

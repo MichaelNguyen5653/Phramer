@@ -8,7 +8,9 @@
 //! and counts as seen only once its last step is reached), and the Print
 //! Screen question while `showWelcomeMessage` was on (switched off before it
 //! was answered). Both are this one window now. The tray's What's New opens
-//! it at any time.
+//! it at any time. Unlike 15.0.0, only a first run (nothing recorded in
+//! `welcomeTourShownFor`) must be seen to the end; after an upgrade from an
+//! older major version it shows but can be skipped.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -50,15 +52,17 @@ fn major_of(version: &str) -> Option<u32> {
         .ok()
 }
 
-/// `None` when the welcome is not due; otherwise whether it is mandatory.
+/// `None` when the welcome is not due; otherwise whether it is mandatory
+/// (a first run only).
 fn due(settings: &Settings) -> Option<bool> {
     let current = current_version();
     let shown = settings.welcome_tour_shown_for();
     let tour = if shown.trim_start_matches('v') == current.trim_start_matches('v') {
         None
     } else {
+        let first_run = shown.trim().is_empty();
         let new_major = major_of(&shown) != major_of(&current);
-        (new_major || !settings.welcome_tour_disabled()).then_some(new_major)
+        (new_major || !settings.welcome_tour_disabled()).then_some(first_run)
     };
     tour.or_else(|| settings.show_welcome_message().then_some(false))
 }
@@ -173,21 +177,21 @@ mod tests {
     }
 
     #[test]
-    fn a_first_run_and_a_new_major_version_are_mandatory() {
+    fn only_a_first_run_is_mandatory() {
         assert_eq!(due(&Settings::default()), Some(true));
-        // 15.0.0 recorded itself with a v
+        // 15.0.0 recorded itself with a v; an upgrade shows it, skippable
         assert_eq!(
             due(&settings(
                 "welcomeTourShownFor=v15.0.0\nshowWelcomeMessage=false\n"
             )),
-            Some(true)
+            Some(false)
         );
         // "Don't show again" does not hold across a major version
         assert_eq!(
             due(&settings(
                 "welcomeTourShownFor=v15.0.0\nwelcomeTourDisabled=true\nshowWelcomeMessage=false\n"
             )),
-            Some(true)
+            Some(false)
         );
     }
 

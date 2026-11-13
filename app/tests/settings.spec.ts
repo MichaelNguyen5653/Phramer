@@ -254,7 +254,15 @@ test.describe("welcome", () => {
     await expect(page).toHaveScreenshot("welcome-step-1-dark.png");
   });
 
-  test("a new major version is seen to its end before it closes", async ({ page }) => {
+  test("after an upgrade it can be skipped or closed at the first step", async ({ page }) => {
+    await openWelcome(page, false);
+    await expect(page.getByRole("button", { name: "Close" })).toBeVisible();
+    await page.getByRole("button", { name: "Skip" }).click();
+    await expect.poll(() => calls(page, "plugin:window|close")).toHaveLength(1);
+    expect(await calls(page, "welcome_reached_end")).toEqual([]);
+  });
+
+  test("a first run is seen to its end before it closes", async ({ page }) => {
     await openWelcome(page, true);
     await expect(page.getByRole("button", { name: "Skip" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Close" })).toHaveCount(0);

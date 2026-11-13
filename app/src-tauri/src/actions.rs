@@ -93,9 +93,29 @@ pub(crate) fn open_configuration<R: Runtime>(app: &AppHandle<R>) {
     settings_ui::open(app);
 }
 
-/// `phramer config --check`. Runs in the calling process, without a daemon.
-pub(crate) fn check_configuration() {
-    not_implemented("configuration check", &());
+/// `phramer config --check`. Runs in the calling process, without a daemon;
+/// returns the exit code.
+pub(crate) fn check_configuration() -> i32 {
+    let current = settings::path()
+        .map(|path| settings::load(&path))
+        .unwrap_or_default();
+    let (report, code) = check_report(&current);
+    eprint!("{report}");
+    code
+}
+
+/// What 15.0.0 printed to stderr, byte for byte (its C runtime wrote each
+/// newline as CRLF and every message carried one more), and its exit code.
+fn check_report(settings: &phramer_core::config::Settings) -> (String, i32) {
+    let errors = settings.errors();
+    if errors.is_empty() {
+        return ("phramer: info: No errors detected.\r\n\r\n".to_owned(), 0);
+    }
+    let report = errors
+        .iter()
+        .map(|error| format!("phramer: error: {error}\r\n\r\n"))
+        .collect();
+    (report, 1)
 }
 
 /// `EditorWindow::openEmpty`.
@@ -189,5 +209,39 @@ pub(crate) fn open_save_path<R: Runtime>(app: &AppHandle<R>) {
     };
     if let Err(error) = Command::new("explorer.exe").arg(&folder).spawn() {
         log::error!("cannot open {}: {error}", folder.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use phramer_core::config::Settings;
+
+    use super::check_report;
+
+    /// Each settings file and what 15.0.0's `phramer config --check` wrote
+    /// to stderr for it, recorded in Windows Sandbox.
+    #[test]
+    fn config_check_reports_as_15_0_0_did() {
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/phramer-core/tests/fixtures");
+        let cases = [
+            ("check/valid.ini", "valid", 0),
+            ("check/empty.ini", "empty", 0),
+            ("check/unknown-keys.ini", "unknown-keys", 1),
+            ("check/conflicts.ini", "conflicts", 1),
+            ("check/bad-values.ini", "bad-values", 1),
+            ("corrupt-values.ini", "corrupt-values", 1),
+            ("v14.1-style.ini", "v14.1-style", 1),
+            ("v15.0-style.ini", "v15.0-style", 1),
+        ];
+        for (file, expected, code) in cases {
+            let settings = Settings::parse(&std::fs::read(fixtures.join(file)).unwrap());
+            let expected =
+                std::fs::read_to_string(fixtures.join(format!("check/expected/{expected}.stderr")))
+                    .unwrap();
+            assert_eq!(check_report(&settings), (expected, code), "{file}");
+        }
     }
 }

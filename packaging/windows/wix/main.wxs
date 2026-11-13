@@ -19,6 +19,9 @@
     installs in the installing user's context (ALLUSERS unset), into
     Program Files. FindRelatedProducts only sees products of the same
     context: a perMachine 16 would leave 15 installed beside it.
+    The context is the installing account's, so a 15.x installed by a user
+    and a 16 installed as SYSTEM (an Intune deployment, for one) do not see
+    each other and sit side by side, as two 15.x installs did.
   - The executables go to INSTALLDIR\bin, where 15.x had them. The Run value
     and App Paths entry written by 15.x, its ms-screenclip registration and
     its updater's relaunch after installing name bin\phramer.exe.

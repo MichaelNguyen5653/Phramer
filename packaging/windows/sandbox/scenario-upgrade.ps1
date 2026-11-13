@@ -51,6 +51,14 @@ Add-Check 'one Start Menu shortcut, targeting the 16 exe' ($startMenu.Count -eq 
 
 $daemon = Start-Daemon $PhramerExe 'daemon-16'
 Add-Check '16 daemon starts after the upgrade' (-not $daemon.HasExited) ([ordered]@{ pid = $daemon.Id; titles = (Get-VisibleTitles $daemon.Id) })
+# After an upgrade the welcome shows but can be skipped (a first run's cannot)
+$welcome = Wait-Window $daemon.Id 'Welcome to Phramer' 30
+$optional = Test-LogLine 'daemon-16' 'welcome: window created (mandatory: false)'
+Add-Check 'welcome shows after the upgrade, not mandatory' ($welcome -and $optional) ([ordered]@{ shown = $welcome; optionalInLog = $optional })
+Save-Screenshot 'upgrade-welcome'
+$skipped = Invoke-WindowButton $daemon.Id 'Welcome to Phramer' 'Skip'
+$closed = $skipped -and (Wait-NoWindow $daemon.Id 'Welcome to Phramer')
+Add-Check 'Skip closes the welcome' $closed ([ordered]@{ skipClicked = $skipped; titles = (Get-VisibleTitles $daemon.Id) })
 Add-Fact 'trayIconPromoted' (Show-TrayIcon)
 Save-Screenshot 'upgrade-tray'
 $check = Invoke-Program $PhramerCli @('config', '--check')
@@ -65,10 +73,14 @@ Stop-Phramer
 
 $after = [System.IO.File]::ReadAllBytes($SettingsFile)
 Copy-Item $SettingsFile (Join-Path $Results 'phramer-after.ini')
-$same = ($before.Length -eq $after.Length) -and (-not (Compare-Object $before $after -SyncWindow 0))
+# The skippable welcome records the new version as it opens; nothing else changes
+$expected = (New-Object System.Text.UTF8Encoding $false).GetBytes(
+    (Get-KnownSettingsText).Replace('welcomeTourShownFor=v15.0.0', "welcomeTourShownFor=v$($products[0].version)"))
+$same = ($expected.Length -eq $after.Length) -and (-not (Compare-Object $expected $after -SyncWindow 0))
 $added = @(Compare-Object (Get-Lines (Join-Path $Results 'phramer-before.ini')) (Get-Lines $SettingsFile) |
         ForEach-Object { '{0} {1}' -f $_.SideIndicator, $_.InputObject })
-Add-Check 'settings file byte-identical after 16 ran' $same ([ordered]@{ hashBefore = $hashBefore; hashAfter = (Get-Sha256 $SettingsFile); lineDiff = $added })
+$hashAfter16 = Get-Sha256 $SettingsFile
+Add-Check 'settings file after 16 ran: byte-identical but for welcomeTourShownFor' $same ([ordered]@{ hashBefore = $hashBefore; hashAfter = $hashAfter16; lineDiff = $added })
 
 $code = Invoke-Msiexec "/x `"$msi`" /qn" 'uninstall-16'
 Add-Check 'uninstall 16 silently: exit 0' ($code -eq 0) $code
@@ -77,4 +89,4 @@ $launch = Get-LaunchEntries
 Add-Check 'no Run value and no App Paths entry left' (-not $launch.run -and -not $launch.appPathsKeyExists) $launch
 Add-Check 'Program Files\Phramer removed' (-not (Test-Path $InstallDir)) (Get-InstallTree)
 Add-Check 'shortcuts removed' ((Get-PhramerShortcuts).Count -eq 0) (Get-PhramerShortcuts)
-Add-Check 'settings file kept and unchanged' ((Get-Sha256 $SettingsFile) -eq $hashBefore) (Get-Sha256 $SettingsFile)
+Add-Check 'settings file kept and unchanged' ((Get-Sha256 $SettingsFile) -eq $hashAfter16) (Get-Sha256 $SettingsFile)

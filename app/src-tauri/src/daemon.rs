@@ -192,7 +192,9 @@ fn dispatch<R: Runtime>(app: &AppHandle<R>, command: Command, reply: Option<Repl
         Command::Gui(_) | Command::Screen(_) | Command::Full(_) => {}
         Command::Launcher => actions::open_launcher(app),
         Command::Config(ConfigCommand::Open) => actions::open_configuration(app),
-        Command::Config(ConfigCommand::Check) => actions::check_configuration(),
+        Command::Config(ConfigCommand::Check) => {
+            actions::check_configuration();
+        }
         Command::Config(ConfigCommand::Set(changes)) => {
             if let Err(error) = settings::apply_config_changes(&changes) {
                 log::error!("{error}");

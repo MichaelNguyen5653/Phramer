@@ -1,0 +1,32 @@
+phramer: error: Bad value in 'Shortcuts/TYPE_COPY'. Expected: keyboard shortcut
+
+phramer: error: Bad value in 'arrowStyle'. Expected: number between 0 and %2
+
+phramer: error: Bad value in 'buttons'. Expected: please don't edit by hand
+
+phramer: error: Bad value in 'captureRegionMode'. Expected: number between  0 and %2
+
+phramer: error: Bad value in 'contrastOpacity'. Expected: number between                                                                                                                                                                                                                                                               0 and %2
+
+phramer: error: Bad value in 'drawColor'. Expected: color name or hex value
+
+phramer: error: Bad value in 'drawThickness'. Expected: number >= 1
+
+phramer: error: Bad value in 'jpegQuality'. Expected: number between                                                                                                    0 and %2
+
+phramer: error: Bad value in 'saveAsFileExtension'. Expected: supported image extension
+
+phramer: error: Bad value in 'savePath'. Expected: existing directory
+
+phramer: error: Bad value in 'showHelp'. Expected: true or false
+
+phramer: error: Bad value in 'showSelectionGeometry'. Expected: number between     0 and %2
+
+phramer: error: Bad value in 'uiColor'. Expected: color name or hex value
+
+phramer: error: Bad value in 'undoLimit'. Expected: number between                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       0 and %2
+
+phramer: error: Bad value in 'uploadHistoryMax'. Expected: number >= 0
+
+phramer: error: Bad value in 'userColors'. Expected: list of colors(min                2 and max %2) separated by comma
+
