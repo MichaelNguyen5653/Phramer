@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withRemappedPaths } from "./remap-paths.mjs";
 
 const app = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(app, "..");
@@ -25,19 +26,10 @@ function cargo() {
 
 // Panic messages name source files; keep the build machine's folders (the
 // user's profile, the checkout) out of the module that ships
-const home = process.env.CARGO_HOME || join(process.env.USERPROFILE || process.env.HOME || "", ".cargo");
-// CARGO_ENCODED_RUSTFLAGS separates flags with the unit separator, so
-// folders with spaces stay whole
-const SEPARATOR = String.fromCharCode(0x1f);
-const flags = [
-  ...(process.env.CARGO_ENCODED_RUSTFLAGS ? process.env.CARGO_ENCODED_RUSTFLAGS.split(SEPARATOR) : []),
-  `--remap-path-prefix=${home}=cargo`,
-  `--remap-path-prefix=${root}=phramer`,
-];
 const built = spawnSync(
   cargo(),
   ["build", "-p", "phramer-annotate-wasm", "--target", target, "--release"],
-  { cwd: root, stdio: "inherit", env: { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join(SEPARATOR) } },
+  { cwd: root, stdio: "inherit", env: withRemappedPaths(process.env) },
 );
 if (built.status !== 0) process.exit(built.status ?? 1);
 

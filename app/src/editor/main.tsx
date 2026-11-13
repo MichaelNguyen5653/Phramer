@@ -1,6 +1,6 @@
-// The editor window's entry point: the engine, the image and the settings
-// load together, then the editor draws and tells the daemon to show the
-// window.
+// The editor window's entry point: the engine and the image (then the
+// settings) load together, then the editor draws and tells the daemon to
+// show the window.
 
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -13,12 +13,16 @@ import { Engine } from "./engine";
 
 async function start() {
   const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
-  const asked = performance.now();
+  let arrived = performance.now();
   try {
-    const [engine, image, settings] = await Promise.all([
+    const [engine, [image, settings]] = await Promise.all([
       Engine.load(wasmUrl),
-      backend.image(),
-      backend.settings(),
+      // A window built ahead during a capture waits here for its image; the
+      // settings are read once it comes, with what the overlay saved meanwhile
+      backend.image().then(async (image) => {
+        arrived = performance.now();
+        return [image, await backend.settings()] as const;
+      }),
     ]);
     root.render(
       <React.StrictMode>
@@ -27,7 +31,7 @@ async function start() {
           image={image}
           settings={settings}
           backend={backend}
-          onReady={() => void backend.ready({ page_ms: performance.now(), image_ms: performance.now() - asked })}
+          onReady={() => void backend.ready({ page_ms: performance.now(), image_ms: performance.now() - arrived })}
         />
       </React.StrictMode>,
     );

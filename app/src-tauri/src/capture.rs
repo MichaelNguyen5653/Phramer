@@ -33,7 +33,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::cli::{InitialSelection, Rect, SaveTo, Tasks};
 use crate::daemon::DaemonState;
 use crate::reply::{EXIT_OK, Reply};
-use crate::{handoff, notify, settings, tray};
+use crate::{editor, handoff, notify, settings, tray};
 
 /// Set while an overlay is open: like 15.0.0's single `CaptureWidget`, a
 /// second one is refused.
@@ -388,6 +388,78 @@ fn has_tasks(tasks: &Tasks) -> bool {
     tasks.copy || tasks.save.is_some() || tasks.print_raw || tasks.pin || tasks.accept_on_select
 }
 
+/// The overlay's configuration for a capture with `tasks`, following the
+/// cursor across monitors when `follow` says so, starting with `initial`.
+fn overlay_config(
+    settings: &Settings,
+    tasks: &Tasks,
+    follow: bool,
+    initial: Option<LocalRect>,
+) -> OverlayConfig {
+    let mut config = OverlayConfig::from_settings(settings);
+    config.has_tasks = has_tasks(tasks);
+    config.accept_on_select = tasks.accept_on_select;
+    // A given region belongs to the monitor the overlay opens on; following
+    // the cursor (snip across all monitors) would drop it
+    config.follow_cursor = follow && initial.is_none();
+    config.initial_selection = initial;
+    config
+}
+
+/// Whether an overlay is open, or waiting out its delay.
+pub(crate) fn overlay_open() -> bool {
+    OVERLAY_OPEN.load(Ordering::SeqCst)
+}
+
+/// Builds the editor window ahead once the overlay's first frame is on
+/// screen, so WebView2 starting up never delays it; Open in Editor then
+/// only hands the image over.
+fn prewarm_editor_when_shown<R: Runtime>(app: &AppHandle<R>) {
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("editor-prewarm".to_owned())
+        .spawn(move || {
+            let start = Instant::now();
+            while !overlay_showing() {
+                if !overlay_open() || start.elapsed() > PREWARM_WAIT {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let target = handle.clone();
+            let posted = handle.run_on_main_thread(move || {
+                // Not for a capture that has ended meanwhile
+                if overlay_open() {
+                    editor::prewarm(&target);
+                }
+            });
+            if let Err(error) = posted {
+                log::error!("cannot pre-warm the editor: {error}");
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!("cannot pre-warm the editor: {error}");
+    }
+}
+
+/// How long the pre-warm waits for the overlay to show.
+const PREWARM_WAIT: Duration = Duration::from_secs(5);
+
+/// Whether an overlay window of this process is showing.
+fn overlay_showing() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, IsWindowVisible};
+    // `phramer-overlay`'s window class
+    let class: Vec<u16> = "PhramerCaptureOverlay"
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: `class` is NUL-terminated and outlives the call; a null title
+    // matches any.
+    let window = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    // SAFETY: a plain query; a null or stale handle just answers false.
+    !window.is_null() && unsafe { IsWindowVisible(window) } != 0
+}
+
 /// Tells `phramer-cli` how the capture went: the output, the notices as
 /// 15.0.0's logger printed them, then the exit code.
 fn answer(mut reply: Reply, delivery: &Delivery) {
@@ -425,11 +497,11 @@ fn run_gui<R: Runtime>(
         InitialSelection::None if settings.save_last_region() => last_region(),
         InitialSelection::None => None,
     };
-    let mut config = OverlayConfig::from_settings(&settings);
-    config.has_tasks = has_tasks(&plan.tasks);
-    config.accept_on_select = plan.tasks.accept_on_select;
-    config.follow_cursor = follow;
-    config.initial_selection = initial;
+    let config = overlay_config(&settings, &plan.tasks, follow, initial);
+    // Open in Editor is offered only without tasks
+    if !config.has_tasks {
+        prewarm_editor_when_shown(app);
+    }
 
     let finished = run_overlay(OverlaySession {
         monitors,
@@ -548,6 +620,11 @@ pub(crate) fn run_export(
 /// On the main thread: remembers the saved file, updates the tray menu and
 /// sends the notifications.
 fn deliver<R: Runtime>(app: &AppHandle<R>, delivery: Delivery) {
+    // A capture that ended any other way than Open in Editor leaves no
+    // pre-warmed editor behind
+    if !matches!(delivery, Delivery::Editor(_)) && !overlay_open() {
+        editor::release_warm(app);
+    }
     let current = settings::load(&app.state::<DaemonState>().settings_path);
     match delivery {
         Delivery::Aborted => {
@@ -579,5 +656,78 @@ fn deliver<R: Runtime>(app: &AppHandle<R>, delivery: Delivery) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use phramer_capture::MonitorId;
+    use phramer_overlay::{Effect, Event, Key, Modifiers, Outcome, OverlayState};
+
+    use super::*;
+
+    /// The layout `gui --region 320x200+40+40` then E was reported on
+    /// (opening the whole monitor): three monitors, snip across all of them.
+    fn three_monitors() -> Vec<Monitor> {
+        vec![
+            Monitor::new(
+                MonitorId::new("primary"),
+                PhysicalRect::new(0, 0, 1920, 1200),
+                120,
+                true,
+            ),
+            Monitor::new(
+                MonitorId::new("upper-left"),
+                PhysicalRect::new(-846, -1080, 1920, 1080),
+                96,
+                false,
+            ),
+            Monitor::new(
+                MonitorId::new("upper-right"),
+                PhysicalRect::new(1074, -1080, 1920, 1080),
+                96,
+                false,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_given_region_reaches_open_in_editor_when_snipping_across_monitors() {
+        let settings = Settings::default();
+        assert_eq!(
+            settings.capture_region_mode(),
+            CaptureRegionMode::AllMonitors
+        );
+        let region = LocalRect::new(40, 40, 320, 200);
+        // `placement` follows the cursor in this mode
+        let config = overlay_config(&settings, &Tasks::default(), true, Some(region));
+        let mut state = OverlayState::new(three_monitors(), 1, Vec::new(), config).unwrap();
+        state.start();
+        let effects = state.handle(
+            Event::Key {
+                key: Key::Char('e'),
+                modifiers: Modifiers::NONE,
+            },
+            0,
+        );
+        let deferred = effects.iter().find_map(|effect| match effect {
+            Effect::Close(Outcome::Deferred(deferred)) => Some(*deferred),
+            _ => None,
+        });
+        let deferred = deferred.expect("E opens the editor");
+        assert_eq!(deferred.action, DeferredAction::OpenInEditor);
+        assert_eq!((deferred.monitor, deferred.region), (1, region));
+    }
+
+    #[test]
+    fn without_a_region_the_overlay_still_follows_the_cursor() {
+        let config = overlay_config(&Settings::default(), &Tasks::default(), true, None);
+        assert!(config.follow_cursor);
+        assert!(!config.has_tasks);
+        let tasks = Tasks {
+            copy: true,
+            ..Tasks::default()
+        };
+        assert!(overlay_config(&Settings::default(), &tasks, false, None).has_tasks);
     }
 }

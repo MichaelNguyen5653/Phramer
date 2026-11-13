@@ -4,16 +4,20 @@
 //! WebAssembly; what it saves, copies or pins comes back here and goes the
 //! way a capture's export goes (`capture::run_export`, `capture::pin`).
 //!
-//! No webview exists until an image is opened, and each one goes when its
-//! window closes, so an idle daemon holds no browser process.
+//! While a capture overlay is open, one hidden window is built ahead
+//! ([`prewarm`]) with its page loaded and waiting for an image, so Open in
+//! Editor only has to hand the image over; the capture ending any other way
+//! destroys it ([`release_warm`]). Otherwise no webview exists until an
+//! image is opened, and each one goes when its window closes, so an idle
+//! daemon holds no browser process.
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::sync::{Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use phramer_annotate::{ArrowHead, RedactStyle, ShapeStyle};
 use phramer_capture::PhysicalRect;
@@ -47,23 +51,34 @@ const MIN_HEIGHT: f64 = 520.0;
 /// The share of the monitor's work area the window may take.
 const MAX_SHARE: f64 = 0.92;
 
-/// One open editor window.
+/// How long a pre-warmed window's page has, once given an image, to show
+/// it is alive (by asking for the image) before a new window replaces it.
+const PAGE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// One editor window.
 struct Opened {
-    path: PathBuf,
+    /// `None` while pre-warmed.
+    path: Option<PathBuf>,
+    /// When the image was asked for (or the pre-warm started).
     requested: Instant,
+    /// The page's requests for an image that has not come yet.
+    waiting: Vec<mpsc::Sender<PathBuf>>,
+    /// The page has loaded and asked for its image.
+    asked: bool,
 }
 
-/// The open editor windows, by label.
+/// The editor windows, by label.
 #[derive(Default)]
 pub(crate) struct Editors {
     windows: Mutex<HashMap<String, Opened>>,
     next: AtomicU64,
+    /// The pre-warmed window that has no image yet.
+    warm: Mutex<Option<String>>,
 }
 
 impl Editors {
-    fn path_of(&self, label: &str) -> Option<PathBuf> {
-        let windows = self.windows.lock().ok()?;
-        windows.get(label).map(|opened| opened.path.clone())
+    fn take_warm(&self) -> Option<String> {
+        self.warm.lock().ok()?.take()
     }
 }
 
@@ -126,15 +141,15 @@ fn png_size(path: &Path) -> Option<(u32, u32)> {
     Some((field(16)?, field(20)?))
 }
 
-/// A new editor window for the PNG at `path`. Hidden until its page has
-/// drawn the image (`editor_ready`), so it never flashes empty.
-pub(crate) fn open<R: Runtime>(app: &AppHandle<R>, path: PathBuf) {
-    let requested = Instant::now();
-    let editors = app.state::<Editors>();
-    let number = editors.next.fetch_add(1, Ordering::Relaxed) + 1;
-    let label = format!("{LABEL_PREFIX}{number}");
+/// Where a window for an image goes: the work area of the monitor under the
+/// cursor, and the logical inner size the image wants there.
+struct Fit {
+    origin: (i32, i32),
+    work: (u32, u32),
+    size: (f64, f64),
+}
 
-    let image = png_size(&path).unwrap_or((800, 600));
+fn fit_for<R: Runtime>(app: &AppHandle<R>, image: (u32, u32)) -> Fit {
     let monitor = app
         .cursor_position()
         .ok()
@@ -148,60 +163,244 @@ pub(crate) fn open<R: Runtime>(app: &AppHandle<R>, path: PathBuf) {
             monitor.scale_factor(),
         )
     });
-    let (width, height) = initial_size(image, work, scale);
+    Fit {
+        origin,
+        work,
+        size: initial_size(image, work, scale),
+    }
+}
 
+/// Centres `window` in the work area it was sized for (the one under the
+/// cursor); the builder's `center` uses whichever monitor the window starts
+/// on.
+fn center<R: Runtime>(window: &WebviewWindow<R>, fit: &Fit) {
+    if let Ok(outer) = window.outer_size() {
+        let at = centered_in(fit.origin, fit.work, (outer.width, outer.height));
+        if let Err(error) = window.set_position(tauri::PhysicalPosition::new(at.0, at.1)) {
+            log::warn!("cannot place the editor: {error}");
+        }
+    }
+}
+
+/// A new hidden editor window of logical inner `size` for `path` (`None`:
+/// pre-warmed, waiting for an image). Blocks the main thread while WebView2
+/// starts.
+fn build<R: Runtime>(
+    app: &AppHandle<R>,
+    path: Option<PathBuf>,
+    requested: Instant,
+    size: (f64, f64),
+) -> Option<WebviewWindow<R>> {
+    let editors = app.state::<Editors>();
+    let number = editors.next.fetch_add(1, Ordering::Relaxed) + 1;
+    let label = format!("{LABEL_PREFIX}{number}");
     if let Ok(mut windows) = editors.windows.lock() {
         windows.insert(
             label.clone(),
             Opened {
-                path: path.clone(),
+                path,
                 requested,
+                waiting: Vec::new(),
+                asked: false,
             },
         );
     }
+    let held = session_end::hold();
     let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("editor.html".into()))
         .title(TITLE)
-        .inner_size(width, height)
+        .inner_size(size.0, size.1)
         .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
         .decorations(false)
         .visible(false)
         .build();
+    drop(held);
     let window = match built {
         Ok(window) => window,
         Err(error) => {
             log::error!("cannot create the editor window: {error}");
             forget(app, &label);
-            return;
+            return None;
         }
     };
-    // Centred on the monitor it was sized for (the one under the cursor);
-    // the builder's `center` uses whichever monitor the window starts on
-    if let Ok(outer) = window.outer_size() {
-        let at = centered_in(origin, work, (outer.width, outer.height));
-        if let Err(error) = window.set_position(tauri::PhysicalPosition::new(at.0, at.1)) {
-            log::warn!("cannot place the editor: {error}");
-        }
-    }
     let handle = app.clone();
-    let closing = label.clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
-            forget(&handle, &closing);
+            forget(&handle, &label);
         }
     });
+    Some(window)
+}
+
+/// An editor window for the PNG at `path`: the pre-warmed one when there
+/// is one, otherwise a new one. Hidden until its page has drawn the image
+/// (`editor_ready`), so it never flashes empty.
+pub(crate) fn open<R: Runtime>(app: &AppHandle<R>, path: PathBuf) {
+    if let Some(label) = app.state::<Editors>().take_warm() {
+        match app.get_webview_window(&label) {
+            Some(window) => {
+                hand_over(app, &window, path);
+                return;
+            }
+            None => forget(app, &label),
+        }
+    }
+    let requested = Instant::now();
+    let image = png_size(&path).unwrap_or((800, 600));
+    let fit = fit_for(app, image);
+    let Some(window) = build(app, Some(path.clone()), requested, fit.size) else {
+        return;
+    };
+    center(&window, &fit);
     log::info!(
-        "editor: {label} for {} ({}x{}), window {width}x{height} created in {} ms",
+        "editor: {} for {} ({}x{}), window {}x{} created in {} ms",
+        window.label(),
         path.display(),
         image.0,
         image.1,
+        fit.size.0,
+        fit.size.1,
         requested.elapsed().as_millis()
     );
 }
 
+/// On the main thread, while a capture overlay is open: builds the hidden
+/// window the capture's Open in Editor will use, unless one is waiting
+/// already.
+pub(crate) fn prewarm<R: Runtime>(app: &AppHandle<R>) {
+    let editors = app.state::<Editors>();
+    if let Ok(warm) = editors.warm.lock()
+        && let Some(label) = warm.as_ref()
+    {
+        log::info!("editor: {label} is pre-warmed already");
+        return;
+    }
+    let started = Instant::now();
+    let Some(window) = build(app, None, started, (MIN_WIDTH, MIN_HEIGHT)) else {
+        return;
+    };
+    let label = window.label().to_owned();
+    if let Ok(mut warm) = editors.warm.lock() {
+        *warm = Some(label.clone());
+    }
+    log::info!(
+        "editor: {label} pre-warmed, window created in {} ms",
+        started.elapsed().as_millis()
+    );
+}
+
+/// On the main thread, once no capture is open: the pre-warmed window that
+/// got no image goes, and with it the webview.
+pub(crate) fn release_warm<R: Runtime>(app: &AppHandle<R>) {
+    let Some(label) = app.state::<Editors>().take_warm() else {
+        return;
+    };
+    log::info!("editor: {label} released unused");
+    match app.get_webview_window(&label) {
+        Some(window) => {
+            if let Err(error) = window.destroy() {
+                log::error!("cannot close the pre-warmed editor: {error}");
+                forget(app, &label);
+            }
+        }
+        None => forget(app, &label),
+    }
+}
+
+/// Gives the pre-warmed `window` its image: sized and placed for it, then
+/// the page, which has asked or will ask for it, draws it and shows.
+fn hand_over<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, path: PathBuf) {
+    let label = window.label().to_owned();
+    let image = png_size(&path).unwrap_or((800, 600));
+    let fit = fit_for(app, image);
+    // On the target monitor first, so the logical size uses its scale
+    if let Err(error) =
+        window.set_position(tauri::PhysicalPosition::new(fit.origin.0, fit.origin.1))
+    {
+        log::warn!("cannot place the editor: {error}");
+    }
+    if let Err(error) = window.set_size(tauri::LogicalSize::new(fit.size.0, fit.size.1)) {
+        log::warn!("cannot size the editor: {error}");
+    }
+    center(window, &fit);
+    let waiting = app
+        .state::<Editors>()
+        .windows
+        .lock()
+        .ok()
+        .and_then(|mut windows| {
+            let opened = windows.get_mut(&label)?;
+            opened.path = Some(path.clone());
+            opened.requested = Instant::now();
+            Some(std::mem::take(&mut opened.waiting))
+        })
+        .unwrap_or_default();
+    let asked = !waiting.is_empty();
+    for page in waiting {
+        let _ = page.send(path.clone());
+    }
+    log::info!(
+        "editor: {label} (pre-warmed) for {} ({}x{}), window {}x{}; page {}",
+        path.display(),
+        image.0,
+        image.1,
+        fit.size.0,
+        fit.size.1,
+        if asked { "waiting" } else { "still loading" }
+    );
+    // A page that never loads would keep the image from showing: a new
+    // window takes over
+    let handle = app.clone();
+    let watched = std::thread::Builder::new()
+        .name("editor-watch".to_owned())
+        .spawn(move || {
+            std::thread::sleep(PAGE_TIMEOUT);
+            let target = handle.clone();
+            if let Err(error) = handle.run_on_main_thread(move || rescue(&target, &label)) {
+                log::error!("cannot check the editor: {error}");
+            }
+        });
+    if let Err(error) = watched {
+        log::warn!("cannot watch the pre-warmed editor: {error}");
+    }
+}
+
+/// On the main thread: the pre-warmed window `label` still has not asked
+/// for its image; it goes and the image opens in a new window.
+fn rescue<R: Runtime>(app: &AppHandle<R>, label: &str) {
+    let path = app
+        .state::<Editors>()
+        .windows
+        .lock()
+        .ok()
+        .and_then(|mut windows| {
+            let opened = windows.get_mut(label)?;
+            // Kept from `forget`, which would remove the file
+            (!opened.asked).then(|| opened.path.take()).flatten()
+        });
+    let Some(path) = path else {
+        return;
+    };
+    log::warn!("editor: {label} did not load its page; opening a new window");
+    match app.get_webview_window(label) {
+        Some(window) => {
+            if let Err(error) = window.destroy() {
+                log::error!("cannot close the editor: {error}");
+            }
+        }
+        None => forget(app, label),
+    }
+    open(app, path);
+}
+
 /// The window is gone: drops its entry and the temporary PNG it was given.
 fn forget<R: Runtime>(app: &AppHandle<R>, label: &str) {
-    let removed = app
-        .state::<Editors>()
+    let editors = app.state::<Editors>();
+    if let Ok(mut warm) = editors.warm.lock()
+        && warm.as_deref() == Some(label)
+    {
+        *warm = None;
+    }
+    let removed = editors
         .windows
         .lock()
         .ok()
@@ -209,16 +408,18 @@ fn forget<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let Some(opened) = removed else {
         return;
     };
+    log::info!("editor: {label} closed");
+    let Some(path) = opened.path else {
+        return;
+    };
     // Only the editor's own copies in %TEMP%\phramer
-    let ours = opened.path.parent() == Some(std::env::temp_dir().join("phramer").as_path())
-        && opened
-            .path
+    let ours = path.parent() == Some(std::env::temp_dir().join("phramer").as_path())
+        && path
             .file_name()
             .is_some_and(|name| name.to_string_lossy().starts_with("editor-"));
-    if ours && let Err(error) = std::fs::remove_file(&opened.path) {
-        log::warn!("cannot remove {}: {error}", opened.path.display());
+    if ours && let Err(error) = std::fs::remove_file(&path) {
+        log::warn!("cannot remove {}: {error}", path.display());
     }
-    log::info!("editor: {label} closed");
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -262,15 +463,39 @@ fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), ImageError> {
 }
 
 /// The window's image: width and height (u32, little-endian), then
-/// straight RGBA8. Only the image this window was opened with is read.
+/// straight RGBA8. Only the image this window was opened with is read; a
+/// pre-warmed window's page waits here until it is given one.
 #[tauri::command]
 pub(crate) async fn editor_image<R: Runtime>(
     window: WebviewWindow<R>,
     editors: tauri::State<'_, Editors>,
 ) -> Result<Response, String> {
-    let path = editors
-        .path_of(window.label())
-        .ok_or_else(|| "this window has no image".to_owned())?;
+    let given = {
+        let mut windows = editors
+            .windows
+            .lock()
+            .map_err(|_| "the editor state is unavailable".to_owned())?;
+        let opened = windows
+            .get_mut(window.label())
+            .ok_or_else(|| "this window has no image".to_owned())?;
+        opened.asked = true;
+        match &opened.path {
+            Some(path) => Ok(path.clone()),
+            None => {
+                let (page, image) = mpsc::channel();
+                opened.waiting.push(page);
+                Err(image)
+            }
+        }
+    };
+    let path = match given {
+        Ok(path) => path,
+        // Ends when the image comes or the window goes
+        Err(image) => tauri::async_runtime::spawn_blocking(move || image.recv())
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|_| "the window closed before it got an image".to_owned())?,
+    };
     let (width, height, rgba) = decode_png(&path).map_err(|error| error.to_string())?;
     let mut bytes = Vec::with_capacity(8 + rgba.len());
     bytes.extend_from_slice(&width.to_le_bytes());
@@ -284,8 +509,8 @@ pub(crate) async fn editor_image<R: Runtime>(
 pub(crate) struct PageTiming {
     /// From the page starting to load to the image on screen.
     page_ms: f64,
-    /// From asking for the image to the image on screen: what an already
-    /// loaded page would take.
+    /// From the image arriving to the image on screen: what an already
+    /// loaded page takes.
     image_ms: f64,
 }
 
@@ -296,11 +521,25 @@ pub(crate) fn editor_ready<R: Runtime>(
     editors: tauri::State<'_, Editors>,
     timing: Option<PageTiming>,
 ) {
-    let requested = editors
+    let (requested, given) = editors
         .windows
         .lock()
         .ok()
-        .and_then(|windows| windows.get(window.label()).map(|opened| opened.requested));
+        .and_then(|windows| {
+            windows
+                .get(window.label())
+                .map(|opened| (Some(opened.requested), opened.path.is_some()))
+        })
+        .unwrap_or((None, true));
+    if !given {
+        // The page failed before any image came (a pre-warmed window whose
+        // engine did not load): never shown; the next open builds anew
+        log::warn!("editor: {} failed while pre-warmed", window.label());
+        if let Err(error) = window.destroy() {
+            log::error!("cannot close the editor: {error}");
+        }
+        return;
+    }
     if let Err(error) = window.show() {
         log::error!("cannot show the editor: {error}");
     }
@@ -653,6 +892,122 @@ fn ask_save_path<R: Runtime>(
         dialog = dialog.set_directory(folder);
     }
     dialog.blocking_save_file()?.into_path().ok()
+}
+
+/// While WebView2 starts, it pumps the main thread's messages from inside
+/// Tao's event handler. Tao answers `WM_ENDSESSION` (sign-out, Restart
+/// Manager) by calling that handler again, which aborts the process; with a
+/// window built ahead on every capture, that would hit a sign-out during a
+/// capture. The message is held back for the length of a build and sent
+/// again once it is over, when Tao ends the process cleanly.
+mod session_end {
+    use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, EnumThreadWindows, GWLP_WNDPROC, GetClassNameW, PostMessageW,
+        SetWindowLongPtrW, WM_ENDSESSION, WNDPROC,
+    };
+
+    /// Tao's window for the event loop's own messages.
+    const TAO_TARGET: &str = "Tao Thread Event Target";
+
+    /// The window procedure replaced while held; 0 when not held.
+    static ORIGINAL: AtomicIsize = AtomicIsize::new(0);
+    static ENDED: AtomicBool = AtomicBool::new(false);
+    static ENDED_LPARAM: AtomicIsize = AtomicIsize::new(0);
+
+    /// Holds `WM_ENDSESSION` back until dropped.
+    pub(super) struct Held {
+        window: HWND,
+    }
+
+    /// On the main thread: holds the session's end back, unless it is held
+    /// already or Tao's window is not found.
+    pub(super) fn hold() -> Option<Held> {
+        if ORIGINAL.load(Ordering::SeqCst) != 0 {
+            return None;
+        }
+        let window = tao_target()?;
+        ENDED.store(false, Ordering::SeqCst);
+        let procedure = held as *const () as isize;
+        // SAFETY: `window` belongs to this thread; `held` has the window
+        // procedure's signature and passes on all it does not keep.
+        let original = unsafe { SetWindowLongPtrW(window, GWLP_WNDPROC, procedure) };
+        if original == 0 {
+            return None;
+        }
+        ORIGINAL.store(original, Ordering::SeqCst);
+        Some(Held { window })
+    }
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            let original = ORIGINAL.swap(0, Ordering::SeqCst);
+            // SAFETY: puts back the procedure `hold` replaced, on the same
+            // window of this thread.
+            unsafe { SetWindowLongPtrW(self.window, GWLP_WNDPROC, original) };
+            if ENDED.swap(false, Ordering::SeqCst) {
+                log::info!("session ending: passed on after the editor window was built");
+                // SAFETY: posts to a window of this thread, no pointers.
+                unsafe {
+                    PostMessageW(
+                        self.window,
+                        WM_ENDSESSION,
+                        1,
+                        ENDED_LPARAM.load(Ordering::SeqCst),
+                    )
+                };
+            }
+        }
+    }
+
+    unsafe extern "system" fn held(
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if message == WM_ENDSESSION && wparam != 0 {
+            ENDED_LPARAM.store(lparam, Ordering::SeqCst);
+            ENDED.store(true, Ordering::SeqCst);
+            return 0;
+        }
+        // SAFETY: `ORIGINAL` is the procedure this one replaced (a function
+        // pointer, so the same size as `isize`), set before this one runs.
+        unsafe {
+            let original = std::mem::transmute::<isize, WNDPROC>(ORIGINAL.load(Ordering::SeqCst));
+            CallWindowProcW(original, window, message, wparam, lparam)
+        }
+    }
+
+    /// Tao's event-target window on this thread.
+    fn tao_target() -> Option<HWND> {
+        unsafe extern "system" fn found(window: HWND, out: LPARAM) -> i32 {
+            let mut class = [0u16; 64];
+            // SAFETY: `class` holds 64 characters.
+            let length = unsafe { GetClassNameW(window, class.as_mut_ptr(), 64) };
+            let name = String::from_utf16_lossy(&class[..usize::try_from(length).unwrap_or(0)]);
+            if name == TAO_TARGET {
+                // SAFETY: `out` is the `Option<HWND>` `tao_target` passed.
+                unsafe { *(out as *mut Option<HWND>) = Some(window) };
+                return 0;
+            }
+            1
+        }
+        let mut window: Option<HWND> = None;
+        // SAFETY: `found` writes only through the pointer to `window`,
+        // which outlives the call.
+        unsafe {
+            EnumThreadWindows(
+                GetCurrentThreadId(),
+                Some(found),
+                &mut window as *mut Option<HWND> as LPARAM,
+            )
+        };
+        window
+    }
 }
 
 #[cfg(test)]

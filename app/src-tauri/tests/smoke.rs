@@ -138,7 +138,7 @@ fn processes_of(exe: &Path) -> Vec<u32> {
     pids
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Window {
     hwnd: isize,
     class: String,
@@ -1041,6 +1041,123 @@ fn logged_editor_open(log: &str) -> Option<u128> {
         .find_map(|rest| rest.split(' ').next()?.parse().ok())
 }
 
+/// The window-creation time the daemon logged last, in milliseconds.
+fn logged_window_created(log: &str) -> Option<u128> {
+    log.lines()
+        .rev()
+        .filter_map(|line| line.split(" created in ").nth(1))
+        .find_map(|rest| rest.split(' ').next()?.parse().ok())
+}
+
+/// How long the daemon's event loop takes to answer a forwarded command
+/// (`phramer-cli launcher`, answered from the main thread): what a tray
+/// click waits for too.
+fn round_trip() -> Duration {
+    let start = Instant::now();
+    let status = Command::new(cli_exe())
+        .arg("launcher")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run phramer-cli");
+    assert!(status.success(), "phramer-cli launcher: {status}");
+    start.elapsed()
+}
+
+/// [`round_trip`] on another thread, started now.
+fn round_trip_meanwhile() -> std::thread::JoinHandle<Duration> {
+    std::thread::spawn(round_trip)
+}
+
+fn daemon_memory(pid: u32) -> (usize, f64) {
+    let mut everything = vec![pid];
+    everything.extend(children_of(pid));
+    (everything.len(), memory_mb(&everything).unwrap_or(-1.0))
+}
+
+/// Starts `gui --region 320x200+40+40` and waits for its overlay.
+fn region_capture(
+    exe: &Path,
+    daemon_pid: u32,
+    target: (i32, i32, i32, i32),
+    cleanup: &mut Cleanup,
+) -> Window {
+    let cli = Command::new(exe)
+        .args(["gui", "--region", "320x200+40+40"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the CLI");
+    cleanup.pids.push(cli.id());
+    let (overlay, _) = wait_for_overlay(daemon_pid, target, Duration::from_secs(10))
+        .expect("no overlay covering the target monitor");
+    wait_cli(cli);
+    overlay
+}
+
+/// Posts a key to a window of ours.
+fn post_key(window: &Window, key: u16) {
+    // SAFETY: posting a message to a window handle; a stale one just fails.
+    let posted = unsafe { PostMessageW(window.hwnd as HWND, WM_KEYDOWN, usize::from(key), 0) };
+    assert_ne!(posted, 0, "key {key:#x} could not be posted");
+}
+
+/// Waits, polling every 5 ms, for exactly one editor window to show; it
+/// and how long that took.
+fn wait_for_editor(daemon_pid: u32, log_path: &Path) -> (Window, Duration) {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(15) {
+        let shown = editors(daemon_pid);
+        if !shown.is_empty() {
+            assert_eq!(shown.len(), 1, "one window per image: {shown:?}");
+            return (shown[0].clone(), start.elapsed());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!(
+        "no editor window appeared; windows: {:?}\n--- log ---\n{}",
+        windows_of(daemon_pid),
+        fs::read_to_string(log_path).unwrap_or_default()
+    );
+}
+
+/// Closes the editor (nothing drawn, so no question) and checks that its
+/// webview and temporary image go.
+fn close_editor(daemon_pid: u32, editor: &Window, image: &Path) {
+    // SAFETY: posting a message to a window handle; a stale one just fails.
+    let posted = unsafe { PostMessageW(editor.hwnd as HWND, WM_CLOSE, 0, 0) };
+    assert_ne!(posted, 0, "WM_CLOSE could not be posted");
+    assert!(
+        wait_until(Duration::from_secs(10), || editors(daemon_pid).is_empty()),
+        "the editor did not close"
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), || !image.exists()),
+        "{} was left behind",
+        image.display()
+    );
+}
+
+/// No webview left: no WebView2 process under the daemon and no Tauri
+/// window.
+fn assert_no_webview(daemon_pid: u32) {
+    assert!(
+        wait_until(Duration::from_secs(15), || children_of(daemon_pid)
+            .is_empty()),
+        "webview processes outlived the editor: {:?}",
+        children_of(daemon_pid)
+    );
+    let windows = windows_of(daemon_pid);
+    assert!(
+        !windows
+            .iter()
+            .any(|w| w.class.contains("Tauri") || w.class.contains("WebView")),
+        "a webview window was left: {windows:?}"
+    );
+}
+
 #[test]
 #[ignore = "live: starts the daemon, captures a region and opens the editor"]
 fn open_in_editor_shows_the_editor_window() {
@@ -1099,110 +1216,147 @@ fn open_in_editor_shows_the_editor_window() {
         children_of(daemon_pid)
     );
     println!("memory, idle daemon: {:.1} MB", memory_mb(&[daemon_pid]).unwrap_or(-1.0));
+    let idle: Vec<u128> = (0..3).map(|_| round_trip().as_millis()).collect();
+    println!("event loop, idle: answers in {idle:?} ms");
+    let read_log = || fs::read_to_string(&log_path).unwrap_or_default();
 
-    // Twice: the first open starts WebView2, the second finds out whether
-    // anything was kept warm
+    // Twice: the first capture starts WebView2 cold, the second warm
     let target = monitor_under_cursor();
     for round in 1..=2 {
-        println!("--- editor open {round} ---");
-        // 2. A capture of a small region, sent to the editor with its key (E)
-        let cli = Command::new(&exe)
-            .args(["gui", "--region", "320x200+40+40"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("start the CLI");
-        cleanup.pids.push(cli.id());
-        let (overlay, _) = wait_for_overlay(daemon_pid, target, Duration::from_secs(10))
-            .expect("no overlay covering the target monitor");
-        wait_cli(cli);
-        let sent = Instant::now();
-        // SAFETY: posting a message to a window handle; a stale one just fails.
-        let posted = unsafe { PostMessageW(overlay.hwnd as HWND, WM_KEYDOWN, usize::from(b'E'), 0) };
-        assert_ne!(posted, 0, "E could not be posted");
-
-        // 3. The editor window shows
-        let mut shown = Vec::new();
+        println!("--- capture, pre-warm, Open in Editor {round} ---");
+        let before = read_log();
+        // 2. A capture of a small region; the editor is built meanwhile,
+        // while the event loop is timed
+        let overlay = region_capture(&exe, daemon_pid, target, &mut cleanup);
+        let during_build = round_trip_meanwhile();
         assert!(
-            wait_until(Duration::from_secs(15), || {
-                shown = editors(daemon_pid);
-                !shown.is_empty()
-            }),
-            "no editor window appeared; windows: {:?}\n--- log ---\n{}",
-            windows_of(daemon_pid),
-            fs::read_to_string(&log_path).unwrap_or_default()
+            wait_until(Duration::from_secs(15), || read_log()[before.len()..]
+                .contains(" pre-warmed, window created in ")),
+            "no editor was pre-warmed\n--- log ---\n{}",
+            read_log()
         );
+        let text = read_log();
         println!(
-            "editor {:#x} at {:?}, seen {} ms after E",
-            shown[0].hwnd,
-            shown[0].rect,
-            sent.elapsed().as_millis()
+            "pre-warm: window created in {:?} ms; event loop answered in {} ms meanwhile",
+            logged_window_created(&text[before.len()..]),
+            during_build.join().expect("round trip").as_millis()
         );
-        assert_eq!(shown.len(), 1, "one window per image");
+        std::thread::sleep(Duration::from_secs(2));
+        let (processes, mb) = daemon_memory(daemon_pid);
+        println!("memory, capture open + pre-warmed editor ({processes} processes): {mb:.1} MB");
+        assert!(processes > 1, "no webview process during the capture");
+
+        // 3. E: the pre-warmed window shows with the region
+        post_key(&overlay, u16::from(b'E'));
+        let after_e = round_trip_meanwhile();
+        let (editor, seen) = wait_for_editor(daemon_pid, &log_path);
+        println!(
+            "editor {:#x} at {:?}, seen {} ms after E; event loop answered in {} ms meanwhile",
+            editor.hwnd,
+            editor.rect,
+            seen.as_millis(),
+            after_e.join().expect("round trip").as_millis()
+        );
+        let opened = || logged_editor_open(&read_log()[before.len()..]).is_some();
         assert!(
-            wait_until(Duration::from_secs(5), || fs::read_to_string(&log_path)
-                .is_ok_and(|text| logged_editor_open(&text).is_some())),
+            wait_until(Duration::from_secs(5), opened),
             "the daemon logged no open time"
         );
-        let text = fs::read_to_string(&log_path).unwrap_or_default();
-        println!("daemon: editor visible {:?} ms after open", logged_editor_open(&text));
-        std::thread::sleep(Duration::from_secs(2));
-        let mut everything = vec![daemon_pid];
-        everything.extend(children_of(daemon_pid));
+        let text = read_log();
+        let this_round = &text[before.len()..];
         println!(
-            "memory, daemon + editor ({} processes): {:.1} MB",
-            everything.len(),
-            memory_mb(&everything).unwrap_or(-1.0)
+            "daemon: editor visible {:?} ms after the hand-over",
+            logged_editor_open(this_round)
         );
-        let image = text
+        assert!(
+            this_round.contains("(pre-warmed) for"),
+            "the pre-warmed window was not used:\n{this_round}"
+        );
+        assert_eq!(
+            this_round.matches(" created in ").count(),
+            1,
+            "one window built:\n{this_round}"
+        );
+        let image = this_round
             .lines()
             .rev()
             .find_map(|line| line.split("editor: opening ").nth(1))
             .map(|path| PathBuf::from(path.trim()))
             .expect("the daemon logged the image it opened");
-        assert!(image.exists(), "{} is missing", image.display());
+        let size = fs::read(&image).ok().and_then(|bytes| png_size(&bytes));
+        assert_eq!(size, Some((320, 200)), "the editor got the whole monitor");
+        std::thread::sleep(Duration::from_secs(2));
+        let (processes, mb) = daemon_memory(daemon_pid);
+        println!("memory, daemon + editor ({processes} processes): {mb:.1} MB");
 
-        // 4. Closing it (nothing drawn, so no question) frees the webview and
-        // the temporary image
-        // SAFETY: posting a message to a window handle; a stale one just fails.
-        let posted = unsafe { PostMessageW(shown[0].hwnd as HWND, WM_CLOSE, 0, 0) };
-        assert_ne!(posted, 0, "WM_CLOSE could not be posted");
-        assert!(
-            wait_until(Duration::from_secs(10), || editors(daemon_pid).is_empty()),
-            "the editor did not close"
-        );
-        assert!(
-            wait_until(Duration::from_secs(5), || !image.exists()),
-            "{} was left behind",
-            image.display()
-        );
-        std::thread::sleep(Duration::from_secs(3));
-        let left = children_of(daemon_pid);
-        let mut everything = vec![daemon_pid];
-        everything.extend(&left);
+        // 4. Closing it frees the webview and the temporary image
+        close_editor(daemon_pid, &editor, &image);
+        assert_no_webview(daemon_pid);
         println!(
-            "after closing: {} child processes, {:.1} MB in all",
-            left.len(),
-            memory_mb(&everything).unwrap_or(-1.0)
+            "after closing: {:.1} MB, no child processes",
+            memory_mb(&[daemon_pid]).unwrap_or(-1.0)
         );
     }
 
-    // 5. A clean stop leaves nothing running
-    let children = children_of(daemon_pid);
-    println!("daemon children before the stop: {children:?}");
-    stop(daemon_pid, &tray);
-    drop(daemon);
-    assert!(
-        wait_until(Duration::from_secs(15), || children
-            .iter()
-            .all(|pid| image_path(*pid).is_none())),
-        "child processes outlived the daemon: {children:?}"
+    // 5. E at once, before the pre-warm can have finished: still one window
+    println!("--- Open in Editor straight away ---");
+    let before = read_log();
+    let overlay = region_capture(&exe, daemon_pid, target, &mut cleanup);
+    post_key(&overlay, u16::from(b'E'));
+    let (editor, seen) = wait_for_editor(daemon_pid, &log_path);
+    println!("editor seen {} ms after E", seen.as_millis());
+    std::thread::sleep(Duration::from_secs(1));
+    let text = read_log();
+    let this_round = &text[before.len()..];
+    assert_eq!(
+        this_round.matches(" created in ").count(),
+        1,
+        "one window built:\n{this_round}"
     );
     println!(
-        "--- daemon log ---\n{}",
-        fs::read_to_string(&log_path).unwrap_or_default()
+        "used the pre-warmed window: {}",
+        this_round.contains("(pre-warmed) for")
     );
+    let image = this_round
+        .lines()
+        .rev()
+        .find_map(|line| line.split("editor: opening ").nth(1))
+        .map(|path| PathBuf::from(path.trim()))
+        .expect("the daemon logged the image it opened");
+    close_editor(daemon_pid, &editor, &image);
+    assert_no_webview(daemon_pid);
+
+    // 6. A capture ended with Esc leaves no webview behind
+    println!("--- capture, pre-warm, Esc ---");
+    let before = read_log();
+    let overlay = region_capture(&exe, daemon_pid, target, &mut cleanup);
+    assert!(
+        wait_until(Duration::from_secs(15), || read_log()[before.len()..]
+            .contains(" pre-warmed, window created in ")),
+        "no editor was pre-warmed"
+    );
+    assert!(
+        !children_of(daemon_pid).is_empty(),
+        "no webview during the capture"
+    );
+    close_overlay(daemon_pid, &overlay);
+    assert_no_webview(daemon_pid);
+    assert!(
+        read_log()[before.len()..].contains("released unused"),
+        "the pre-warmed window was not released"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    println!(
+        "memory, idle daemon after Esc: {:.1} MB, no child processes",
+        memory_mb(&[daemon_pid]).unwrap_or(-1.0)
+    );
+    let idle: Vec<u128> = (0..3).map(|_| round_trip().as_millis()).collect();
+    println!("event loop, idle again: answers in {idle:?} ms");
+
+    // 7. A clean stop leaves nothing running
+    stop(daemon_pid, &tray);
+    drop(daemon);
+    println!("--- daemon log ---\n{}", read_log());
     assert!(
         user_state() == cleanup.before,
         "the settings file or startup registry entries changed"
