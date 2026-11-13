@@ -29,7 +29,8 @@ use windows_sys::Win32::UI::HiDpi::{
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, PostMessageW, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    FindWindowExW, FindWindowW, GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE,
 };
 
 /// The overlay's window class.
@@ -238,4 +239,144 @@ fn draw_a_rectangle_and_export() {
     assert_eq!(&bytes[1..4], b"PNG");
     std::fs::remove_dir_all(&dir).expect("temp folder removed");
     println!("drew, accepted and saved {}x{}", image.width, image.height);
+}
+
+/// The daemon's log, as far as the overlay writes it.
+struct Lines(std::sync::Mutex<Vec<String>>);
+
+impl log::Log for Lines {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if let Ok(mut lines) = self.0.lock() {
+            lines.push(record.args().to_string());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static LINES: Lines = Lines(std::sync::Mutex::new(Vec::new()));
+
+/// The milliseconds after `marker` in the last line that has it.
+fn logged_ms(marker: &str) -> Option<u128> {
+    let lines = LINES.0.lock().ok()?;
+    lines
+        .iter()
+        .rev()
+        .filter_map(|line| line.split(marker).nth(1))
+        .find_map(|rest| rest.split(' ').next()?.parse().ok())
+}
+
+/// An overlay window of this process (another process may show one too).
+fn find_own_overlay(timeout: Duration) -> Option<HWND> {
+    let class = wide(OVERLAY_CLASS);
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        let mut hwnd = std::ptr::null_mut();
+        loop {
+            // SAFETY: a lookup by class name after `hwnd` (null: from the
+            // top); the string outlives the call.
+            hwnd = unsafe {
+                FindWindowExW(std::ptr::null_mut(), hwnd, class.as_ptr(), std::ptr::null())
+            };
+            if hwnd.is_null() {
+                break;
+            }
+            let mut pid = 0;
+            // SAFETY: writes the owner's process id to `pid`.
+            unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+            if pid == std::process::id() {
+                return Some(hwnd);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    None
+}
+
+/// The toolbar of a selection made as soon as the overlay shows, while it
+/// follows the cursor over every monitor (`captureRegionMode` 2): on screen
+/// within the 150 ms feedback rule of `docs/design/raycast-notes.md`, timed
+/// from the request, however many monitors are still to be opened. Run
+/// with `--release`, as the daemon is built.
+#[test]
+#[ignore = "live: shows the capture overlay on every monitor"]
+fn toolbar_follows_a_selection_while_the_monitors_open() {
+    const TOOLBAR_BUDGET_MS: u128 = 150;
+    // SAFETY: sets this test process's DPI awareness before any window.
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    // Another test of this binary may have set it first
+    let _ = log::set_logger(&LINES);
+    log::set_max_level(log::LevelFilter::Info);
+    let monitors = enumerate_monitors().expect("monitors");
+    let active = monitors
+        .iter()
+        .position(|monitor| monitor.is_primary())
+        .unwrap_or(0);
+    for monitor in &monitors {
+        println!("monitor {:?} at {}x", monitor.bounds(), monitor.scale());
+    }
+    let config = OverlayConfig {
+        show_help: false,
+        has_tasks: true,
+        follow_cursor: true,
+        ..OverlayConfig::default()
+    };
+    let requested_at = Instant::now();
+    let overlay = std::thread::spawn(move || {
+        run_overlay(OverlaySession {
+            monitors,
+            active,
+            config,
+            theme: Theme::default(),
+            font: BUNDLED_FONT,
+            snap_windows: true,
+            requested_at,
+            settings_path: None,
+        })
+    });
+    let Some(hwnd) = find_own_overlay(Duration::from_secs(10)) else {
+        match overlay.join().expect("overlay thread") {
+            Err(OverlayError::Capture(error)) => {
+                println!("skipped: the screen cannot be grabbed here ({error})");
+                return;
+            }
+            other => panic!("no overlay window; run_overlay returned {:?}", other.err()),
+        }
+    };
+    // Posted at once, without the pause `drag` makes between messages
+    for (message, wparam, point) in [
+        (WM_MOUSEMOVE, 0, (200, 200)),
+        (WM_LBUTTONDOWN, MK_LBUTTON as WPARAM, (200, 200)),
+        (WM_MOUSEMOVE, MK_LBUTTON as WPARAM, (600, 500)),
+        (WM_LBUTTONUP, 0, (600, 500)),
+    ] {
+        // SAFETY: posts a plain message to a window of this process.
+        unsafe { PostMessageW(hwnd, message, wparam, at(point.0, point.1)) };
+    }
+    let started = Instant::now();
+    while logged_ms("toolbar on screen ").is_none() && started.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    key(hwnd, VK_ESCAPE);
+    let finished = overlay.join().expect("overlay thread").expect("overlay");
+    assert_eq!(finished.outcome, Outcome::Cancelled);
+    for line in LINES
+        .0
+        .lock()
+        .map(|lines| lines.clone())
+        .unwrap_or_default()
+    {
+        if line.starts_with("overlay:") {
+            println!("{line}");
+        }
+    }
+    let toolbar = logged_ms("toolbar on screen ").expect("no toolbar was painted");
+    assert!(
+        toolbar < TOOLBAR_BUDGET_MS,
+        "the toolbar took {toolbar} ms (budget {TOOLBAR_BUDGET_MS} ms)"
+    );
 }

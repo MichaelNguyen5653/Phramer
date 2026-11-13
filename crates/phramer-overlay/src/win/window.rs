@@ -7,7 +7,8 @@
 //! milliseconds, and paints are coalesced by `WM_PAINT`, so fast pointer
 //! movement costs one render per displayed frame.
 //!
-//! Everything runs on the calling thread, which must not own other windows:
+//! Everything but grabbing the other monitors while following the cursor
+//! runs on the calling thread, which must not own other windows:
 //! [`run_overlay`] pumps that thread's messages until the state machine
 //! closes, then destroys every window before it returns, on every path
 //! (error, early return or panic) through the windows' guards.
@@ -15,7 +16,8 @@
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::time::Instant;
 
 use phramer_annotate::Document;
@@ -39,14 +41,14 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
-    GetMessageW, HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-    IDC_SIZENWSE, IDC_SIZEWE, KillTimer, LoadCursorW, MSG, PostQuitMessage, RegisterClassExW,
-    SPI_GETCLIENTAREAANIMATION, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SetCursor,
-    SetForegroundWindow, SetTimer, ShowWindow, SystemParametersInfoW, TranslateMessage,
-    WM_ACTIVATEAPP, WM_CHAR, WM_CLOSE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    GetMessageW, GetWindowThreadProcessId, HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_SIZEALL,
+    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, KillTimer, LoadCursorW, MSG,
+    PostQuitMessage, PostThreadMessageW, RegisterClassExW, SPI_GETCLIENTAREAANIMATION, SW_HIDE,
+    SW_SHOW, SW_SHOWNOACTIVATE, SetCursor, SetForegroundWindow, SetTimer, ShowWindow,
+    SystemParametersInfoW, TranslateMessage, WM_ACTIVATEAPP, WM_APP, WM_CHAR, WM_CLOSE,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+    WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use super::last_error;
@@ -143,6 +145,7 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
             theme,
             first_hwnd,
             settings_path,
+            requested_at,
         ));
     });
     with_shell(|shell| {
@@ -204,32 +207,14 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
 
     // Snip across all monitors: the rest are grabbed after the first frame
     // is up, so the user never waits for them, then dimmed
-    let following =
-        with_shell(|shell| shell.state.as_ref().is_some_and(OverlayState::is_following))
-            .unwrap_or(false);
-    if following {
-        for (index, other) in monitors
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != active)
-        {
-            let frame = match grab_monitor(other) {
-                Ok(frame) => frame,
-                Err(error) => {
-                    log::warn!("cannot grab monitor {index}: {error}");
-                    continue;
-                }
-            };
-            let window = OverlayWindow::create(class, other)?;
-            let hwnd = window.hwnd;
-            windows.push(window);
-            with_shell(|shell| shell.attach(index, hwnd, Some(frame), &theme));
-            with_shell(|shell| shell.paint_pending(index)).unwrap_or(Ok(()))?;
-            // SAFETY: a window this thread just created.
-            unsafe {
-                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                UpdateWindow(hwnd);
-            }
+    if is_following() {
+        open_other_monitors(&monitors, active, class, &theme, &mut windows, first_hwnd)?;
+        if is_following() {
+            log::info!(
+                "overlay: every monitor on screen {} ms after the request ({} monitors)",
+                requested_at.elapsed().as_millis(),
+                windows.len()
+            );
         }
     }
 
@@ -265,6 +250,106 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
         _ => None,
     };
     Ok(Finished { outcome, capture })
+}
+
+fn is_following() -> bool {
+    with_shell(|shell| shell.state.as_ref().is_some_and(OverlayState::is_following))
+        .unwrap_or(false)
+}
+
+/// Gives every monitor but `active` its window while the overlay follows
+/// the cursor. The monitors are grabbed on another thread and get their
+/// windows here as their pictures come in, between this thread's messages:
+/// input on the windows already up is handled meanwhile, so a selection
+/// made at once (which ends following) and the toolbar it brings never wait
+/// for the other monitors. Returns when every monitor has its window, when
+/// following ends or when the overlay closes.
+fn open_other_monitors(
+    monitors: &[Monitor],
+    active: usize,
+    class: u16,
+    theme: &Theme,
+    windows: &mut Vec<OverlayWindow>,
+    first_hwnd: HWND,
+) -> Result<(), OverlayError> {
+    let others: Vec<(usize, Monitor)> = monitors
+        .iter()
+        .cloned()
+        .enumerate()
+        .filter(|(index, _)| *index != active)
+        .collect();
+    let mut waiting = others.len();
+    // SAFETY: `first_hwnd` is a live window of this thread; a null process
+    // id pointer is allowed.
+    let thread = unsafe { GetWindowThreadProcessId(first_hwnd, std::ptr::null_mut()) };
+    let (sender, frames) = mpsc::channel();
+    let stop = StopFlag(Arc::new(AtomicBool::new(false)));
+    let grabber_stop = Arc::clone(&stop.0);
+    let spawned = std::thread::Builder::new()
+        .name("overlay-grab".to_owned())
+        .spawn(move || {
+            for (index, monitor) in others {
+                if grabber_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let frame = grab_monitor(&monitor);
+                if grabber_stop.load(Ordering::Relaxed) || sender.send((index, frame)).is_err() {
+                    return;
+                }
+                // SAFETY: posts a message without pointers to the overlay
+                // thread's queue, which it is still pumping (it sets the
+                // flag before it stops); it only wakes the pump up.
+                unsafe { PostThreadMessageW(thread, WM_APP, 0, 0) };
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!("cannot grab the other monitors: {error}");
+        return Ok(());
+    }
+    while waiting > 0 && is_following() {
+        match frames.try_recv() {
+            Ok((index, frame)) => {
+                waiting -= 1;
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        log::warn!("cannot grab monitor {index}: {error}");
+                        continue;
+                    }
+                };
+                let Some(other) = monitors.get(index) else {
+                    continue;
+                };
+                let window = OverlayWindow::create(class, other)?;
+                let hwnd = window.hwnd;
+                windows.push(window);
+                with_shell(|shell| shell.attach(index, hwnd, Some(frame), theme));
+                with_shell(|shell| shell.paint_pending(index)).unwrap_or(Ok(()))?;
+                // SAFETY: a window this thread just created.
+                unsafe {
+                    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    UpdateWindow(hwnd);
+                }
+            }
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            // Waits for input, a paint or the next picture
+            Err(mpsc::TryRecvError::Empty) => {
+                if !pump_one()? {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Tells the grabbing thread to stop when dropped.
+struct StopFlag(Arc<AtomicBool>);
+
+impl Drop for StopFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 
 /// The exported pixels: the frame's region, with any annotations drawn in.
@@ -439,6 +524,12 @@ struct Shell {
     cursor: CursorShape,
     outcome: Option<Outcome>,
     settings_path: Option<PathBuf>,
+    /// When the capture was asked for; the toolbar is timed from here.
+    requested_at: Instant,
+    /// When the input that brought the toolbar up was handled.
+    toolbar_since: Option<Instant>,
+    /// The toolbar's first appearance was logged.
+    toolbar_logged: bool,
 }
 
 thread_local! {
@@ -473,6 +564,7 @@ impl Shell {
         theme: Theme,
         timer_window: HWND,
         settings_path: Option<PathBuf>,
+        requested_at: Instant,
     ) -> Self {
         Self {
             state: None,
@@ -485,6 +577,9 @@ impl Shell {
             cursor: CursorShape::Cross,
             outcome: None,
             settings_path,
+            requested_at,
+            toolbar_since: None,
+            toolbar_logged: false,
         }
     }
 
@@ -548,10 +643,38 @@ impl Shell {
     /// after the shell is released (it can send messages back here).
     fn feed(&mut self, event: Event) -> Vec<Effect> {
         let now = self.now();
-        match self.state.as_mut() {
-            Some(state) => state.handle(event, now),
-            None => Vec::new(),
+        let Some(state) = self.state.as_mut() else {
+            return Vec::new();
+        };
+        let hidden = !state.toolbar_visible();
+        let effects = state.handle(event, now);
+        if hidden && state.toolbar_visible() && self.toolbar_since.is_none() {
+            self.toolbar_since = Some(Instant::now());
         }
+        effects
+    }
+
+    /// Logs the first frame with the toolbar in it, once it is in the
+    /// window: from the request, and from the input that brought it up.
+    fn toolbar_painted(&mut self, monitor: usize) {
+        if self.toolbar_logged {
+            return;
+        }
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        if monitor != state.active_monitor() || state.toolbar().is_empty() {
+            return;
+        }
+        self.toolbar_logged = true;
+        let since_input = self
+            .toolbar_since
+            .map(|at| format!("{} ms after the input", at.elapsed().as_millis()))
+            .unwrap_or_else(|| "with the first frame".to_owned());
+        log::info!(
+            "overlay: toolbar on screen {} ms after the request ({since_input})",
+            self.requested_at.elapsed().as_millis()
+        );
     }
 }
 
@@ -650,30 +773,36 @@ fn load_cursor(shape: CursorShape) -> windows_sys::Win32::UI::WindowsAndMessagin
 /// Pumps this thread's messages until the overlay closes or a handler
 /// panics.
 fn pump_until_closed() -> Result<(), OverlayError> {
-    loop {
-        if PANICKED.with(Cell::get) {
-            return Err(OverlayError::Panicked);
-        }
-        if with_shell(|shell| shell.outcome.is_some()).unwrap_or(true) {
-            return Ok(());
-        }
-        let mut message = MSG::default();
-        // SAFETY: `message` is a valid out-parameter; a null window reads
-        // every message of this thread.
-        let got = unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) };
-        if got == 0 {
-            return Ok(());
-        }
-        if got == -1 {
-            return Err(last_error("GetMessageW"));
-        }
-        // SAFETY: `message` was filled in by GetMessageW; translating key
-        // presses posts their WM_CHAR to this same queue.
-        unsafe {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
+    while pump_one()? {}
+    Ok(())
+}
+
+/// Waits for one message of this thread and handles it; `false` once the
+/// overlay closed (or the loop must end), an error when a handler panicked.
+fn pump_one() -> Result<bool, OverlayError> {
+    if PANICKED.with(Cell::get) {
+        return Err(OverlayError::Panicked);
     }
+    if with_shell(|shell| shell.outcome.is_some()).unwrap_or(true) {
+        return Ok(false);
+    }
+    let mut message = MSG::default();
+    // SAFETY: `message` is a valid out-parameter; a null window reads
+    // every message of this thread.
+    let got = unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) };
+    if got == 0 {
+        return Ok(false);
+    }
+    if got == -1 {
+        return Err(last_error("GetMessageW"));
+    }
+    // SAFETY: `message` was filled in by GetMessageW; translating key
+    // presses posts their WM_CHAR to this same queue.
+    unsafe {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    Ok(true)
 }
 
 unsafe extern "system" fn window_proc(
@@ -946,6 +1075,7 @@ fn paint(hwnd: HWND) {
                 DIB_RGB_COLORS,
             );
         }
+        shell.toolbar_painted(monitor);
         Some(())
     });
     if drawn.is_none() {
@@ -1204,6 +1334,89 @@ mod tests {
             redraw + present < Duration::from_millis(16),
             "a redraw took {:.1} ms",
             ms(redraw + present)
+        );
+    }
+
+    /// While the overlay follows the cursor, the other monitors get their
+    /// windows on the overlay thread as their pictures come in; input that
+    /// arrives meanwhile waits for at most one of them. Times that step
+    /// (dimming the picture, the first paint, the copy into the window) for
+    /// three monitors at mixed scales, and the first frame with the toolbar
+    /// on the 4K one, which together must stay well inside the 150 ms
+    /// feedback rule once the first frame (100 ms budget) is up.
+    #[test]
+    #[ignore = "timing; run with --release"]
+    fn other_monitor_windows_and_the_toolbar_at_mixed_scales() {
+        let monitors = vec![
+            monitor_4k(),
+            Monitor::new(
+                MonitorId::new("1200p"),
+                PhysicalRect::new(3840, 0, 1920, 1200),
+                120,
+                false,
+            ),
+            Monitor::new(
+                MonitorId::new("1080p"),
+                PhysicalRect::new(5760, 0, 1920, 1080),
+                96,
+                false,
+            ),
+        ];
+        let config = OverlayConfig {
+            show_help: false,
+            follow_cursor: true,
+            ..OverlayConfig::default()
+        };
+        let mut state = OverlayState::new(monitors.clone(), 0, Vec::new(), config).unwrap();
+        state.handle(Event::Focus(true), 0);
+        let theme = Theme::default();
+        let mut font = Font::parse(crate::BUNDLED_FONT).unwrap();
+        let mut slowest = Duration::ZERO;
+        for (index, monitor) in monitors.iter().enumerate().skip(1) {
+            let bounds = monitor.bounds();
+            let (width, height) = (bounds.width as u32, bounds.height as u32);
+            let frame: Vec<u8> = (0..width * height)
+                .flat_map(|i| [(i % 251) as u8, (i % 241) as u8, (i % 239) as u8, 255])
+                .collect();
+            let view = FrameView::new(width, height, &frame).unwrap();
+            let started = Instant::now();
+            let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+            let mut buffer = vec![0u8; frame.len()];
+            painter
+                .paint(&state, index, view, &theme, &mut font, &mut buffer)
+                .unwrap();
+            let opened = started.elapsed() + present_time(&buffer, width, height);
+            println!(
+                "{width}x{height} at {}x: window picture {:.1} ms",
+                monitor.scale(),
+                ms(opened)
+            );
+            slowest = slowest.max(opened);
+        }
+
+        // A selection on the 4K monitor ends following; the toolbar shows
+        pointer(&mut state, "down", 300, 200);
+        pointer(&mut state, "drag", 1500, 1000);
+        pointer(&mut state, "up", 1500, 1000);
+        assert!(!state.toolbar().is_empty());
+        let frame = frame_4k();
+        let view = FrameView::new(3840, 2160, &frame).unwrap();
+        let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+        let mut buffer = vec![0u8; frame.len()];
+        let started = Instant::now();
+        painter
+            .paint(&state, 0, view, &theme, &mut font, &mut buffer)
+            .unwrap();
+        let toolbar = started.elapsed() + present_time(&buffer, 3840, 2160);
+        println!(
+            "slowest other window {:.1} ms; 4K frame with the toolbar {:.1} ms",
+            ms(slowest),
+            ms(toolbar)
+        );
+        assert!(
+            slowest + toolbar < Duration::from_millis(50),
+            "input could wait {:.1} ms for the toolbar",
+            ms(slowest + toolbar)
         );
     }
 }

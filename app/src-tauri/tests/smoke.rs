@@ -50,12 +50,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOPMOST,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextW, WM_CLOSE};
+use windows_sys::Win32::UI::WindowsAndMessaging::{WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE};
 
 const LOCK: &str = "app.phramer.desktop-sim";
 /// The overlay's window class (`phramer-overlay`).
 const OVERLAY_CLASS: &str = "PhramerCaptureOverlay";
 /// Command to first frame, as the daemon measures and logs it.
 const FIRST_FRAME_BUDGET_MS: u128 = 100;
+/// Command to toolbar, for a selection made as soon as the overlay shows:
+/// the 150 ms feedback rule of `docs/design/raycast-notes.md`.
+const TOOLBAR_BUDGET_MS: u128 = 150;
 
 /// One live daemon at a time: the tests share the single-instance lock.
 static LIVE: Mutex<()> = Mutex::new(());
@@ -464,6 +468,32 @@ fn logged_first_frame(log: &str) -> Option<u128> {
         .find_map(|rest| rest.split(' ').next()?.parse().ok())
 }
 
+/// The toolbar time the daemon logged last, in milliseconds.
+fn logged_toolbar(log: &str) -> Option<u128> {
+    log.lines()
+        .rev()
+        .filter_map(|line| line.split("toolbar on screen ").nth(1))
+        .find_map(|rest| rest.split(' ').next()?.parse().ok())
+}
+
+/// Drags out a selection on an overlay with posted mouse messages, in its
+/// client (physical) coordinates.
+fn select(overlay: &Window, from: (i32, i32), to: (i32, i32)) {
+    // `MK_LBUTTON`
+    const LEFT: usize = 0x0001;
+    let at = |(x, y): (i32, i32)| ((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as LPARAM;
+    for (message, wparam, point) in [
+        (WM_MOUSEMOVE, 0, from),
+        (WM_LBUTTONDOWN, LEFT, from),
+        (WM_MOUSEMOVE, LEFT, to),
+        (WM_LBUTTONUP, 0, to),
+    ] {
+        // SAFETY: posting a message to a window handle; a stale one just fails.
+        let posted = unsafe { PostMessageW(overlay.hwnd as HWND, message, wparam, at(point)) };
+        assert_ne!(posted, 0, "a mouse message could not be posted");
+    }
+}
+
 /// Width and height from a PNG's IHDR.
 fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.get(..8)? != b"\x89PNG\r\n\x1a\n" || bytes.get(12..16)? != b"IHDR" {
@@ -687,6 +717,8 @@ fn overlay_opens_closes_and_full_capture_saves() {
     cleanup.pids.push(cli.id());
     let (overlay, waited) = wait_for_overlay(daemon_pid, target, Duration::from_secs(10))
         .expect("no overlay covering the target monitor");
+    // A selection made as soon as the overlay shows: the toolbar must follow
+    select(&overlay, (200, 200), (600, 500));
     println!(
         "overlay {:#x} at {:?} seen {} ms after starting the CLI (topmost {}, tool window {})",
         overlay.hwnd,
@@ -712,6 +744,18 @@ fn overlay_opens_closes_and_full_capture_saves() {
     assert!(
         first_frame < FIRST_FRAME_BUDGET_MS,
         "first frame took {first_frame} ms (budget {FIRST_FRAME_BUDGET_MS} ms)"
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), || fs::read_to_string(&log_path)
+            .is_ok_and(|text| logged_toolbar(&text).is_some())),
+        "the daemon logged no toolbar time"
+    );
+    let toolbar =
+        logged_toolbar(&fs::read_to_string(&log_path).unwrap_or_default()).expect("toolbar time");
+    println!("daemon: toolbar {toolbar} ms after the command");
+    assert!(
+        toolbar < TOOLBAR_BUDGET_MS,
+        "the toolbar took {toolbar} ms (budget {TOOLBAR_BUDGET_MS} ms)"
     );
 
     // 3. Esc closes every overlay window and exports nothing
