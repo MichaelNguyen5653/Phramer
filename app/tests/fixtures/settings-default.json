@@ -1,0 +1,756 @@
+{
+  "defaults": {
+    "allowMultipleGuiInstances": false,
+    "antialiasingPinZoom": true,
+    "autoCloseIdleDaemon": false,
+    "autoOpenInEditor": false,
+    "buttons": [
+      0,
+      1,
+      2,
+      27,
+      6,
+      18,
+      15,
+      22,
+      19,
+      28,
+      8,
+      9,
+      16,
+      10,
+      29,
+      11,
+      23,
+      14,
+      12,
+      17,
+      25,
+      26
+    ],
+    "captureRegionMode": 2,
+    "checkForUpdates": true,
+    "contrastOpacity": 190,
+    "contrastUiColor": "#113c4f",
+    "copyOnDoubleClick": false,
+    "copyPathAfterSave": false,
+    "disabledTrayIcon": false,
+    "filenamePattern": "%F_%H-%M",
+    "ignorePrntScrForcesSnipping": false,
+    "insecurePixelate": false,
+    "jpegQuality": 75,
+    "predefinedColorPaletteLarge": false,
+    "reverseArrow": false,
+    "saveAfterCopy": false,
+    "saveAsFileExtension": "png",
+    "saveLastRegion": false,
+    "savePath": "C:\\Users\\you\\Pictures",
+    "savePathFixed": true,
+    "showAbortNotification": false,
+    "showDesktopNotification": false,
+    "showEditorHint": true,
+    "showHelp": true,
+    "showMagnifier": false,
+    "showQuitPrompt": false,
+    "showSelectionGeometry": 4,
+    "showSelectionGeometryHideTime": 3000,
+    "showSidePanelButton": true,
+    "showStartupLaunchMessage": false,
+    "showToolLabels": true,
+    "showWelcomeMessage": true,
+    "squareMagnifier": false,
+    "startupLaunch": true,
+    "uiColor": "#3899c2",
+    "uiLanguage": "auto",
+    "undoLimit": 100,
+    "userColors": [
+      null,
+      "#ffffff",
+      "#000000",
+      "#800000",
+      "#ff0000",
+      "#ffff00",
+      "#00ff00",
+      "#008000",
+      "#00ffff",
+      "#0000ff",
+      "#ff00ff",
+      "#800080"
+    ],
+    "videoCaptureEnabled": false
+  },
+  "extensions": [
+    "png",
+    "jpg",
+    "jpeg",
+    "bmp"
+  ],
+  "file": "C:\\Users\\you\\AppData\\Roaming\\phramer\\phramer.ini",
+  "hotkey_failures": [],
+  "shortcuts": [
+    {
+      "default": "Meta+Shift+x",
+      "description": "Capture screen",
+      "global": true,
+      "group": "Global",
+      "name": "TAKE_SCREENSHOT",
+      "value": "Meta+Shift+x"
+    },
+    {
+      "default": "",
+      "description": "Record video (Snipping Tool)",
+      "global": true,
+      "group": "Global",
+      "name": "RECORD_VIDEO",
+      "value": ""
+    },
+    {
+      "default": "p",
+      "description": "Set the Pencil as the paint tool",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_PENCIL",
+      "value": "p"
+    },
+    {
+      "default": "d",
+      "description": "Set the Line as the paint tool",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_DRAWER",
+      "value": "d"
+    },
+    {
+      "default": "a",
+      "description": "Set the Arrow as the paint tool",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_ARROW",
+      "value": "a"
+    },
+    {
+      "default": "",
+      "description": "Draw a square or circle, hollow, filled or as a highlight",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_SHAPE",
+      "value": ""
+    },
+    {
+      "default": "s",
+      "description": "Set Selection as the paint tool",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_SELECTION",
+      "value": "s"
+    },
+    {
+      "default": "r",
+      "description": "Set the Rectangle as the paint tool",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_RECTANGLE",
+      "value": "r"
+    },
+    {
+      "default": "c",
+      "description": "Set the Circle as the paint tool",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_CIRCLE",
+      "value": "c"
+    },
+    {
+      "default": "m",
+      "description": "Set the Marker as the paint tool",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_MARKER",
+      "value": "m"
+    },
+    {
+      "default": "t",
+      "description": "Add text to your capture",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_TEXT",
+      "value": "t"
+    },
+    {
+      "default": "",
+      "description": "Add an autoincrementing counter bubble",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_CIRCLECOUNT",
+      "value": ""
+    },
+    {
+      "default": "b",
+      "description": "Set Pixelate as the paint tool.",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_PIXELATE",
+      "value": "b"
+    },
+    {
+      "default": "i",
+      "description": "Set Inverter as the paint tool",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_INVERT",
+      "value": "i"
+    },
+    {
+      "default": "g",
+      "description": "Select and move objects you have already drawn",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_MOVE_OBJECT",
+      "value": "g"
+    },
+    {
+      "default": "Ctrl+m",
+      "description": "Move the selection area",
+      "global": false,
+      "group": "Tools",
+      "name": "TYPE_MOVESELECTION",
+      "value": "Ctrl+m"
+    },
+    {
+      "default": "Ctrl+z",
+      "description": "Undo the last modification",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_UNDO",
+      "value": "Ctrl+z"
+    },
+    {
+      "default": "Ctrl+Shift+z",
+      "description": "Redo the next modification",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_REDO",
+      "value": "Ctrl+Shift+z"
+    },
+    {
+      "default": "Ctrl+c",
+      "description": "Copy selection to clipboard",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_COPY",
+      "value": "Ctrl+c"
+    },
+    {
+      "default": "Ctrl+Shift+c",
+      "description": "Save the selection and copy the file, to paste as an attachment",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_COPY_FILE",
+      "value": "Ctrl+Shift+c"
+    },
+    {
+      "default": "Ctrl+s",
+      "description": "Save screenshot to a file",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_SAVE",
+      "value": "Ctrl+s"
+    },
+    {
+      "default": "Ctrl+q",
+      "description": "Leave the capture screen",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_EXIT",
+      "value": "Ctrl+q"
+    },
+    {
+      "default": "Ctrl+o",
+      "description": "Choose an app to open the capture",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_OPEN_APP",
+      "value": "Ctrl+o"
+    },
+    {
+      "default": "o",
+      "description": "Extract text from the selection",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_OCR",
+      "value": "o"
+    },
+    {
+      "default": "",
+      "description": "Pin image on the desktop",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_PIN",
+      "value": ""
+    },
+    {
+      "default": "",
+      "description": "Increase the size of the other tools",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_SIZEINCREASE",
+      "value": ""
+    },
+    {
+      "default": "",
+      "description": "Decrease the size of the other tools",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_SIZEDECREASE",
+      "value": ""
+    },
+    {
+      "default": "Return",
+      "description": "Accept the capture",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_ACCEPT",
+      "value": "Return"
+    },
+    {
+      "default": "e",
+      "description": "Open this capture in the editor",
+      "global": false,
+      "group": "Actions",
+      "name": "TYPE_OPEN_IN_EDITOR",
+      "value": "e"
+    },
+    {
+      "default": "Space",
+      "description": "Toggle tool settings",
+      "global": false,
+      "group": "Capture",
+      "name": "TYPE_TOGGLE_PANEL",
+      "value": "Space"
+    },
+    {
+      "default": "1",
+      "description": "Screenshot mode",
+      "global": false,
+      "group": "Capture",
+      "name": "CAPTURE_MODE_SCREENSHOT",
+      "value": "1"
+    },
+    {
+      "default": "2",
+      "description": "Video mode (hands off to Snipping Tool)",
+      "global": false,
+      "group": "Capture",
+      "name": "CAPTURE_MODE_VIDEO",
+      "value": "2"
+    },
+    {
+      "default": "Alt+g",
+      "description": "Grab a color from the screen",
+      "global": false,
+      "group": "Capture",
+      "name": "TYPE_GRAB_COLOR",
+      "value": "Alt+g"
+    },
+    {
+      "default": "Shift+Left",
+      "description": "Resize selection left 1px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_RESIZE_LEFT",
+      "value": "Shift+Left"
+    },
+    {
+      "default": "Shift+Right",
+      "description": "Resize selection right 1px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_RESIZE_RIGHT",
+      "value": "Shift+Right"
+    },
+    {
+      "default": "Shift+Up",
+      "description": "Resize selection up 1px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_RESIZE_UP",
+      "value": "Shift+Up"
+    },
+    {
+      "default": "Shift+Down",
+      "description": "Resize selection down 1px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_RESIZE_DOWN",
+      "value": "Shift+Down"
+    },
+    {
+      "default": "Ctrl+Shift+Left",
+      "description": "Symmetrically decrease width by 2px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_SYM_RESIZE_LEFT",
+      "value": "Ctrl+Shift+Left"
+    },
+    {
+      "default": "Ctrl+Shift+Right",
+      "description": "Symmetrically increase width by 2px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_SYM_RESIZE_RIGHT",
+      "value": "Ctrl+Shift+Right"
+    },
+    {
+      "default": "Ctrl+Shift+Up",
+      "description": "Symmetrically increase height by 2px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_SYM_RESIZE_UP",
+      "value": "Ctrl+Shift+Up"
+    },
+    {
+      "default": "Ctrl+Shift+Down",
+      "description": "Symmetrically decrease height by 2px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_SYM_RESIZE_DOWN",
+      "value": "Ctrl+Shift+Down"
+    },
+    {
+      "default": "Ctrl+a",
+      "description": "Select entire screen",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_SELECT_ALL",
+      "value": "Ctrl+a"
+    },
+    {
+      "default": "Left",
+      "description": "Move selection left 1px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_MOVE_LEFT",
+      "value": "Left"
+    },
+    {
+      "default": "Right",
+      "description": "Move selection right 1px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_MOVE_RIGHT",
+      "value": "Right"
+    },
+    {
+      "default": "Up",
+      "description": "Move selection up 1px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_MOVE_UP",
+      "value": "Up"
+    },
+    {
+      "default": "Down",
+      "description": "Move selection down 1px",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_MOVE_DOWN",
+      "value": "Down"
+    },
+    {
+      "default": "Ctrl+Return",
+      "description": "Commit text in text area",
+      "global": false,
+      "group": "Capture",
+      "name": "TYPE_COMMIT_CURRENT_TOOL",
+      "value": "Ctrl+Return"
+    },
+    {
+      "default": "Del",
+      "description": "Delete selected drawn object",
+      "global": false,
+      "group": "Capture",
+      "name": "TYPE_DELETE_CURRENT_TOOL",
+      "value": "Del"
+    },
+    {
+      "default": "Ctrl+Backspace",
+      "description": "Cancel current selection",
+      "global": false,
+      "group": "Selection",
+      "name": "TYPE_CANCEL",
+      "value": "Ctrl+Backspace"
+    },
+    {
+      "default": "",
+      "description": "Quit capture",
+      "global": false,
+      "group": "Capture",
+      "name": "",
+      "value": "Esc"
+    },
+    {
+      "default": "",
+      "description": "Show color picker",
+      "global": false,
+      "group": "Capture",
+      "name": "",
+      "value": "Right Click"
+    },
+    {
+      "default": "",
+      "description": "Change the tool's size",
+      "global": false,
+      "group": "Capture",
+      "name": "",
+      "value": "Mouse Wheel"
+    }
+  ],
+  "snipping_claims_print_screen": true,
+  "snipping_tool_installed": true,
+  "store_build": false,
+  "toolbar": [
+    {
+      "description": "Set the Pencil as the paint tool",
+      "icon": "pencil",
+      "id": 0,
+      "name": "Pencil"
+    },
+    {
+      "description": "Set the Line as the paint tool",
+      "icon": "slash",
+      "id": 1,
+      "name": "Line"
+    },
+    {
+      "description": "Set the Arrow as the paint tool",
+      "icon": "arrow-up-right",
+      "id": 2,
+      "name": "Arrow"
+    },
+    {
+      "description": "Draw a square or circle, hollow, filled or as a highlight",
+      "icon": "shapes",
+      "id": 27,
+      "name": "Shape"
+    },
+    {
+      "description": "Set Selection as the paint tool",
+      "icon": "square",
+      "id": 3,
+      "name": "Rectangular Selection"
+    },
+    {
+      "description": "Set the Rectangle as the paint tool",
+      "icon": "rectangle-horizontal",
+      "id": 4,
+      "name": "Rectangle"
+    },
+    {
+      "description": "Set the Circle as the paint tool",
+      "icon": "circle",
+      "id": 5,
+      "name": "Circle"
+    },
+    {
+      "description": "Set the Marker as the paint tool",
+      "icon": "highlighter",
+      "id": 6,
+      "name": "Marker"
+    },
+    {
+      "description": "Add text to your capture",
+      "icon": "type",
+      "id": 18,
+      "name": "Text"
+    },
+    {
+      "description": "Add an autoincrementing counter bubble",
+      "icon": "hash",
+      "id": 19,
+      "name": "Circle Counter"
+    },
+    {
+      "description": "Set Pixelate as the paint tool.",
+      "icon": "grid-3x3",
+      "id": 15,
+      "name": "Pixelate"
+    },
+    {
+      "description": "Set Inverter as the paint tool",
+      "icon": "contrast",
+      "id": 22,
+      "name": "Invert"
+    },
+    {
+      "description": "Select and move objects you have already drawn",
+      "icon": "hand",
+      "id": 28,
+      "name": "Move Object"
+    },
+    {
+      "description": "Move the selection area",
+      "icon": "move",
+      "id": 8,
+      "name": "Move"
+    },
+    {
+      "description": "Undo the last modification",
+      "icon": "undo-2",
+      "id": 9,
+      "name": "Undo"
+    },
+    {
+      "description": "Redo the next modification",
+      "icon": "redo-2",
+      "id": 16,
+      "name": "Redo"
+    },
+    {
+      "description": "Copy selection to clipboard",
+      "icon": "copy",
+      "id": 10,
+      "name": "Copy"
+    },
+    {
+      "description": "Save the selection and copy the file, to paste as an attachment",
+      "icon": "file-image",
+      "id": 29,
+      "name": "Copy as File"
+    },
+    {
+      "description": "Save screenshot to a file",
+      "icon": "save",
+      "id": 11,
+      "name": "Save"
+    },
+    {
+      "description": "Leave the capture screen",
+      "icon": "x",
+      "id": 12,
+      "name": "Exit"
+    },
+    {
+      "description": "Choose an app to open the capture",
+      "icon": "external-link",
+      "id": 14,
+      "name": "App Launcher"
+    },
+    {
+      "description": "Extract text from the selection",
+      "icon": "scan-text",
+      "id": 25,
+      "name": "OCR"
+    },
+    {
+      "description": "Pin image on the desktop",
+      "icon": "pin",
+      "id": 17,
+      "name": "Pin Tool"
+    },
+    {
+      "description": "Increase the size of the other tools",
+      "icon": "plus",
+      "id": 20,
+      "name": "Increase Tool Size"
+    },
+    {
+      "description": "Decrease the size of the other tools",
+      "icon": "minus",
+      "id": 21,
+      "name": "Decrease Tool Size"
+    },
+    {
+      "description": "Accept the capture",
+      "icon": "check",
+      "id": 23,
+      "name": "Accept"
+    },
+    {
+      "description": "Open this capture in the editor",
+      "icon": "square-pen",
+      "id": 26,
+      "name": "Open in Editor"
+    }
+  ],
+  "values": {
+    "allowMultipleGuiInstances": false,
+    "antialiasingPinZoom": true,
+    "autoCloseIdleDaemon": false,
+    "autoOpenInEditor": false,
+    "buttons": [
+      0,
+      1,
+      2,
+      27,
+      6,
+      18,
+      15,
+      22,
+      19,
+      28,
+      8,
+      9,
+      16,
+      10,
+      29,
+      11,
+      23,
+      14,
+      12,
+      17,
+      25,
+      26
+    ],
+    "captureRegionMode": 2,
+    "checkForUpdates": true,
+    "contrastOpacity": 190,
+    "contrastUiColor": "#113c4f",
+    "copyOnDoubleClick": false,
+    "copyPathAfterSave": false,
+    "disabledTrayIcon": false,
+    "filenamePattern": "%F_%H-%M",
+    "ignorePrntScrForcesSnipping": false,
+    "insecurePixelate": false,
+    "jpegQuality": 75,
+    "predefinedColorPaletteLarge": false,
+    "reverseArrow": false,
+    "saveAfterCopy": false,
+    "saveAsFileExtension": "png",
+    "saveLastRegion": false,
+    "savePath": "C:\\Users\\you\\Pictures",
+    "savePathFixed": true,
+    "showAbortNotification": false,
+    "showDesktopNotification": false,
+    "showEditorHint": true,
+    "showHelp": true,
+    "showMagnifier": false,
+    "showQuitPrompt": false,
+    "showSelectionGeometry": 4,
+    "showSelectionGeometryHideTime": 3000,
+    "showSidePanelButton": true,
+    "showStartupLaunchMessage": false,
+    "showToolLabels": true,
+    "showWelcomeMessage": true,
+    "squareMagnifier": false,
+    "startupLaunch": true,
+    "uiColor": "#3899c2",
+    "uiLanguage": "auto",
+    "undoLimit": 100,
+    "userColors": [
+      null,
+      "#ffffff",
+      "#000000",
+      "#800000",
+      "#ff0000",
+      "#ffff00",
+      "#00ff00",
+      "#008000",
+      "#00ffff",
+      "#0000ff",
+      "#ff00ff",
+      "#800080"
+    ],
+    "videoCaptureEnabled": false
+  },
+  "version": "16.0.0"
+}

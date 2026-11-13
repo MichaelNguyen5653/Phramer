@@ -13,13 +13,16 @@ mod hotkeys;
 mod instance;
 mod logging;
 mod notify;
+mod printscreen;
 mod reply;
 mod restart;
 mod settings;
+mod settings_ui;
 mod snipping;
 mod startup;
 mod tray;
 mod updater;
+mod welcome;
 
 use std::path::PathBuf;
 

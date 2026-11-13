@@ -10,7 +10,7 @@ use crate::cli::{self, Command, ConfigCommand, Parsed, Role};
 use crate::instance::Forwarded;
 use crate::reply::{self, EXIT_OK, Reply};
 use crate::restart::{self, Restart};
-use crate::{actions, editor, hotkeys, settings, startup, tray, updater};
+use crate::{actions, editor, hotkeys, settings, settings_ui, startup, tray, updater, welcome};
 
 /// Shared with the actions.
 pub(crate) struct DaemonState {
@@ -52,6 +52,21 @@ pub(crate) fn run(start: Option<Forwarded>) -> i32 {
             editor::editor_settings,
             editor::editor_set,
             editor::editor_export,
+            settings_ui::ui_ready,
+            settings_ui::settings_snapshot,
+            settings_ui::settings_set,
+            settings_ui::settings_reset,
+            settings_ui::settings_reset_all,
+            settings_ui::settings_set_shortcut,
+            settings_ui::settings_pause_hotkeys,
+            settings_ui::settings_print_screen,
+            settings_ui::settings_preview_pattern,
+            settings_ui::settings_choose_folder,
+            settings_ui::settings_export,
+            settings_ui::settings_import,
+            settings_ui::settings_open,
+            welcome::welcome_state,
+            welcome::welcome_reached_end,
         ])
         .setup(move |app| {
             app.manage(managed_restart);
@@ -97,6 +112,7 @@ fn setup(app: &mut App, settings_path: PathBuf, start: Option<Forwarded>) {
     });
     app.manage(hotkeys::Registered::default());
     app.manage(editor::Editors::default());
+    app.manage(welcome::Welcome::default());
     editor::listen(&handle);
 
     if let Err(error) = tray::create(&handle, &current) {
@@ -104,6 +120,7 @@ fn setup(app: &mut App, settings_path: PathBuf, start: Option<Forwarded>) {
     }
     hotkeys::apply(&handle, &current);
     updater::start(&handle);
+    welcome::show_if_due(&handle);
 
     let watcher = handle.clone();
     settings::watch(settings_path, move || {
@@ -124,12 +141,13 @@ fn setup(app: &mut App, settings_path: PathBuf, start: Option<Forwarded>) {
 }
 
 /// `ConfigHandler::fileChanged` in 15.0.0's daemon and tray.
-fn settings_changed<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn settings_changed<R: Runtime>(app: &AppHandle<R>) {
     let current = settings::load(&app.state::<DaemonState>().settings_path);
     if let Err(error) = tray::refresh(app, &current) {
         log::error!("cannot update the tray icon: {error}");
     }
     hotkeys::apply(app, &current);
+    settings_ui::changed(app);
 }
 
 /// Arguments from another process (or this one's start command).

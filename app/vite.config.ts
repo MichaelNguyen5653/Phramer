@@ -15,6 +15,8 @@ export default defineConfig(() => ({
       input: {
         main: "index.html",
         editor: "editor.html",
+        settings: "settings.html",
+        welcome: "welcome.html",
       },
     },
   },

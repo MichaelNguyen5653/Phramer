@@ -1,0 +1,158 @@
+/* The welcome window, on top of settings.css. */
+
+.welcome {
+  display: grid;
+  grid-template-rows: var(--titlebar-height) 1fr auto;
+  height: 100%;
+}
+
+.welcome-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: var(--space-16);
+}
+
+.welcome-brand {
+  font-size: var(--text-11);
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+}
+
+.welcome-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-32) 0;
+  min-height: 0;
+  animation: step-in var(--dur-panel) var(--ease-out);
+}
+
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--space-8));
+  }
+}
+
+.welcome-title {
+  margin: 0;
+  font-size: calc(var(--text-16) * 1.5);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.welcome-lead {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.welcome-text {
+  margin: 0;
+  max-width: calc(var(--space-32) * 13);
+}
+
+.hero-keys {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  margin: var(--space-16) 0;
+}
+
+.hero-keys kbd {
+  min-width: calc(var(--space-32) + var(--space-16));
+  height: calc(var(--space-32) + var(--space-16));
+  padding: 0 var(--space-12);
+  border-radius: var(--radius-8);
+  font-size: var(--text-16);
+  box-shadow: inset 0 0 0 var(--hairline) var(--fg-20), 0 var(--space-2) 0 var(--fg-10);
+}
+
+.hero-keys .keys {
+  gap: var(--space-6);
+}
+
+.hero-or {
+  color: var(--text-secondary);
+}
+
+.welcome-options {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-8);
+  background: var(--fg-5);
+  box-shadow: inset 0 0 0 var(--hairline) var(--border);
+}
+
+.welcome-option {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-16);
+  align-items: center;
+  padding: var(--space-12) var(--space-16);
+  box-shadow: inset 0 calc(-1 * var(--hairline)) 0 var(--border);
+}
+
+.welcome-option:last-child {
+  box-shadow: none;
+}
+
+.welcome-tips {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  margin: var(--space-8) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.welcome-tips li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.welcome-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-16) var(--space-32) var(--space-24);
+}
+
+.dots {
+  display: flex;
+  gap: var(--space-6);
+}
+
+.dot {
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-full);
+  background: var(--fg-20);
+  transition: background-color var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-pop);
+}
+
+.dot.current {
+  background: var(--accent);
+  transform: scale(1.3);
+}
+
+.welcome-actions {
+  display: flex;
+  gap: var(--space-8);
+}
+
+.welcome-actions .text-button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--space-2);
+}
+
+kbd.on-primary {
+  height: var(--space-16);
+  min-width: 0;
+  padding: 0 var(--space-4);
+  background: rgb(255 255 255 / 20%);
+  box-shadow: none;
+  color: inherit;
+  font-size: calc(var(--text-11) - var(--hairline) * 2);
+}

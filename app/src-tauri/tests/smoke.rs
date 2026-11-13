@@ -10,7 +10,9 @@
 //! `npm run tauri build -- --no-bundle`), otherwise the debug build cargo
 //! made for this test. The settings file and the startup registry entries
 //! are snapshotted first and must be unchanged at the end; if not, they are
-//! restored and the test fails.
+//! restored and the test fails. Every process is started with
+//! `PHRAMER_NO_WELCOME`, so the first-run welcome window stays away whatever
+//! the settings file says.
 
 #![cfg(windows)]
 
@@ -565,6 +567,7 @@ fn daemon_tray_forwarding_and_spawn() {
     let log_path = std::env::temp_dir().join(format!("phramer-smoke-{}.log", std::process::id()));
     let log = fs::File::create(&log_path).expect("log file");
     let daemon = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log)
@@ -588,6 +591,7 @@ fn daemon_tray_forwarding_and_spawn() {
 
     // 2. `phramer gui` forwards and exits; the daemon receives it
     let cli = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
         .arg("gui")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -612,6 +616,7 @@ fn daemon_tray_forwarding_and_spawn() {
 
     // 4. With no daemon, `phramer gui` starts one for the capture and exits
     let cli = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
         .arg("gui")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -684,6 +689,7 @@ fn overlay_opens_closes_and_full_capture_saves() {
         std::env::temp_dir().join(format!("phramer-overlay-smoke-{}.log", std::process::id()));
     let log = fs::File::create(&log_path).expect("log file");
     let daemon = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log)
@@ -708,6 +714,7 @@ fn overlay_opens_closes_and_full_capture_saves() {
     let target = monitor_under_cursor();
     println!("target monitor {target:?}");
     let cli = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
         .arg("gui")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -772,6 +779,7 @@ fn overlay_opens_closes_and_full_capture_saves() {
 
     // 4. `phramer full -p <folder>`: one PNG the size of the virtual desktop
     let cli = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
         .args(["full", "-p"])
         .arg(&save_dir)
         .stdin(Stdio::null())
@@ -865,6 +873,7 @@ fn desktop_is_unlocked() -> bool {
 fn run_cli(args: &[&str]) -> (Option<i32>, Vec<u8>, String) {
     let start = Instant::now();
     let output = Command::new(cli_exe())
+        .env("PHRAMER_NO_WELCOME", "1")
         .args(args)
         .stdin(Stdio::null())
         .output()
@@ -1055,6 +1064,7 @@ fn logged_window_created(log: &str) -> Option<u128> {
 fn round_trip() -> Duration {
     let start = Instant::now();
     let status = Command::new(cli_exe())
+        .env("PHRAMER_NO_WELCOME", "1")
         .arg("launcher")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1084,6 +1094,7 @@ fn region_capture(
     cleanup: &mut Cleanup,
 ) -> Window {
     let cli = Command::new(exe)
+        .env("PHRAMER_NO_WELCOME", "1")
         .args(["gui", "--region", "320x200+40+40"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1192,6 +1203,7 @@ fn open_in_editor_shows_the_editor_window() {
         std::env::temp_dir().join(format!("phramer-editor-smoke-{}.log", std::process::id()));
     let log = fs::File::create(&log_path).expect("log file");
     let daemon = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log)

@@ -11,7 +11,7 @@ use crate::capture::{self, OverlayPlan, Placement};
 use crate::cli::{FullRequest, GuiRequest, ScreenRequest};
 use crate::daemon::DaemonState;
 use crate::reply::Reply;
-use crate::{notify, settings, snipping, updater};
+use crate::{notify, settings, settings_ui, snipping, updater, welcome};
 
 fn not_implemented(feature: &str, detail: &dyn std::fmt::Debug) {
     log::info!("{feature}: not implemented yet ({detail:?})");
@@ -89,8 +89,8 @@ pub(crate) fn open_launcher<R: Runtime>(_app: &AppHandle<R>) {
 }
 
 /// `Flameshot::config`: the settings window.
-pub(crate) fn open_configuration<R: Runtime>(_app: &AppHandle<R>) {
-    not_implemented("settings window", &());
+pub(crate) fn open_configuration<R: Runtime>(app: &AppHandle<R>) {
+    settings_ui::open(app);
 }
 
 /// `phramer config --check`. Runs in the calling process, without a daemon.
@@ -108,9 +108,9 @@ pub(crate) fn check_for_updates<R: Runtime>(app: &AppHandle<R>) {
     updater::check_now(app);
 }
 
-/// `WelcomeTour::showNow`.
-pub(crate) fn show_whats_new<R: Runtime>(_app: &AppHandle<R>) {
-    not_implemented("what's new tour", &());
+/// `WelcomeTour::showNow`: the welcome, which can be closed at any step.
+pub(crate) fn show_whats_new<R: Runtime>(app: &AppHandle<R>) {
+    welcome::open(app, false);
 }
 
 /// `Flameshot::info`.

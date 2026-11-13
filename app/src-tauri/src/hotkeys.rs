@@ -43,9 +43,10 @@ pub(crate) struct Unsupported {
     text: String,
 }
 
-/// What is registered now.
+/// What is registered now, and what could not be at the last attempt (so
+/// the same failure is not announced again at every settings change).
 #[derive(Default)]
-pub(crate) struct Registered(Mutex<Vec<Binding>>);
+pub(crate) struct Registered(Mutex<Vec<Binding>>, Mutex<Vec<String>>);
 
 fn action_label(action: Action) -> &'static str {
     match action {
@@ -346,13 +347,49 @@ pub(crate) fn apply<R: Runtime>(app: &AppHandle<R>, settings: &Settings) {
     }
     drop(registered);
 
-    if !failures.is_empty() {
+    let announced = state
+        .1
+        .lock()
+        .map(|mut last| std::mem::replace(&mut *last, failures.clone()) == failures)
+        .unwrap_or(false);
+    if !failures.is_empty() && !announced {
         let text = format!(
             "These hotkeys could not be registered; another application may be using them:\n{}",
             failures.join("\n")
         );
         notify::tray_message(app, "Phramer", &text);
     }
+}
+
+/// The key sequences `settings` asks for that are not registered now: taken
+/// by another application, or not expressible as a hotkey. For the settings
+/// window to show next to the shortcut.
+pub(crate) fn failures<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Vec<String> {
+    let (bindings, unsupported) = wanted(settings);
+    let state = app.state::<Registered>();
+    let Ok(registered) = state.0.lock() else {
+        return Vec::new();
+    };
+    bindings
+        .into_iter()
+        .filter(|binding| !registered.contains(binding))
+        .map(|binding| binding.text)
+        .chain(unsupported.into_iter().map(|item| item.text))
+        .collect()
+}
+
+/// Lets go of every hotkey until the next [`apply`], so the settings
+/// window's shortcut recorder sees the keys instead of a capture starting.
+pub(crate) fn suspend<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<Registered>();
+    let Ok(mut registered) = state.0.lock() else {
+        return;
+    };
+    if let Err(error) = app.global_shortcut().unregister_all() {
+        log::warn!("could not release the hotkeys: {error}");
+    }
+    registered.clear();
+    log::info!("hotkeys suspended");
 }
 
 fn run<R: Runtime>(app: &AppHandle<R>, action: Action) {
