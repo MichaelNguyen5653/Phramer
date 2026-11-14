@@ -94,6 +94,9 @@ pub struct ExportContext<'a> {
     pub settings: &'a Settings,
     pub time: &'a dyn TimeFormat,
     pub handoff: &'a mut dyn Handoff,
+    /// The name (no extension) a capture saved into a folder gets instead
+    /// of the filename pattern's: the editor's image names.
+    pub name: Option<&'a str>,
 }
 
 /// Carries out `action` on `image`. `geometry` is where the image was on
@@ -161,7 +164,10 @@ fn save_to(
     report: &mut ExportReport,
 ) -> Option<PathBuf> {
     let settings = context.settings;
-    let name = expand_pattern(&settings.filename_pattern(), context.time);
+    let name = context.name.map_or_else(
+        || expand_pattern(&settings.filename_pattern(), context.time),
+        str::to_owned,
+    );
     let mut target = screenshot_path(path, &settings.save_as_file_extension(), &name);
     let extension = target
         .extension()

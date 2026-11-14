@@ -612,12 +612,26 @@ pub(crate) fn run_export(
     action: ExportAction,
     tasks: &Tasks,
 ) -> Delivery {
+    run_export_named(settings, image, geometry, action, tasks, None)
+}
+
+/// `run_export`, with `name` (no extension) for a file saved into a folder
+/// instead of the filename pattern's: the editor's image names.
+pub(crate) fn run_export_named(
+    settings: &Settings,
+    image: &CapturedImage,
+    geometry: PhysicalRect,
+    action: ExportAction,
+    tasks: &Tasks,
+    name: Option<&str>,
+) -> Delivery {
     let time = LocalTime::now();
     let mut clipboard = SystemClipboard;
     let mut context = ExportContext {
         settings,
         time: &time,
         handoff: &mut clipboard,
+        name,
     };
     Delivery::Exported(export(
         image,

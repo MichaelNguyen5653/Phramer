@@ -1,6 +1,7 @@
 // The images of one editor window: 15.0.0's editor session. Each image has
-// its own document (undo history, unsaved state); one is shown at a time and
-// the filmstrip shows them all. The UI reads it and calls in.
+// its own document (undo history, unsaved state) and name; one is shown at a
+// time and the filmstrip shows them all, in the order Save All numbers them.
+// The UI reads it and calls in.
 
 import type { View } from "./zoom";
 
@@ -17,6 +18,9 @@ export interface Doc {
 export interface Page<D extends Doc> {
   readonly id: number;
   readonly doc: D;
+  /** What it is saved as, without the extension: the filename pattern as
+   * it joined, until it is renamed. */
+  name: string;
   /** The view it was left at, and the image (session) that view is of. */
   view?: { view: View; of: unknown };
   /** A small picture of it for the filmstrip (a data URL). */
@@ -30,8 +34,8 @@ export class ImageSet<D extends Doc> {
   private listeners = new Set<() => void>();
   private version = 0;
 
-  constructor(first: D) {
-    this.pages.push({ id: this.nextId++, doc: first });
+  constructor(first: D, name: string) {
+    this.pages.push({ id: this.nextId++, doc: first, name });
   }
 
   // --- Change notification (useSyncExternalStore) ----------------------------
@@ -75,8 +79,8 @@ export class ImageSet<D extends Doc> {
   // --- Changing -----------------------------------------------------------------
 
   /** A new image, at the end, shown (15.0.0: a capture joins the session). */
-  add(doc: D): Page<D> {
-    const page = { id: this.nextId++, doc };
+  add(doc: D, name: string): Page<D> {
+    const page = { id: this.nextId++, doc, name };
     this.pages.push(page);
     this.show(this.pages.length - 1);
     this.changed();
@@ -104,19 +108,52 @@ export class ImageSet<D extends Doc> {
     return true;
   }
 
+  /** Renames the image at `index` (see `cleanName`); false when the name
+   * stays as it was. */
+  rename(index: number, typed: string): boolean {
+    const page = this.pages[index];
+    if (!page) return false;
+    const name = cleanName(typed, page.name);
+    if (name === page.name) return false;
+    page.name = name;
+    this.changed();
+    return true;
+  }
+
+  /** Moves the image at `index` to the front of the strip. */
+  moveToFront(index: number): boolean {
+    return this.move(index, 0);
+  }
+
+  /** Moves the image at `index` to the end of the strip. */
+  moveToEnd(index: number): boolean {
+    return this.move(index, this.pages.length - 1);
+  }
+
+  /** The image shown stays shown, wherever it ends up. */
+  private move(from: number, to: number): boolean {
+    if (from < 0 || from >= this.pages.length || from === to) return false;
+    const shown = this.current;
+    const [page] = this.pages.splice(from, 1);
+    this.pages.splice(to, 0, page);
+    this.shown = this.pages.indexOf(shown);
+    this.changed();
+    return true;
+  }
+
   setThumbnail(page: Page<D>, thumbnail: string): void {
     if (page.thumbnail === thumbnail) return;
     page.thumbnail = thumbnail;
     this.changed();
   }
 
-  /** Save All: every image in order, numbered from 1. The ones `save`
-   * wrote are saved; returns how many that was. */
-  async saveAll(save: (doc: D, number: number) => Promise<boolean>): Promise<number> {
+  /** Save All: every image in strip order, numbered from 1, with its name.
+   * The ones `save` wrote are saved; returns how many that was. */
+  async saveAll(save: (doc: D, number: number, name: string) => Promise<boolean>): Promise<number> {
     let written = 0;
     for (const [index, page] of [...this.pages].entries()) {
       page.doc.commitText();
-      if (await save(page.doc, index + 1)) {
+      if (await save(page.doc, index + 1, page.name)) {
         page.doc.markSaved();
         written++;
       }
@@ -124,6 +161,30 @@ export class ImageSet<D extends Doc> {
     this.changed();
     return written;
   }
+}
+
+/** Characters Windows refuses in a file name; control characters too. */
+const FORBIDDEN = /[\\/:*?"<>|\u0000-\u001f]/;
+
+/** What the rename field says when one of them is typed. */
+export const FORBIDDEN_HINT = 'A name cannot contain \\ / : * ? " < > |';
+
+/** Whether `text` holds a character a file name cannot. */
+export function hasForbidden(text: string): boolean {
+  return FORBIDDEN.test(text);
+}
+
+/** `text` without the characters a file name cannot hold. */
+export function withoutForbidden(text: string): string {
+  return text.replace(new RegExp(FORBIDDEN, "g"), "");
+}
+
+/** A typed name as it is kept: without forbidden characters and without
+ * trailing dots and spaces (Windows drops them); `previous` when nothing
+ * is left. */
+export function cleanName(typed: string, previous: string): string {
+  const name = withoutForbidden(typed).replace(/[. ]+$/, "");
+  return name.trim() === "" ? previous : name;
 }
 
 /** `1`, `1 and 3`, `1, 2 and 4`. */

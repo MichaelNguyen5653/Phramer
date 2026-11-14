@@ -1,8 +1,8 @@
 // The editor page in Edge with the Tauri runtime mocked: reference
 // screenshots (light, dark, a drawn shape, the colour picker, the toolbar's
-// keys, a narrow window, the filmstrip, the close prompt, the grid, the
-// empty editor), no layout shift, and a picker that applies on pointer move
-// with no confirm step.
+// keys, a narrow window, the filmstrip, a name being edited, the image
+// menu, the close prompt, the grid, the empty editor), no layout shift, and
+// a picker that applies on pointer move with no confirm step.
 
 import { expect, test, type Page } from "@playwright/test";
 import { installTauriMock, type MockOptions } from "./tauri-mock";
@@ -229,8 +229,9 @@ test("a narrow window wraps the toolbar: every button and key visible, nothing s
 
 test("filmstrip: images join, each keeps its own history, and the strip shows them", async ({ page }) => {
   await open(page);
-  // One image: no strip
-  await expect(page.getByTestId("filmstrip")).toHaveCount(0);
+  // One image: the strip shows it, the status bar does not count it
+  await expect(page.getByTestId("filmstrip")).toBeVisible();
+  await expect(page.locator(".thumb")).toHaveCount(1);
   await expect(page.getByTestId("position")).toHaveCount(0);
   await page.evaluate(() => {
     window.__addImage(1);
@@ -272,10 +273,10 @@ test("filmstrip: images join, each keeps its own history, and the strip shows th
   const exports = await page.evaluate(() =>
     window.__calls.filter((call) => call.cmd === "editor_export").map((call) => call.headers),
   );
-  expect(exports.map((headers) => [headers?.["x-action"], headers?.["x-number"]])).toEqual([
-    ["save_all", "1"],
-    ["save_all", "2"],
-    ["save_all", "3"],
+  expect(exports.map((headers) => [headers?.["x-action"], headers?.["x-number"], headers?.["x-name"]])).toEqual([
+    ["save_all", "1", "2026-11-14_09-05"],
+    ["save_all", "2", "2026-11-14_09-06"],
+    ["save_all", "3", "2026-11-14_09-07"],
   ]);
   expect((await calls(page, "editor_save_all_begin")).length).toBe(1);
   expect((await calls(page, "editor_save_all_end")).length).toBe(1);
@@ -285,7 +286,7 @@ test("filmstrip: images join, each keeps its own history, and the strip shows th
   await expect.poll(async () => (await calls(page, "plugin:window|destroy")).length).toBe(1);
 });
 
-test("Remove Image asks for an unsaved image, and the strip goes with the second-last image", async ({ page }) => {
+test("Remove Image asks for an unsaved image, the strip stays for the last one, and the last one out closes", async ({ page }) => {
   await open(page);
   await page.evaluate(() => window.__addImage(1));
   await expect(page.getByTestId("thumb-2")).toHaveAttribute("aria-current", "true");
@@ -294,7 +295,8 @@ test("Remove Image asks for an unsaved image, and the strip goes with the second
   const confirm = page.getByTestId("confirm");
   await expect(confirm).toContainText("Image 2 of 2 has changes that are not saved.");
   await confirm.getByRole("button", { name: "Remove without saving" }).click();
-  await expect(page.getByTestId("filmstrip")).toHaveCount(0);
+  await expect(page.getByTestId("filmstrip")).toBeVisible();
+  await expect(page.locator(".thumb")).toHaveCount(1);
   await expect(page.getByTestId("action-undo")).toBeDisabled();
   // A clean image goes without a question
   await page.evaluate(() => window.__addImage(2));
@@ -302,7 +304,10 @@ test("Remove Image asks for an unsaved image, and the strip goes with the second
   await page.getByTestId("thumb-1").click();
   await page.getByTestId("remove-image").click();
   await expect(page.getByTestId("confirm")).toHaveCount(0);
-  await expect(page.getByTestId("filmstrip")).toHaveCount(0);
+  await expect(page.locator(".thumb")).toHaveCount(1);
+  // The last image out closes the window
+  await page.getByTestId("remove-image").click();
+  await expect.poll(async () => (await calls(page, "plugin:window|destroy")).length).toBe(1);
 });
 
 test("grid and Zoom mode, as in 15.0.0", async ({ page }) => {
@@ -388,5 +393,178 @@ test("the empty editor says how to capture, and the first image replaces it", as
   await page.evaluate(() => window.__addImage(0));
   await expect(page.getByTestId("editor")).toBeVisible();
   await expect.poll(async () => (await calls(page, "editor_ready")).length).toBe(2);
-  await expect(page.getByTestId("filmstrip")).toHaveCount(0);
+  await expect(page.getByTestId("filmstrip")).toBeVisible();
+  await expect(page.locator(".thumb")).toHaveCount(1);
+});
+
+const exportHeaders = (page: Page) =>
+  page.evaluate(() => window.__calls.filter((call) => call.cmd === "editor_export").map((call) => call.headers ?? {}));
+
+const stripNames = (page: Page) => page.locator(".thumb-name").allTextContents();
+
+test("one image: the strip shows it with its name, and Save and Save As use the name", async ({ page }) => {
+  await open(page);
+  await expect(page.getByTestId("filmstrip")).toBeVisible();
+  await expect(page.getByTestId("thumb-1")).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("name-1")).toHaveText("2026-11-14_09-05");
+  // The whole name is in the tooltip
+  await expect(page.getByTestId("name-1")).toHaveAttribute("title", "2026-11-14_09-05");
+  await expect(page.locator(".thumb img")).toHaveCount(1);
+  await expect(page.getByTestId("save-all")).toBeVisible();
+  await expect(page.getByTestId("remove-image")).toBeVisible();
+  await page.keyboard.press("Control+s");
+  await page.getByTestId("action-save_as").click();
+  await page.keyboard.press("Control+c");
+  await expect.poll(async () => (await exportHeaders(page)).length).toBe(3);
+  // Only the saves carry it
+  expect((await exportHeaders(page)).map((headers) => [headers["x-action"], headers["x-name"]])).toEqual([
+    ["save", "2026-11-14_09-05"],
+    ["save_as", "2026-11-14_09-05"],
+    ["copy", undefined],
+  ]);
+});
+
+test("a long name is cut short under its thumbnail", async ({ page }) => {
+  await open(page);
+  const long = "A very long name for a screenshot of the login page bug";
+  await page.getByTestId("name-1").dblclick();
+  await page.keyboard.type(long);
+  await page.keyboard.press("Enter");
+  const name = page.getByTestId("name-1");
+  await expect(name).toHaveText(long);
+  await expect(name).toHaveAttribute("title", long);
+  expect(await name.evaluate((el) => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow === "ellipsis")).toBe(true);
+});
+
+test("rename in place: Enter keeps, Esc cancels, refused characters, leaving keeps", async ({ page }) => {
+  await open(page);
+  const before = await boxes(page);
+  const name = page.getByTestId("name-1");
+  const field = page.getByTestId("name-input");
+  await name.dblclick();
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue("2026-11-14_09-05");
+  // All of it is selected: typing replaces it
+  await page.keyboard.type("Login bug");
+  await page.keyboard.press("Enter");
+  await expect(name).toHaveText("Login bug");
+  await expect(page.getByTestId("thumb-1")).toBeFocused();
+
+  // Esc puts the name back, and is not the editor's Esc (the tool stays)
+  await page.keyboard.press("p");
+  await expect(page.getByTestId("tool-pencil")).toHaveAttribute("aria-pressed", "true");
+  await name.dblclick();
+  await page.keyboard.type("Other");
+  await page.keyboard.press("Escape");
+  await expect(field).toHaveCount(0);
+  await expect(name).toHaveText("Login bug");
+  await expect(page.getByTestId("tool-pencil")).toHaveAttribute("aria-pressed", "true");
+
+  // Characters a file name cannot hold are refused as typed, with a hint
+  await name.dblclick();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" v2: a/b?");
+  await expect(field).toHaveValue("Login bug v2 ab");
+  await expect(page.getByTestId("name-hint")).toHaveText('A name cannot contain \\ / : * ? " < > |');
+  // Nothing around it moved
+  expect(await boxes(page)).toEqual(before);
+  await expect(page).toHaveScreenshot("editor-name-editing-light.png");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page).toHaveScreenshot("editor-name-editing-dark.png");
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // Trailing dots and spaces go; leaving the field keeps the name
+  await page.keyboard.type(". . ");
+  await page.getByTestId("statusbar").click();
+  await expect(name).toHaveText("Login bug v2 ab");
+  // Emptied: the previous name comes back
+  await name.dblclick();
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Enter");
+  await expect(name).toHaveText("Login bug v2 ab");
+
+  // Saved under it
+  await page.keyboard.press("Control+s");
+  await expect.poll(async () => (await exportHeaders(page)).map((headers) => headers["x-name"])).toEqual([
+    encodeURIComponent("Login bug v2 ab"),
+  ]);
+});
+
+test("the image menu: rename, move to front and to end, by pointer and keys", async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => {
+    window.__addImage(1);
+    window.__addImage(2);
+  });
+  await expect(page.getByTestId("thumb-3")).toHaveAttribute("aria-current", "true");
+  // The shown image (the third) gets a change of its own
+  await drawRectangle(page, [80, 90], [260, 200]);
+  expect(await stripNames(page)).toEqual(["2026-11-14_09-05", "2026-11-14_09-06", "2026-11-14_09-07"]);
+
+  // Right-click: the menu, its first item focused; the first image cannot
+  // move to the front
+  await page.getByTestId("thumb-1").click({ button: "right" });
+  const menu = page.getByTestId("menu");
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId("menu-rename")).toBeFocused();
+  await expect(page.getByTestId("menu-front")).toBeDisabled();
+  await expect(page.getByTestId("menu-end")).toBeEnabled();
+  await page.waitForTimeout(400);
+  await expect(page).toHaveScreenshot("editor-menu-light.png");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page).toHaveScreenshot("editor-menu-dark.png");
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // Move to end: the order changes; the shown image stays shown, with its
+  // own change and history
+  await page.getByTestId("menu-end").click();
+  await expect(menu).toHaveCount(0);
+  expect(await stripNames(page)).toEqual(["2026-11-14_09-06", "2026-11-14_09-07", "2026-11-14_09-05"]);
+  await expect(page.getByTestId("thumb-2")).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("position")).toHaveText("Image 2 of 3");
+  await expect(page.getByTestId("thumb-2").getByTestId("unsaved")).toHaveCount(1);
+  await expect(page.getByTestId("action-undo")).toBeEnabled();
+
+  // By keys: the arrows skip what cannot be picked, Enter picks, and the
+  // focus follows the moved image
+  await page.getByTestId("thumb-3").click({ button: "right" });
+  await expect(page.getByTestId("menu-end")).toBeDisabled();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("menu-front")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("menu-rename")).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+  expect(await stripNames(page)).toEqual(["2026-11-14_09-05", "2026-11-14_09-06", "2026-11-14_09-07"]);
+  await expect(page.getByTestId("thumb-1")).toBeFocused();
+  await expect(page.getByTestId("thumb-3")).toHaveAttribute("aria-current", "true");
+
+  // Esc closes it and gives the focus back
+  await page.getByTestId("thumb-2").click({ button: "right" });
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(page.getByTestId("thumb-2")).toBeFocused();
+  // A press elsewhere closes it too
+  await page.getByTestId("thumb-2").click({ button: "right" });
+  await page.getByTestId("statusbar").click();
+  await expect(menu).toHaveCount(0);
+
+  // Rename from the menu
+  await page.getByTestId("thumb-2").click({ button: "right" });
+  await page.getByTestId("menu-rename").click();
+  await expect(page.getByTestId("name-input")).toBeFocused();
+  await page.keyboard.type("Second");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("name-2")).toHaveText("Second");
+
+  // Save All numbers them in the strip's order, under their names
+  await page.getByTestId("save-all").click();
+  await expect.poll(async () => (await exportHeaders(page)).length).toBe(3);
+  expect((await exportHeaders(page)).map((headers) => [headers["x-number"], headers["x-name"]])).toEqual([
+    ["1", "2026-11-14_09-05"],
+    ["2", "Second"],
+    ["3", "2026-11-14_09-07"],
+  ]);
 });

@@ -112,6 +112,7 @@ fn run(
         settings,
         time: &Fixed,
         handoff,
+        name: None,
     };
     export(
         image,
@@ -212,6 +213,29 @@ fn a_custom_pattern_with_slashes_and_colons_stays_one_file() {
         &mut Recorded::default(),
     );
     assert_eq!(folder.files(), ["shot 20-26\u{2044}57.png"]);
+}
+
+#[test]
+fn a_given_name_replaces_the_pattern_and_keeps_its_dots() {
+    let folder = TempDir::new("named");
+    let settings = settings_saving_to(&folder.0);
+    for _ in 0..2 {
+        let mut handoff = Recorded::default();
+        let mut context = ExportContext {
+            settings: &settings,
+            time: &Fixed,
+            handoff: &mut handoff,
+            name: Some("v1.2 notes"),
+        };
+        export(
+            &image(4, 4),
+            PhysicalRect::new(0, 0, 4, 4),
+            ExportAction::Save,
+            &CaptureTasks::default(),
+            &mut context,
+        );
+    }
+    assert_eq!(folder.files(), ["v1.2 notes.png", "v1.2 notes_1.png"]);
 }
 
 #[test]

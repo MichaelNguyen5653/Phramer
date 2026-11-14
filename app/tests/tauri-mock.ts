@@ -31,9 +31,11 @@ export function installTauriMock(options: MockOptions = {}): void {
   const height = 400;
   // A light "window" with a dark title bar, a blue panel and a checkered
   // block, so pixel-reading tools have something to show; other variants
-  // move and recolour the block, so each image looks its own
-  const makeImage = (variant: number) => {
-    const image = new Uint8Array(8 + width * height * 4);
+  // move and recolour the block, so each image looks its own. The name
+  // follows the pixels, as the daemon sends it
+  const makeImage = (variant: number, name: string) => {
+    const label = new TextEncoder().encode(name);
+    const image = new Uint8Array(8 + width * height * 4 + label.length);
     const view = new DataView(image.buffer);
     view.setUint32(0, width, true);
     view.setUint32(4, height, true);
@@ -54,9 +56,12 @@ export function installTauriMock(options: MockOptions = {}): void {
         image.set([pixel[0], pixel[1], pixel[2], 255], at);
       }
     }
+    image.set(label, 8 + width * height * 4);
     return image;
   };
-  const images: Uint8Array[] = options.empty ? [] : [makeImage(0)];
+  // The default pattern (%F_%H-%M), a minute apart
+  const nameAt = (index: number) => `2026-11-14_09-${String(5 + index).padStart(2, "0")}`;
+  const images: Uint8Array[] = options.empty ? [] : [makeImage(0, nameAt(0))];
   const settings = {
     color: [229, 72, 77],
     palette: [null, [255, 255, 255], [0, 0, 0], [128, 0, 0], [255, 0, 0], [255, 255, 0], [0, 255, 0], [0, 128, 0], [0, 255, 255], [0, 0, 255], [255, 0, 255], [128, 0, 128]],
@@ -89,7 +94,7 @@ export function installTauriMock(options: MockOptions = {}): void {
     }
   };
   window.__addImage = (variant: number) => {
-    images.push(makeImage(variant));
+    images.push(makeImage(variant, nameAt(images.length)));
     window.__emit("editor:image-added", images.length - 1);
   };
   window.__setShortcut = (name: string, value: string) => {
@@ -127,7 +132,7 @@ export function installTauriMock(options: MockOptions = {}): void {
           return new ArrayBuffer(4);
         case "editor_export":
           return options?.headers?.["x-action"] === "save_all"
-            ? [{ text: `Capture saved as C:\\Pictures\\Phramer set\\${options.headers["x-number"]} - capture.png`, error: false }]
+            ? [{ text: `Capture saved as C:\\Pictures\\Phramer set\\${options.headers["x-number"]} - ${decodeURIComponent(options.headers["x-name"] ?? "")}.png`, error: false }]
             : [{ text: "Capture saved to clipboard.", error: false }];
         case "editor_save_all_begin":
           return "C:\\Pictures\\Phramer set";

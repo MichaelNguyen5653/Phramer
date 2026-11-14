@@ -227,6 +227,7 @@ fn draw_a_rectangle_and_export() {
         settings: &settings,
         time: &time,
         handoff: &mut handoff,
+        name: None,
     };
     let report = export(
         &image,

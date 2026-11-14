@@ -12,6 +12,7 @@
   --canvas-backdrop: var(--fg-5);
   --thumb-width: calc(var(--space-32) * 4);
   --thumb-height: calc(var(--space-24) * 3);
+  --name-height: calc(var(--space-16) + var(--space-2));
   /* Mid grey reads on light and dark images alike; every fifth line is
      stronger so distances can be counted (15.0.0's grid) */
   --grid-minor: rgb(128 128 128 / 35%);
@@ -51,7 +52,7 @@ textarea {
 
 .editor {
   display: grid;
-  /* Title bar, toolbar, image, filmstrip (when there is one), status bar */
+  /* Title bar, toolbar, image, filmstrip, status bar */
   grid-template-rows: var(--titlebar-height) auto 1fr auto auto;
   height: 100%;
 }
@@ -489,6 +490,8 @@ textarea {
 .thumb {
   position: relative;
   display: grid;
+  /* A definite area, so the picture fits inside it above the name */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
   width: var(--thumb-width);
   height: var(--thumb-height);
@@ -539,6 +542,109 @@ textarea {
   border-radius: var(--radius-full);
   background: var(--accent);
   box-shadow: 0 0 0 var(--space-2) var(--bg);
+}
+
+/* The name under each thumbnail: one line, cut short with its whole self
+   in the tooltip; edited in place in a field of the same size */
+.thumbs li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: var(--thumb-width);
+}
+
+.thumb-name,
+.thumb-name-input {
+  height: var(--name-height);
+  line-height: var(--name-height);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-4);
+  font-size: var(--text-11);
+}
+
+.thumb-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: center;
+  color: var(--text-secondary);
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+.thumb-name:hover {
+  background: var(--surface-hover);
+}
+
+.thumb-name.active {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+
+.thumb-name-input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 var(--hairline) var(--accent);
+  user-select: text;
+}
+
+/* Over the thumbnail, so nothing moves when it shows */
+.name-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--name-height) + var(--space-6));
+  padding: var(--space-4) var(--space-6);
+  border-radius: var(--radius-6);
+  background: var(--bg);
+  box-shadow: var(--shadow-panel);
+  font-size: var(--text-11);
+  color: var(--accent);
+  animation: notice-in var(--dur-base) var(--ease-out);
+}
+
+/* --- Menu -------------------------------------------------------------------------------- */
+
+.menu {
+  position: fixed;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: calc(var(--space-32) * 5);
+  padding: var(--space-4);
+  border-radius: var(--radius-8);
+  background: var(--bg);
+  box-shadow: var(--shadow-panel);
+  outline: none;
+  animation: picker-in var(--dur-base) var(--ease-out);
+}
+
+.menu-item {
+  height: calc(var(--space-24) + var(--space-4));
+  padding: 0 var(--space-8);
+  border: 0;
+  border-radius: var(--radius-4);
+  background: transparent;
+  text-align: left;
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.menu-item:focus-visible {
+  outline: none;
+  background: var(--surface-active);
+}
+
+.menu-item:disabled {
+  opacity: 0.4;
 }
 
 /* --- Empty editor ----------------------------------------------------------------------- */

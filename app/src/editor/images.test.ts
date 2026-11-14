@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { EditorController } from "./controller";
 import type { Engine, Shape } from "./engine";
-import { closeQuestion, ImageSet, positionLabel, removeQuestion } from "./images";
+import {
+  cleanName,
+  closeQuestion,
+  FORBIDDEN_HINT,
+  hasForbidden,
+  ImageSet,
+  positionLabel,
+  removeQuestion,
+  withoutForbidden,
+} from "./images";
 import { blank, loadEngine } from "./testing";
 
 const RED = { r: 255, g: 0, b: 0, a: 255 };
@@ -21,9 +30,9 @@ beforeEach(async () => {
 
 describe("the images of one window", () => {
   it("adds an image at the end and shows it", () => {
-    const set = new ImageSet(open());
-    const second = set.add(open(120));
-    const third = set.add(open(140));
+    const set = new ImageSet(open(), "shot");
+    const second = set.add(open(120), "shot");
+    const third = set.add(open(140), "shot");
     expect(set.count).toBe(3);
     expect(set.position).toBe(2);
     expect(set.current).toBe(third);
@@ -33,8 +42,8 @@ describe("the images of one window", () => {
   });
 
   it("keeps each image's own undo history and unsaved state", () => {
-    const set = new ImageSet(open());
-    set.add(open());
+    const set = new ImageSet(open(), "shot");
+    set.add(open(), "shot");
     draw(set.current.doc);
     expect(set.current.doc.canUndo).toBe(true);
     set.show(0);
@@ -49,8 +58,8 @@ describe("the images of one window", () => {
   });
 
   it("places typed text when another image is shown", () => {
-    const set = new ImageSet(open());
-    set.add(open());
+    const set = new ImageSet(open(), "shot");
+    set.add(open(), "shot");
     const editor = set.current.doc;
     editor.startText({ x: 10, y: 10 }, RED, 10, {}, "left");
     editor.typeText("Hi");
@@ -60,9 +69,9 @@ describe("the images of one window", () => {
   });
 
   it("removes an image, shows its neighbour and never removes the last one", () => {
-    const set = new ImageSet(open(100));
-    set.add(open(120));
-    set.add(open(140));
+    const set = new ImageSet(open(100), "shot");
+    set.add(open(120), "shot");
+    set.add(open(140), "shot");
     set.show(1);
     expect(set.remove()).toBe(true);
     expect(set.list.map((page) => page.doc.session.width)).toEqual([100, 140]);
@@ -72,7 +81,7 @@ describe("the images of one window", () => {
     expect(set.remove()).toBe(true);
     expect(set.current.doc.session.width).toBe(100);
     // Removing one before the shown image keeps the same image shown
-    set.add(open(160));
+    set.add(open(160), "shot");
     set.remove(0);
     expect(set.current.doc.session.width).toBe(160);
     expect(set.remove()).toBe(false);
@@ -80,11 +89,11 @@ describe("the images of one window", () => {
   });
 
   it("saves all, numbered from 1, and marks what was written as saved", async () => {
-    const set = new ImageSet(open());
+    const set = new ImageSet(open(), "shot");
     draw(set.current.doc);
-    set.add(open());
+    set.add(open(), "shot");
     draw(set.current.doc);
-    set.add(open());
+    set.add(open(), "shot");
     draw(set.current.doc);
     expect(set.unsaved()).toEqual([1, 2, 3]);
     const numbers: number[] = [];
@@ -99,10 +108,10 @@ describe("the images of one window", () => {
   });
 
   it("tells subscribers when the set changes", () => {
-    const set = new ImageSet(open());
+    const set = new ImageSet(open(), "shot");
     let calls = 0;
     const stop = set.subscribe(() => calls++);
-    const page = set.add(open());
+    const page = set.add(open(), "shot");
     set.setThumbnail(page, "data:a");
     set.setThumbnail(page, "data:a");
     set.show(0);
@@ -111,6 +120,102 @@ describe("the images of one window", () => {
     // add (show + add), thumbnail once, show
     expect(calls).toBe(4);
     expect(set.list[1].thumbnail).toBe("data:a");
+  });
+
+  /** Three images named a, b and c, in that order. */
+  const abc = () => {
+    const set = new ImageSet(open(100), "a");
+    set.add(open(120), "b");
+    set.add(open(140), "c");
+    return set;
+  };
+  const names = (set: ImageSet<EditorController>) => set.list.map((page) => page.name);
+
+  it("moves an image to the front or the end; the shown image stays shown", () => {
+    const set = abc();
+    set.show(1);
+    const shown = set.current;
+    // Another image moves: the shown one keeps showing, at its new place
+    expect(set.moveToFront(2)).toBe(true);
+    expect(names(set)).toEqual(["c", "a", "b"]);
+    expect(set.current).toBe(shown);
+    expect(set.position).toBe(2);
+    // The shown image itself moves, and stays shown
+    expect(set.moveToFront(2)).toBe(true);
+    expect(names(set)).toEqual(["b", "c", "a"]);
+    expect(set.current).toBe(shown);
+    expect(set.position).toBe(0);
+    expect(set.moveToEnd(0)).toBe(true);
+    expect(names(set)).toEqual(["c", "a", "b"]);
+    expect(set.position).toBe(2);
+    // Already there, or no such image: nothing changes
+    expect(set.moveToFront(0)).toBe(false);
+    expect(set.moveToEnd(2)).toBe(false);
+    expect(set.moveToEnd(5)).toBe(false);
+    expect(names(set)).toEqual(["c", "a", "b"]);
+  });
+
+  it("keeps each image's own history and unsaved state through a move", () => {
+    const set = abc();
+    draw(set.current.doc);
+    const drawn = set.current;
+    set.moveToFront(2);
+    expect(set.list[0]).toBe(drawn);
+    expect(set.list[0].doc.canUndo).toBe(true);
+    expect(set.unsaved()).toEqual([1]);
+    set.show(1);
+    expect(set.current.doc.canUndo).toBe(false);
+  });
+
+  it("saves all in the strip's order, each image under its own name", async () => {
+    const set = abc();
+    set.moveToFront(2);
+    set.rename(1, "first shot");
+    const saved: [number, string, number][] = [];
+    await set.saveAll(async (doc, number, name) => {
+      saved.push([number, name, doc.session.width]);
+      return true;
+    });
+    expect(saved).toEqual([
+      [1, "c", 140],
+      [2, "first shot", 100],
+      [3, "b", 120],
+    ]);
+  });
+
+  it("renames an image by the rename rules", () => {
+    const set = abc();
+    let calls = 0;
+    set.subscribe(() => calls++);
+    expect(set.rename(0, "Login bug")).toBe(true);
+    expect(set.list[0].name).toBe("Login bug");
+    expect(calls).toBe(1);
+    // Empty after trimming: the name stays, and nothing is told
+    expect(set.rename(0, " .. ")).toBe(false);
+    expect(set.list[0].name).toBe("Login bug");
+    expect(set.rename(9, "x")).toBe(false);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("image names", () => {
+  it("refuses the characters Windows forbids in file names", () => {
+    for (const character of ["\\", "/", ":", "*", "?", '"', "<", ">", "|", "\u0007"]) {
+      expect(hasForbidden(`a${character}b`)).toBe(true);
+    }
+    expect(hasForbidden("Bug report v1.2 (été)")).toBe(false);
+    expect(withoutForbidden('a/b:c*d?e"f<g>h|i\\j')).toBe("abcdefghij");
+    expect(FORBIDDEN_HINT).toBe('A name cannot contain \\ / : * ? " < > |');
+  });
+
+  it("trims trailing dots and spaces, and an empty name brings the previous one back", () => {
+    expect(cleanName("notes. . ", "old")).toBe("notes");
+    expect(cleanName("  leading stays", "old")).toBe("  leading stays");
+    expect(cleanName("v1.2", "old")).toBe("v1.2");
+    expect(cleanName("", "old")).toBe("old");
+    expect(cleanName(" . ", "old")).toBe("old");
+    expect(cleanName("a/b", "old")).toBe("ab");
+    expect(cleanName("///", "old")).toBe("old");
   });
 });
 

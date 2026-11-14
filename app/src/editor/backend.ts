@@ -29,6 +29,8 @@ export interface Image {
   width: number;
   height: number;
   rgba: Uint8Array;
+  /** Its name in the editor: the filename pattern as it was given. */
+  name: string;
 }
 
 /** What the empty editor says about getting an image into it (15.0.0's
@@ -66,12 +68,14 @@ export function parseFaces(family: string, buffer: ArrayBuffer): FontFace[] {
   return faces;
 }
 
-/** The window's image: 8 bytes of size, then RGBA. */
+/** The window's image: 8 bytes of size, RGBA, then its name (UTF-8). */
 export function parseImage(buffer: ArrayBuffer): Image {
   const view = new DataView(buffer);
   const width = view.getUint32(0, true);
   const height = view.getUint32(4, true);
-  return { width, height, rgba: new Uint8Array(buffer, 8, width * height * 4) };
+  const length = width * height * 4;
+  const name = new TextDecoder().decode(new Uint8Array(buffer, 8 + length));
+  return { width, height, rgba: new Uint8Array(buffer, 8, length), name };
 }
 
 export const backend = {
@@ -109,11 +113,14 @@ export const backend = {
   set(change: SettingChange): Promise<void> {
     return invoke("editor_set", { change });
   },
-  /** `number`: the image's place in Save All's folder. */
-  exportImage(action: ExportAction, image: Rendered, number?: number): Promise<Notice[]> {
+  /** `number`: the image's place in Save All's folder. `name`: what Save,
+   * Save As and Save All call the file, without its extension. */
+  exportImage(action: ExportAction, image: Rendered, number?: number, name?: string): Promise<Notice[]> {
     const body = new Uint8Array(image.rgba.buffer, image.rgba.byteOffset, image.rgba.byteLength);
     const headers: Record<string, string> = { "x-action": action, "x-width": String(image.width), "x-height": String(image.height) };
     if (number !== undefined) headers["x-number"] = String(number);
+    // Percent-encoded: a header carries only ASCII
+    if (name !== undefined) headers["x-name"] = encodeURIComponent(name);
     return invoke<Notice[]>("editor_export", body, { headers });
   },
   /** Save All: asks for a folder and makes one for the images inside it;

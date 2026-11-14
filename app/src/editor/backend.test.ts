@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFaces } from "./backend";
+import { parseFaces, parseImage } from "./backend";
 import { emptyHint } from "./Empty";
 
 describe("font faces from the daemon", () => {
@@ -29,6 +29,22 @@ describe("font faces from the daemon", () => {
     expect([...read[0].data]).toEqual([1, 2, 3]);
     expect([...read[1].data]).toEqual([9]);
     expect(parseFaces("None", new ArrayBuffer(0))).toEqual([]);
+  });
+});
+
+describe("an image from the daemon", () => {
+  it("reads its size, pixels and name", () => {
+    const name = new TextEncoder().encode("2026-11-14_09-05 été");
+    const buffer = new ArrayBuffer(8 + 2 * 1 * 4 + name.length);
+    const view = new DataView(buffer);
+    view.setUint32(0, 2, true);
+    view.setUint32(4, 1, true);
+    new Uint8Array(buffer, 8, 8).set([1, 2, 3, 4, 5, 6, 7, 8]);
+    new Uint8Array(buffer, 16).set(name);
+    const image = parseImage(buffer);
+    expect([image.width, image.height]).toEqual([2, 1]);
+    expect([...image.rgba]).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(image.name).toBe("2026-11-14_09-05 été");
   });
 });
 

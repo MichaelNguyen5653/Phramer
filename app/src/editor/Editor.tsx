@@ -1,6 +1,6 @@
 // The editor window: title bar, toolbar, the image drawn by the engine, the
-// options panel, the filmstrip when it holds more than one image, and the
-// status bar.
+// options panel, the filmstrip of its images (one or more), and the status
+// bar.
 
 import {
   useCallback,
@@ -114,7 +114,7 @@ function thumbnailOf(source: HTMLCanvasElement): string {
 
 export function Editor({ engine, image, settings, backend, onReady }: EditorProps) {
   const images = useMemo(
-    () => new ImageSet(EditorController.open(engine, image.width, image.height, image.rgba, settings.undo_limit)),
+    () => new ImageSet(EditorController.open(engine, image.width, image.height, image.rgba, settings.undo_limit), image.name),
     [engine, image, settings.undo_limit],
   );
   useSyncExternalStore(images.subscribe, images.getVersion);
@@ -237,7 +237,6 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
 
   // The filmstrip's picture of the image follows its changes
   useEffect(() => {
-    if (images.count < 2) return;
     const target = images.current;
     const timer = window.setTimeout(
       () => {
@@ -418,7 +417,7 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
   const addImage = useCallback(
     (next: Image) => {
       leaveImage();
-      images.add(EditorController.open(engine, next.width, next.height, next.rgba, settings.undo_limit));
+      images.add(EditorController.open(engine, next.width, next.height, next.rgba, settings.undo_limit), next.name);
       announce.current = performance.now();
     },
     [engine, images, leaveImage, settings.undo_limit],
@@ -482,6 +481,8 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
     images.remove(images.position);
   }, [backend, images]);
 
+  const commitText = useCallback(() => controller.commitText(), [controller]);
+
   const removeImage = useCallback(() => {
     controller.commitText();
     if (controller.dirty) setConfirm("remove");
@@ -491,8 +492,10 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
   const exportAs = useCallback(
     async (action: ExportAction) => {
       const image = controller.flatten(workspace);
+      // Saved under the image's own name
+      const name = action === "save" || action === "save_as" ? images.current.name : undefined;
       try {
-        const result = await backend.exportImage(action, image);
+        const result = await backend.exportImage(action, image, undefined, name);
         notify(result);
         if (["save", "save_as", "copy_file"].includes(action) && result.length > 0 && !result.some((notice) => notice.error)) {
           controller.markSaved();
@@ -501,15 +504,15 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
         notify([{ text: String(error), error: true }]);
       }
     },
-    [backend, controller, notify, workspace],
+    [backend, controller, images, notify, workspace],
   );
 
   const saveAll = useCallback(async () => {
     setSavingAll(true);
     try {
       if ((await backend.saveAllBegin()) === null) return;
-      await images.saveAll(async (doc, number) => {
-        const result = await backend.exportImage("save_all", doc.flatten(workspace), number);
+      await images.saveAll(async (doc, number, name) => {
+        const result = await backend.exportImage("save_all", doc.flatten(workspace), number, name);
         return result.length > 0 && !result.some((notice) => notice.error);
       });
       notify(await backend.saveAllEnd());
@@ -1162,16 +1165,18 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
         />
       </div>
 
-      {images.count > 1 && (
-        <Filmstrip
-          pages={images.list}
-          current={images.position}
-          savingAll={savingAll}
-          onShow={showImage}
-          onSaveAll={() => void saveAll()}
-          onRemove={removeImage}
-        />
-      )}
+      <Filmstrip
+        pages={images.list}
+        current={images.position}
+        savingAll={savingAll}
+        onShow={showImage}
+        onSaveAll={() => void saveAll()}
+        onRemove={removeImage}
+        onBeforeEdit={commitText}
+        onRename={(index, typed) => images.rename(index, typed)}
+        onMoveToFront={(index) => images.moveToFront(index)}
+        onMoveToEnd={(index) => images.moveToEnd(index)}
+      />
 
       <footer className="statusbar" data-testid="statusbar">
         {images.count > 1 && <span data-testid="position">{positionLabel(images.position, images.count)}</span>}

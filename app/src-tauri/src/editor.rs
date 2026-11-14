@@ -48,11 +48,12 @@ const LABEL_PREFIX: &str = "editor-";
 /// is its index for `editor_image`.
 const IMAGE_ADDED_EVENT: &str = "editor:image-added";
 pub(crate) const TITLE: &str = "Phramer Editor";
-/// Room around the image, the options panel and the bars, in logical
-/// pixels (15.0.0's `resizeToFit`: 48 around the image).
+/// Room around the image, the options panel and the bars (title bar,
+/// toolbar, the filmstrip that always shows, status bar), in logical pixels
+/// (15.0.0's `resizeToFit`: 48 around the image).
 const MARGIN: f64 = 48.0;
 const PANEL_WIDTH: f64 = 240.0;
-const BARS_HEIGHT: f64 = 36.0 + 44.0 + 28.0;
+const BARS_HEIGHT: f64 = 36.0 + 44.0 + 114.0 + 28.0;
 const MIN_WIDTH: f64 = 720.0;
 const MIN_HEIGHT: f64 = 520.0;
 /// The share of the monitor's work area the window may take.
@@ -81,8 +82,9 @@ struct Opened {
     batch: Option<Batch>,
 }
 
-/// Save All under way: the folder made for it, the name every file shares
-/// (15.0.0's one pattern for the whole set) and how it is going.
+/// Save All under way: the folder made for it, the filename pattern as it
+/// began (the name of an image whose own cannot name a file) and how it is
+/// going.
 #[derive(Debug, Default)]
 struct Batch {
     folder: PathBuf,
@@ -582,14 +584,16 @@ fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), ImageError> {
 }
 
 /// Image `index` (default 0) of those given to the window: width and
-/// height (u32, little-endian), then straight RGBA8. Only images given to
-/// this window are read. A pre-warmed window's page waits here for its
-/// first; an index not given yet, or any index of a window opened empty,
-/// answers with no bytes.
+/// height (u32, little-endian), straight RGBA8, then the image's name
+/// (UTF-8): the filename pattern expanded as it joins the window. Only
+/// images given to this window are read. A pre-warmed window's page waits
+/// here for its first; an index not given yet, or any index of a window
+/// opened empty, answers with no bytes.
 #[tauri::command]
 pub(crate) async fn editor_image<R: Runtime>(
     window: WebviewWindow<R>,
     editors: tauri::State<'_, Editors>,
+    state: tauri::State<'_, DaemonState>,
     index: Option<usize>,
 ) -> Result<Response, String> {
     let index = index.unwrap_or(0);
@@ -621,11 +625,17 @@ pub(crate) async fn editor_image<R: Runtime>(
             .map_err(|error| error.to_string())?
             .map_err(|_| "the window closed before it got an image".to_owned())?,
     };
+    // The page asks for each image once, as it joins: named now
+    let name = phramer_overlay::expand_pattern(
+        &settings::load(&state.settings_path).filename_pattern(),
+        &phramer_overlay::LocalTime::now(),
+    );
     let (width, height, rgba) = decode_png(&path).map_err(|error| error.to_string())?;
-    let mut bytes = Vec::with_capacity(8 + rgba.len());
+    let mut bytes = Vec::with_capacity(8 + rgba.len() + name.len());
     bytes.extend_from_slice(&width.to_le_bytes());
     bytes.extend_from_slice(&height.to_le_bytes());
     bytes.extend_from_slice(&rgba);
+    bytes.extend_from_slice(name.as_bytes());
     Ok(Response::new(bytes))
 }
 
@@ -987,9 +997,48 @@ fn captured(width: u32, height: u32, rgba: &[u8]) -> Option<CapturedImage> {
     })
 }
 
+/// Characters Windows refuses in a file name.
+const FORBIDDEN: [char; 9] = ['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
+
+/// The image name the page sent (percent-encoded), when it can name a file:
+/// decoded, without trailing dots and spaces. `None` when it is empty or
+/// holds a character a file name cannot; the filename pattern names the
+/// file then.
+fn image_name(encoded: &str) -> Option<String> {
+    let decoded = percent_decode(encoded);
+    let name = decoded.as_deref()?.trim_end_matches(['.', ' ']);
+    let valid = !name.trim().is_empty()
+        && !name
+            .chars()
+            .any(|c| FORBIDDEN.contains(&c) || c.is_control());
+    if !valid {
+        log::warn!("editor: {decoded:?} cannot name a file; using the filename pattern");
+        return None;
+    }
+    Some(name.to_owned())
+}
+
+/// `%XX` escapes (`encodeURIComponent`) undone, as UTF-8; `None` when an
+/// escape or the text is malformed.
+fn percent_decode(text: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.bytes();
+    while let Some(byte) = rest.next() {
+        if byte == b'%' {
+            let high = char::from(rest.next()?).to_digit(16)?;
+            let low = char::from(rest.next()?).to_digit(16)?;
+            bytes.push(u8::try_from(high * 16 + low).ok()?);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
 /// The editor's image, rendered by the page with its annotations, goes
 /// where the action says. The body is straight RGBA8; headers
-/// `x-action`, `x-width` and `x-height` describe it.
+/// `x-action`, `x-width` and `x-height` describe it, and `x-name` is what
+/// Save, Save As and Save All call the file.
 #[tauri::command]
 pub(crate) async fn editor_export<R: Runtime>(
     app: AppHandle<R>,
@@ -1003,6 +1052,7 @@ pub(crate) async fn editor_export<R: Runtime>(
             .unwrap_or(0)
     };
     let (width, height) = (number("x-width"), number("x-height"));
+    let name = header(&request, "x-name").and_then(image_name);
     let InvokeBody::Raw(rgba) = request.body() else {
         return Err("the image must be sent as raw bytes".to_owned());
     };
@@ -1028,6 +1078,7 @@ pub(crate) async fn editor_export<R: Runtime>(
             geometry,
             ExportAction::Copy,
             Tasks::default(),
+            None,
         ),
         "copy_file" => export(
             &settings,
@@ -1035,6 +1086,7 @@ pub(crate) async fn editor_export<R: Runtime>(
             geometry,
             ExportAction::CopyFile,
             Tasks::default(),
+            None,
         ),
         "save" => export(
             &settings,
@@ -1042,16 +1094,24 @@ pub(crate) async fn editor_export<R: Runtime>(
             geometry,
             ExportAction::Save,
             Tasks::default(),
+            name.as_deref(),
         ),
         "save_as" => {
-            let Some(path) = ask_save_path(&app, &window, &settings) else {
+            let Some(path) = ask_save_path(&app, &window, &settings, name.as_deref()) else {
                 return Ok(Vec::new());
             };
             let tasks = Tasks {
                 save: Some(SaveTo::Path(path)),
                 ..Tasks::default()
             };
-            export(&settings, &image, geometry, ExportAction::Accept, tasks)
+            export(
+                &settings,
+                &image,
+                geometry,
+                ExportAction::Accept,
+                tasks,
+                None,
+            )
         }
         "pin" => {
             capture::pin(&app, &settings, image, geometry);
@@ -1069,6 +1129,7 @@ pub(crate) async fn editor_export<R: Runtime>(
                 &image,
                 geometry,
                 number("x-number"),
+                name.as_deref(),
             )?;
             return Ok(report.notices.iter().map(Notice::from).collect());
         }
@@ -1155,7 +1216,8 @@ fn set_folder(parent: &Path, time: &dyn phramer_overlay::TimeFormat) -> std::io:
     }
 }
 
-/// One image of Save All, as `<number> - <name>` in the set's folder.
+/// One image of Save All, as `<number> - <name>` in the set's folder; with
+/// no `name` that can name a file, the set's from the pattern.
 fn save_one<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
@@ -1163,9 +1225,10 @@ fn save_one<R: Runtime>(
     image: &CapturedImage,
     geometry: PhysicalRect,
     number: u32,
+    name: Option<&str>,
 ) -> Result<ExportReport, String> {
     let editors = app.state::<Editors>();
-    let target = {
+    let (folder, fallback) = {
         let windows = editors
             .windows
             .lock()
@@ -1174,13 +1237,16 @@ fn save_one<R: Runtime>(
             .get(window.label())
             .and_then(|opened| opened.batch.as_ref())
             .ok_or_else(|| "Save All has not started".to_owned())?;
-        batch.folder.join(format!("{number} - {}", batch.name))
+        (batch.folder.clone(), batch.name.clone())
     };
-    let tasks = Tasks {
-        save: Some(SaveTo::Path(target)),
-        ..Tasks::default()
-    };
-    let report = export(settings, image, geometry, ExportAction::Accept, tasks);
+    let report = save_numbered(
+        settings,
+        image,
+        geometry,
+        &folder,
+        number,
+        name.unwrap_or(&fallback),
+    );
     if let Ok(mut windows) = editors.windows.lock()
         && let Some(batch) = windows
             .get_mut(window.label())
@@ -1195,6 +1261,31 @@ fn save_one<R: Runtime>(
         }
     }
     Ok(report)
+}
+
+/// Writes `<number> - <name>` into the set's `folder`, with the save
+/// extension and never replacing a file.
+fn save_numbered(
+    settings: &Settings,
+    image: &CapturedImage,
+    geometry: PhysicalRect,
+    folder: &Path,
+    number: u32,
+    name: &str,
+) -> ExportReport {
+    let tasks = Tasks {
+        save: Some(SaveTo::Path(folder.to_owned())),
+        ..Tasks::default()
+    };
+    let file = format!("{number} - {name}");
+    export(
+        settings,
+        image,
+        geometry,
+        ExportAction::Accept,
+        tasks,
+        Some(&file),
+    )
 }
 
 /// What became of Save All (15.0.0's texts): every file, or how many failed.
@@ -1245,30 +1336,40 @@ pub(crate) fn editor_save_all_end<R: Runtime>(
     notices
 }
 
+/// `name`: what a file saved into a folder is called, instead of the
+/// filename pattern's.
 fn export(
     settings: &Settings,
     image: &CapturedImage,
     geometry: PhysicalRect,
     action: ExportAction,
     tasks: Tasks,
+    name: Option<&str>,
 ) -> ExportReport {
-    match capture::run_export(settings, image, geometry, action, &tasks) {
+    match capture::run_export_named(settings, image, geometry, action, &tasks, name) {
         capture::Delivery::Exported(report) => report,
         _ => ExportReport::default(),
     }
 }
 
-/// Save As: the system's save dialog, in the save folder, with the file
-/// name the filename pattern gives. `None` when it is cancelled.
+/// Save As: the system's save dialog, in the save folder, with the image's
+/// `name` as the file name, or the filename pattern's without one. `None`
+/// when it is cancelled.
 fn ask_save_path<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
     settings: &Settings,
+    name: Option<&str>,
 ) -> Option<PathBuf> {
     use tauri_plugin_dialog::DialogExt;
-    let name = phramer_overlay::expand_pattern(
-        &settings.filename_pattern(),
-        &phramer_overlay::LocalTime::now(),
+    let name = name.map_or_else(
+        || {
+            phramer_overlay::expand_pattern(
+                &settings.filename_pattern(),
+                &phramer_overlay::LocalTime::now(),
+            )
+        },
+        str::to_owned,
     );
     let extension = settings.save_as_file_extension();
     let extension = extension.trim_start_matches('.');
@@ -1427,7 +1528,7 @@ mod tests {
         // A small image: the minimum size
         assert_eq!(initial_size((100, 80), (1920, 1040), 1.0), (720.0, 520.0));
         // A medium one: image + margins + panel, image + margins + bars
-        assert_eq!(initial_size((800, 500), (1920, 1040), 1.0), (1136.0, 704.0));
+        assert_eq!(initial_size((800, 500), (1920, 1040), 1.0), (1136.0, 818.0));
         // A large one is held to 92% of the work area
         assert_eq!(
             initial_size((3000, 2000), (1920, 1040), 1.0),
@@ -1436,7 +1537,7 @@ mod tests {
         // At 200% the image counts in logical pixels
         assert_eq!(
             initial_size((1600, 1000), (3840, 2080), 2.0),
-            (1136.0, 704.0)
+            (1136.0, 818.0)
         );
     }
 
@@ -1605,6 +1706,71 @@ mod tests {
             r"1 of 3 images could not be saved to C:\Pictures\Phramer 2026-11-13 09-05-07."
         );
         assert!(failed.notices[0].error);
+    }
+
+    #[test]
+    fn save_all_writes_each_image_as_its_number_and_name() {
+        let folder =
+            std::env::temp_dir().join(format!("phramer-editor-numbered-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let settings = Settings::default();
+        let image = CapturedImage {
+            width: 2,
+            height: 2,
+            bgra: [10, 20, 30, 255].repeat(4),
+        };
+        // The strip after "c" moved to the front: numbered in that order;
+        // a dot in a name stays part of it
+        for (number, name) in [(1, "c"), (2, "a v1.2"), (3, "b")] {
+            let report = save_numbered(
+                &settings,
+                &image,
+                PhysicalRect::new(0, 0, 2, 2),
+                &folder,
+                number,
+                name,
+            );
+            assert!(report.saved.is_some(), "{report:?}");
+        }
+        // The same number and name again is never replaced
+        save_numbered(
+            &settings,
+            &image,
+            PhysicalRect::new(0, 0, 2, 2),
+            &folder,
+            3,
+            "b",
+        );
+        let mut files: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+        assert_eq!(
+            files,
+            ["1 - c.png", "2 - a v1.2.png", "3 - b.png", "3 - b_1.png"]
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn image_names_are_checked_before_they_name_a_file() {
+        assert_eq!(
+            image_name("Bug%20report%20%C3%A9t%C3%A9").as_deref(),
+            Some("Bug report été")
+        );
+        assert_eq!(image_name("v1.2").as_deref(), Some("v1.2"));
+        // Windows drops trailing dots and spaces
+        assert_eq!(image_name("notes.%20.%20").as_deref(), Some("notes"));
+        // Empty, a forbidden character, a control character or a broken
+        // escape: the filename pattern names the file
+        for refused in [
+            "", "%20", "..", "a%5Cb", "a%2Fb", "a%3Ab", "a*b", "a%3Fb", "a%22b", "a%3Cb", "a%3Eb",
+            "a%7Cb", "a%09b", "%E2%28", "%G1", "a%4",
+        ] {
+            assert_eq!(image_name(refused), None, "{refused}");
+        }
     }
 
     #[test]
