@@ -28,7 +28,7 @@ use crate::{hotkeys, printscreen, settings, snipping, startup};
 pub(crate) const LABEL: &str = "settings";
 const TITLE: &str = "Phramer Settings";
 /// Sent to the window when the file changed; the page reads it again.
-const CHANGED_EVENT: &str = "settings-changed";
+pub(crate) const CHANGED_EVENT: &str = "settings-changed";
 const WIDTH: f64 = 880.0;
 const HEIGHT: f64 = 620.0;
 const MIN_WIDTH: f64 = 680.0;

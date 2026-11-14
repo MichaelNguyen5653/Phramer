@@ -51,6 +51,13 @@ pub enum Command {
     Delete {
         id: ObjectId,
     },
+    /// Moves an object to `index` in the bottom-most-first list, shifting
+    /// the objects between; an index past the end means the top. Counters
+    /// keep their numbers.
+    Reorder {
+        id: ObjectId,
+        index: usize,
+    },
 }
 
 /// A document together with its undo and redo history.
@@ -199,6 +206,12 @@ impl Editor {
             Command::Delete { id } => {
                 self.document
                     .remove(id)
+                    .ok_or(EditError::UnknownObject(id))?;
+                Ok(None)
+            }
+            Command::Reorder { id, index } => {
+                self.document
+                    .reorder(id, index)
                     .ok_or(EditError::UnknownObject(id))?;
                 Ok(None)
             }
@@ -467,6 +480,85 @@ mod tests {
         })
         .unwrap();
         assert_eq!(count(&e, first), 1);
+    }
+
+    fn order(editor: &Editor) -> Vec<ObjectId> {
+        editor.document().objects().iter().map(|o| o.id).collect()
+    }
+
+    #[test]
+    fn reorder_moves_one_object_and_undo_puts_it_back() {
+        let mut e = editor(10);
+        let ids: Vec<_> = (0..4).map(|y| add_line(&mut e, y * 10)).collect();
+        e.apply(Command::Reorder {
+            id: ids[3],
+            index: 1,
+        })
+        .unwrap();
+        assert_eq!(order(&e), [ids[0], ids[3], ids[1], ids[2]]);
+        e.apply(Command::Reorder {
+            id: ids[0],
+            index: 2,
+        })
+        .unwrap();
+        assert_eq!(order(&e), [ids[3], ids[1], ids[0], ids[2]]);
+        // Past the end is the top
+        e.apply(Command::Reorder {
+            id: ids[3],
+            index: 99,
+        })
+        .unwrap();
+        assert_eq!(order(&e), [ids[1], ids[0], ids[2], ids[3]]);
+
+        assert!(e.undo());
+        assert_eq!(order(&e), [ids[3], ids[1], ids[0], ids[2]]);
+        assert!(e.undo());
+        assert!(e.undo());
+        assert_eq!(order(&e), ids);
+        assert!(e.redo());
+        assert_eq!(order(&e), [ids[0], ids[3], ids[1], ids[2]]);
+    }
+
+    #[test]
+    fn reorder_in_place_is_not_recorded_and_an_unknown_id_is_refused() {
+        let mut e = editor(10);
+        let a = add_line(&mut e, 10);
+        let b = add_line(&mut e, 20);
+        e.apply(Command::Reorder { id: b, index: 1 }).unwrap();
+        e.apply(Command::Reorder { id: b, index: 5 }).unwrap();
+        e.apply(Command::Reorder { id: a, index: 0 }).unwrap();
+        assert!(e.undo());
+        assert!(e.undo());
+        assert!(!e.can_undo());
+        let missing = ObjectId(42);
+        assert_eq!(
+            e.apply(Command::Reorder {
+                id: missing,
+                index: 0
+            }),
+            Err(EditError::UnknownObject(missing))
+        );
+    }
+
+    #[test]
+    fn reorder_keeps_counter_numbers() {
+        let mut e = editor(10);
+        let ids: Vec<_> = (0..3)
+            .map(|i| e.apply(counter(i * 40)).unwrap().unwrap())
+            .collect();
+        e.apply(Command::Reorder {
+            id: ids[2],
+            index: 0,
+        })
+        .unwrap();
+        assert_eq!(order(&e), [ids[2], ids[0], ids[1]]);
+        assert_eq!(
+            ids.iter().map(|id| count(&e, *id)).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(e.document().next_counter(), 4);
+        assert!(e.undo());
+        assert_eq!(e.document().next_counter(), 4);
     }
 
     #[test]

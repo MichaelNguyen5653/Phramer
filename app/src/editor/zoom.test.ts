@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SCALE, MIN_SCALE, centered, clampScale, cssPerPixel, fit, fitScale, pan, stepScale, toImage, toViewport, wheelSteps, zoomAt } from "./zoom";
+import { MAX_SCALE, MIN_SCALE, centered, clampScale, cssPerPixel, fit, fitScale, gridStep, pan, stepScale, toImage, toViewport, wheelSteps, zoomAt } from "./zoom";
 
 describe("zoom maths", () => {
   it("steps by 1.25 and stops on 100% when crossing it", () => {
@@ -56,5 +56,16 @@ describe("zoom maths", () => {
     expect(wheelSteps(240)).toBe(-2);
     expect(wheelSteps(-4)).toBe(1);
     expect(wheelSteps(0)).toBe(0);
+  });
+});
+
+describe("grid", () => {
+  it("steps in image pixels, widening as the zoom drops (15.0.0's paintGrid)", () => {
+    expect(gridStep(8)).toBe(10);
+    expect(gridStep(1.2)).toBe(10);
+    expect(gridStep(1)).toBe(20);
+    expect(gridStep(0.5)).toBe(50);
+    expect(gridStep(0.1)).toBe(200);
+    expect(gridStep(0.001)).toBe(1000);
   });
 });

@@ -270,6 +270,9 @@ pub struct ToolSettings {
     pub redact: RedactStyle,
     /// `undoLimit`; 0 is unlimited.
     pub undo_limit: usize,
+    /// `fontFamily`: the family new text is set in; empty for the bundled
+    /// Inter.
+    pub font_family: String,
 }
 
 fn unsigned(value: i32) -> u32 {
@@ -326,6 +329,7 @@ impl ToolSettings {
                 RedactStyle::Frosted
             },
             undo_limit: usize::try_from(settings.undo_limit()).unwrap_or(0),
+            font_family: settings.font_family().trim().to_owned(),
         }
     }
 

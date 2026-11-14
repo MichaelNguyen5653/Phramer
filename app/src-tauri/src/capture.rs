@@ -33,7 +33,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::cli::{InitialSelection, Rect, SaveTo, Tasks};
 use crate::daemon::DaemonState;
 use crate::reply::{EXIT_OK, Reply};
-use crate::{editor, handoff, notify, settings, tray};
+use crate::{actions, editor, handoff, notify, settings, tray};
 
 /// Set while an overlay is open: like 15.0.0's single `CaptureWidget`, a
 /// second one is refused.
@@ -514,6 +514,17 @@ fn run_gui<R: Runtime>(
         settings_path: Some(settings_path),
     })?;
     let (outcome, capture) = (finished.outcome, finished.capture);
+    if outcome == phramer_overlay::Outcome::RecordVideo {
+        // The mode bar's Video: the overlay is gone, so Snipping Tool's own
+        // overlay can come up. Nothing is exported, as after Esc
+        // (`CaptureWidget::startVideoCapture`).
+        log::info!("capture: video mode chosen");
+        let target = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || actions::record_video(&target)) {
+            log::error!("cannot hand over to Snipping Tool: {error}");
+        }
+        return Ok(Delivery::Aborted);
+    }
     if let (phramer_overlay::Outcome::Deferred(deferred), Some((image, geometry))) =
         (outcome, capture.as_ref())
     {
@@ -558,7 +569,7 @@ fn deferred_action<R: Runtime>(
             pin(app, settings, image, geometry);
             Delivery::Exported(ExportReport::default())
         }
-        DeferredAction::Ocr => Delivery::Exported(handoff::read_text(settings, &image)),
+        DeferredAction::Ocr => Delivery::Exported(handoff::read_text_at(&image, Some(geometry))),
         DeferredAction::OpenInEditor => match handoff::save_for_editor(&image) {
             Ok(path) => Delivery::Editor(path),
             Err(report) => Delivery::Exported(report),

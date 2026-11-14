@@ -15,8 +15,9 @@ pub(crate) const BUTTON_SIZE: i32 = 32;
 /// The gap between buttons and the selection (`m_separator`, a quarter
 /// button: `--space-8`).
 pub(crate) const SEPARATOR: i32 = BUTTON_SIZE / 4;
-/// One button and its gap (`m_buttonExtendedSize`).
-const EXTENDED: i32 = BUTTON_SIZE + SEPARATOR;
+/// One button and its gap (`m_buttonExtendedSize`) without names under
+/// the buttons.
+pub(crate) const EXTENDED: i32 = BUTTON_SIZE + SEPARATOR;
 /// A safety stop: each ring is larger, so the loop ends long before.
 const MAX_RINGS: usize = 64;
 
@@ -101,8 +102,8 @@ struct Blocked {
 impl Blocked {
     /// `updateBlockedSides`: a side is free when a button and its gap fit
     /// past both of its ends.
-    fn of(area: &Area, screen: &Area) -> Self {
-        let reach = EXTENDED + SEPARATOR;
+    fn of(area: &Area, screen: &Area, pitch: i32) -> Self {
+        let reach = pitch + SEPARATOR;
         let fits =
             |a: (i32, i32), b: (i32, i32)| screen.contains(a.0, a.1) && screen.contains(b.0, b.1);
         let right = area.right() + reach;
@@ -131,11 +132,11 @@ impl Blocked {
 }
 
 /// `calculateShift`: from the centre to the first button.
-fn shift(count: i32, reverse: bool) -> i32 {
+fn shift(count: i32, reverse: bool, pitch: i32) -> i32 {
     let mut shift = if count % 2 == 0 {
-        EXTENDED * (count / 2) - SEPARATOR / 2
+        pitch * (count / 2) - SEPARATOR / 2
     } else {
-        EXTENDED * ((count - 1) / 2) + BUTTON_SIZE / 2
+        pitch * ((count - 1) / 2) + BUTTON_SIZE / 2
     };
     if !reverse {
         shift -= BUTTON_SIZE;
@@ -143,32 +144,32 @@ fn shift(count: i32, reverse: bool) -> i32 {
     shift
 }
 
-fn horizontal(center: (i32, i32), count: i32, left_to_right: bool) -> Vec<(i32, i32)> {
-    let offset = shift(count, left_to_right);
+fn horizontal(center: (i32, i32), count: i32, left_to_right: bool, pitch: i32) -> Vec<(i32, i32)> {
+    let offset = shift(count, left_to_right, pitch);
     let (start, step) = if left_to_right {
-        (center.0 - offset, EXTENDED)
+        (center.0 - offset, pitch)
     } else {
-        (center.0 + offset, -EXTENDED)
+        (center.0 + offset, -pitch)
     };
     (0..count).map(|i| (start + i * step, center.1)).collect()
 }
 
-fn vertical(center: (i32, i32), count: i32, top_to_bottom: bool) -> Vec<(i32, i32)> {
-    let offset = shift(count, top_to_bottom);
+fn vertical(center: (i32, i32), count: i32, top_to_bottom: bool, pitch: i32) -> Vec<(i32, i32)> {
+    let offset = shift(count, top_to_bottom, pitch);
     let (start, step) = if top_to_bottom {
-        (center.1 - offset, EXTENDED)
+        (center.1 - offset, pitch)
     } else {
-        (center.1 + offset, -EXTENDED)
+        (center.1 + offset, -pitch)
     };
     (0..count).map(|i| (center.0, start + i * step)).collect()
 }
 
 /// `adjustHorizontalCenter`: away from a blocked side.
-fn adjusted(center: (i32, i32), blocked: &Blocked) -> (i32, i32) {
+fn adjusted(center: (i32, i32), blocked: &Blocked, pitch: i32) -> (i32, i32) {
     if blocked.left {
-        (center.0 + EXTENDED / 2, center.1)
+        (center.0 + pitch / 2, center.1)
     } else if blocked.right {
-        (center.0 - EXTENDED / 2, center.1)
+        (center.0 - pitch / 2, center.1)
     } else {
         center
     }
@@ -178,10 +179,23 @@ fn adjusted(center: (i32, i32), blocked: &Blocked) -> (i32, i32) {
 /// monitor of logical size `screen`, in order, and whether they ended up
 /// inside the selection. Fewer rectangles than buttons come back only when
 /// the selection is too narrow to hold even one row inside.
+#[cfg(test)]
 pub(crate) fn layout(
     selection: LogicalRect,
     screen: LogicalRect,
     count: usize,
+) -> (Vec<LogicalRect>, bool) {
+    layout_with_pitch(selection, screen, count, EXTENDED)
+}
+
+/// [`layout`] with buttons `pitch` apart rather than [`EXTENDED`]: names
+/// under the buttons need taller cells, and a wide name pushes the
+/// neighbours apart (`ButtonHandler::setButtons`).
+pub(crate) fn layout_with_pitch(
+    selection: LogicalRect,
+    screen: LogicalRect,
+    count: usize,
+    pitch: i32,
 ) -> (Vec<LogicalRect>, bool) {
     let total = i32::try_from(count).unwrap_or(i32::MAX);
     let mut placed: Vec<(i32, i32)> = Vec::with_capacity(count);
@@ -191,7 +205,7 @@ pub(crate) fn layout(
     let screen = Area::from_rect(screen);
     let original = Area::from_rect(selection).intersected(&screen);
     let mut area = original;
-    let mut blocked = Blocked::of(&area, &screen);
+    let mut blocked = Blocked::of(&area, &screen, pitch);
     // `ensureSelectionMinimumSize`
     if area.w < BUTTON_SIZE {
         if !blocked.left {
@@ -213,11 +227,11 @@ pub(crate) fn layout(
         }
         if blocked.all() {
             inside = true;
-            place_inside(&original, &screen, total, &mut placed);
+            place_inside(&original, &screen, total, &mut placed, pitch);
             break;
         }
-        let per_row = (area.w + SEPARATOR) / EXTENDED;
-        let per_column = (area.h + SEPARATOR) / EXTENDED;
+        let per_row = (area.w + SEPARATOR) / pitch;
+        let per_column = (area.h + SEPARATOR) / pitch;
         let extra = remaining(&placed) - (per_row + per_column) * 2;
         let mut corners = extra.min(4);
         let max_extra = if blocked.one_horizontal() {
@@ -236,30 +250,30 @@ pub(crate) fn layout(
             let n = (per_row + corners_bottom).clamp(0, remaining(&placed));
             let mut center = (center_x, area.bottom() + SEPARATOR);
             if n > per_row {
-                center = adjusted(center, &blocked);
+                center = adjusted(center, &blocked, pitch);
             }
-            placed.extend(horizontal(center, n, true));
+            placed.extend(horizontal(center, n, true, pitch));
         }
         if !blocked.right && remaining(&placed) > 0 {
             let n = per_column.clamp(0, remaining(&placed));
-            placed.extend(vertical((area.right() + SEPARATOR, center_y), n, false));
+            placed.extend(vertical((area.right() + SEPARATOR, center_y), n, false, pitch));
         }
         if !blocked.top && remaining(&placed) > 0 {
             let n = (per_row + corners_top).clamp(0, remaining(&placed));
-            let mut center = (center_x, area.y - EXTENDED);
+            let mut center = (center_x, area.y - pitch);
             if n == per_row + 1 {
-                center = adjusted(center, &blocked);
+                center = adjusted(center, &blocked, pitch);
             }
-            placed.extend(horizontal(center, n, false));
+            placed.extend(horizontal(center, n, false, pitch));
         }
         if !blocked.left && remaining(&placed) > 0 {
             let n = per_column.clamp(0, remaining(&placed));
-            placed.extend(vertical((area.x - EXTENDED, center_y), n, true));
+            placed.extend(vertical((area.x - pitch, center_y), n, true, pitch));
         }
         if remaining(&placed) > 0 {
-            area = area.grown(EXTENDED).intersected(&screen);
+            area = area.grown(pitch).intersected(&screen);
         }
-        blocked = Blocked::of(&area, &screen);
+        blocked = Blocked::of(&area, &screen, pitch);
     }
     let rects = placed
         .into_iter()
@@ -270,18 +284,24 @@ pub(crate) fn layout(
 
 /// `positionButtonsInside`: rows along the bottom of the selection, going
 /// up.
-fn place_inside(selection: &Area, screen: &Area, total: i32, placed: &mut Vec<(i32, i32)>) {
+fn place_inside(
+    selection: &Area,
+    screen: &Area,
+    total: i32,
+    placed: &mut Vec<(i32, i32)>,
+    pitch: i32,
+) {
     let area = selection.intersected(screen);
-    let per_row = area.w / EXTENDED;
+    let per_row = area.w / pitch;
     if per_row == 0 {
         return;
     }
     let (center_x, _) = area.center();
-    let mut center = (center_x, area.bottom() - EXTENDED);
+    let mut center = (center_x, area.bottom() - pitch);
     while (placed.len() as i32) < total {
         let n = per_row.min(total - placed.len() as i32);
-        placed.extend(horizontal(center, n, true));
-        center.1 -= EXTENDED;
+        placed.extend(horizontal(center, n, true, pitch));
+        center.1 -= pitch;
     }
 }
 

@@ -5,7 +5,7 @@
 //! Glyph outlines go through the same rasteriser as every other shape.
 
 use tiny_skia::PathBuilder;
-use ttf_parser::{Face, GlyphId, OutlineBuilder};
+use ttf_parser::{Face, GlyphId, OutlineBuilder, Tag};
 
 use crate::error::FontError;
 use crate::geometry::{Point, Rect};
@@ -14,6 +14,16 @@ use crate::tool::TextFont;
 /// Blank space kept between the glyphs and the edge of a text object's area,
 /// which is both its selection outline and its grabbable area.
 pub(crate) const TEXT_PADDING: i32 = 5;
+
+/// A synthetic bold widens each glyph's outline by this part of the pixel
+/// size (FreeType's emboldening strength).
+const EMBOLDEN: f64 = 1.0 / 24.0;
+/// A synthetic italic leans glyphs by this much (about 11 degrees).
+const SLANT: f64 = 0.2;
+/// The weight a variable font is set to for bold.
+const BOLD_WEIGHT: f32 = 700.0;
+/// The slant a variable font with a `slnt` axis is set to for italic.
+const ITALIC_SLANT: f32 = -10.0;
 
 /// Tool size 0 is an 8 pt font; each step adds one point.
 const BASE_POINT_SIZE: u32 = 8;
@@ -31,6 +41,8 @@ struct FontEntry {
     bold: bool,
     italic: bool,
     data: Vec<u8>,
+    /// The face's index in a font collection (`.ttc`); 0 for a single font.
+    index: u32,
 }
 
 /// The fonts available to text objects and counter bubbles.
@@ -40,6 +52,14 @@ struct FontEntry {
 #[derive(Default)]
 pub struct FontLibrary {
     entries: Vec<FontEntry>,
+    synthetic_styles: bool,
+}
+
+/// A face chosen for a text object, with the styles it has to fake.
+struct StyledFace<'a> {
+    face: Face<'a>,
+    embolden: bool,
+    slant: bool,
 }
 
 impl FontLibrary {
@@ -56,8 +76,21 @@ impl FontLibrary {
         italic: bool,
         data: Vec<u8>,
     ) -> Result<(), FontError> {
+        self.add_face(family, bold, italic, data, 0)
+    }
+
+    /// Registers face `index` of a font collection (`.ttc`), or a single
+    /// font with index 0, under a family name and style.
+    pub fn add_face(
+        &mut self,
+        family: impl Into<String>,
+        bold: bool,
+        italic: bool,
+        data: Vec<u8>,
+        index: u32,
+    ) -> Result<(), FontError> {
         let family = family.into();
-        if let Err(source) = Face::parse(&data, 0) {
+        if let Err(source) = Face::parse(&data, index) {
             return Err(FontError::Parse {
                 family,
                 reason: source.to_string(),
@@ -68,8 +101,29 @@ impl FontLibrary {
             bold,
             italic,
             data,
+            index,
         });
         Ok(())
+    }
+
+    /// Whether bold and italic text that no registered face matches is still
+    /// drawn bold and italic: a variable font is set to weight 700 (italic:
+    /// its `slnt` axis, if it has one), and otherwise the nearest face is
+    /// emboldened or slanted. Off by default, which draws such text in the
+    /// nearest face as it is. Counter bubbles are never affected.
+    pub fn set_synthetic_styles(&mut self, on: bool) {
+        self.synthetic_styles = on;
+    }
+
+    pub fn synthetic_styles(&self) -> bool {
+        self.synthetic_styles
+    }
+
+    /// Whether `family` has a registered face (ASCII case-insensitive).
+    pub fn has_family(&self, family: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.family.eq_ignore_ascii_case(family))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -78,7 +132,7 @@ impl FontLibrary {
 
     /// The closest registered face: the requested family if present,
     /// otherwise the default family; within it, the nearest style.
-    fn face(&self, family: &str, bold: bool, italic: bool) -> Option<Face<'_>> {
+    fn entry(&self, family: &str, bold: bool, italic: bool) -> Option<&FontEntry> {
         let default_family = self.entries.first()?.family.as_str();
         let wanted = if self
             .entries
@@ -89,20 +143,49 @@ impl FontLibrary {
         } else {
             default_family
         };
-        let entry = self
-            .entries
+        self.entries
             .iter()
             .filter(|e| e.family.eq_ignore_ascii_case(wanted))
             // A wrong weight is a bigger miss than a wrong slant.
-            .min_by_key(|e| u8::from(e.bold != bold) * 2 + u8::from(e.italic != italic))?;
-        // Parsed once in `add`, so this cannot fail; `ok()` avoids a panic
-        // path all the same.
-        Face::parse(&entry.data, 0).ok()
+            .min_by_key(|e| u8::from(e.bold != bold) * 2 + u8::from(e.italic != italic))
+    }
+
+    /// The closest face, as registered.
+    fn face(&self, family: &str, bold: bool, italic: bool) -> Option<Face<'_>> {
+        let entry = self.entry(family, bold, italic)?;
+        // Parsed once in `add_face`, so this cannot fail; `ok()` avoids a
+        // panic path all the same.
+        Face::parse(&entry.data, entry.index).ok()
+    }
+
+    /// The closest face, with the styles it lacks made up when synthetic
+    /// styles are on.
+    fn styled(&self, family: &str, bold: bool, italic: bool) -> Option<StyledFace<'_>> {
+        let entry = self.entry(family, bold, italic)?;
+        let mut face = Face::parse(&entry.data, entry.index).ok()?;
+        let (mut embolden, mut slant) = (false, false);
+        if self.synthetic_styles {
+            if bold && !entry.bold {
+                embolden = face
+                    .set_variation(Tag::from_bytes(b"wght"), BOLD_WEIGHT)
+                    .is_none();
+            }
+            if italic && !entry.italic {
+                slant = face
+                    .set_variation(Tag::from_bytes(b"slnt"), ITALIC_SLANT)
+                    .is_none();
+            }
+        }
+        Some(StyledFace {
+            face,
+            embolden,
+            slant,
+        })
     }
 
     pub(crate) fn scaled(&self, font: &TextFont, pixel_size: f64) -> Option<ScaledFace<'_>> {
-        self.face(&font.family, font.bold, font.italic)
-            .map(|face| ScaledFace::new(face, pixel_size))
+        self.styled(&font.family, font.bold, font.italic)
+            .map(|styled| ScaledFace::styled(styled, pixel_size))
     }
 
     /// The bold face of the default family, for counter bubbles.
@@ -129,6 +212,10 @@ pub(crate) struct ScaledFace<'a> {
     pub(crate) descent: i32,
     /// Extra gap between consecutive lines.
     pub(crate) leading: i32,
+    /// The width of the stroke that emboldens the outlines; 0 for none.
+    pub(crate) embolden: f64,
+    /// How far right a glyph leans per pixel above the baseline; 0 upright.
+    slant: f64,
 }
 
 impl<'a> ScaledFace<'a> {
@@ -142,7 +229,26 @@ impl<'a> ScaledFace<'a> {
             face,
             scale,
             pixel_size,
+            embolden: 0.0,
+            slant: 0.0,
         }
+    }
+
+    fn styled(styled: StyledFace<'a>, pixel_size: f64) -> Self {
+        let mut scaled = Self::new(styled.face, pixel_size);
+        if styled.embolden {
+            scaled.embolden = pixel_size * EMBOLDEN;
+        }
+        if styled.slant {
+            scaled.slant = SLANT;
+        }
+        scaled
+    }
+
+    /// One glyph's advance in pixels; an emboldened glyph is that much
+    /// wider.
+    fn advance(&self, glyph: GlyphId) -> f64 {
+        f64::from(self.face.glyph_hor_advance(glyph).unwrap_or(0)) * self.scale + self.embolden
     }
 
     pub(crate) fn line_height(&self) -> i32 {
@@ -157,6 +263,10 @@ impl<'a> ScaledFace<'a> {
     /// Advance width of one line, in pixels. No kerning and no shaping:
     /// glyphs are placed by their own advances.
     pub(crate) fn line_width(&self, line: &str) -> f64 {
+        if self.embolden > 0.0 {
+            return line.chars().map(|c| self.advance(self.glyph(c))).sum();
+        }
+        // Summed in font units, then scaled: the widths text always had
         line.chars()
             .map(|c| f64::from(self.face.glyph_hor_advance(self.glyph(c)).unwrap_or(0)))
             .sum::<f64>()
@@ -190,12 +300,18 @@ impl<'a> ScaledFace<'a> {
             let mut sink = GlyphSink {
                 builder,
                 scale: self.scale,
-                x: pen,
+                // The emboldening stroke reaches half its width left
+                x: pen + self.embolden / 2.0,
                 baseline,
+                slant: self.slant,
             };
             // `None` is a glyph without an outline, such as a space.
             let _ = self.face.outline_glyph(glyph, &mut sink);
-            pen += f64::from(self.face.glyph_hor_advance(glyph).unwrap_or(0)) * self.scale;
+            if self.embolden > 0.0 {
+                pen += self.advance(glyph);
+            } else {
+                pen += f64::from(self.face.glyph_hor_advance(glyph).unwrap_or(0)) * self.scale;
+            }
         }
     }
 
@@ -235,14 +351,23 @@ struct GlyphSink<'b> {
     scale: f64,
     x: f64,
     baseline: f64,
+    /// Synthetic italic: rightward lean per pixel above the baseline.
+    slant: f64,
 }
 
 impl GlyphSink<'_> {
     /// Font units, y up, to image pixels, y down.
     fn map(&self, x: f32, y: f32) -> (f32, f32) {
+        if self.slant == 0.0 {
+            return (
+                (self.x + f64::from(x) * self.scale) as f32,
+                (self.baseline - f64::from(y) * self.scale) as f32,
+            );
+        }
+        let up = f64::from(y) * self.scale;
         (
-            (self.x + f64::from(x) * self.scale) as f32,
-            (self.baseline - f64::from(y) * self.scale) as f32,
+            (self.x + f64::from(x) * self.scale + up * self.slant) as f32,
+            (self.baseline - up) as f32,
         )
     }
 }

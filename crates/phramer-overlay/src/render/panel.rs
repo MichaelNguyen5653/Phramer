@@ -18,7 +18,9 @@ use super::{
 };
 use crate::icons::draw_icon;
 use crate::state::tools::MAX_TOOL_SIZE;
-use crate::state::{OverlayState, PanelControl, SidePanelView, THUMB, disc_position};
+use crate::state::{
+    OverlayState, PanelControl, SidePanelView, THUMB, TextStyle, disc_position,
+};
 
 /// `--fg-5`: a hovered list row.
 const FG_5: f32 = 0.05;
@@ -270,6 +272,34 @@ impl Sheet<'_> {
         );
         self.slider(canvas, view);
 
+        // Text style: on toggles take the selected wash
+        let row = self.rect(layout.text_label);
+        font.draw(
+            canvas,
+            "Text style",
+            row.0,
+            baseline(row),
+            size,
+            Weight::Regular,
+            &secondary,
+        );
+        for ((rect, style), on) in layout
+            .text_styles
+            .iter()
+            .zip(TextStyle::ALL)
+            .zip(view.text_styles)
+        {
+            let wash = if !view.text_enabled {
+                FG_5
+            } else if on {
+                FG_20 + FG_10
+            } else {
+                tint(PanelControl::TextStyle(style))
+            };
+            let alpha = if view.text_enabled { 1.0 } else { FG_60 };
+            self.icon_button(canvas, *rect, style.icon(), wash, alpha);
+        }
+
         // Active color: the label, the hex field with its swatch
         let row = self.rect(layout.color_label);
         font.draw(
@@ -458,6 +488,18 @@ impl Sheet<'_> {
             },
             enabled(view.can_delete),
         );
+        for (rect, icon, control, on) in [
+            (layout.move_up, "arrow-up", PanelControl::MoveUp, view.can_move_up),
+            (
+                layout.move_down,
+                "arrow-down",
+                PanelControl::MoveDown,
+                view.can_move_down,
+            ),
+        ] {
+            let wash = if on { tint(control) } else { FG_5 };
+            self.icon_button(canvas, rect, icon, wash, enabled(on));
+        }
         let icon = ui.px(SPACE_16) - ui.px(SPACE_2);
         for (index, (rect, entry)) in layout.rows.iter().zip(&view.rows).enumerate() {
             let row = self.rect(*rect);

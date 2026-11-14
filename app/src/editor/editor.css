@@ -10,6 +10,12 @@
   --swatch: calc(var(--space-16) + var(--space-4));
   --surface: var(--bg);
   --canvas-backdrop: var(--fg-5);
+  --thumb-width: calc(var(--space-32) * 4);
+  --thumb-height: calc(var(--space-24) * 3);
+  /* Mid grey reads on light and dark images alike; every fifth line is
+     stronger so distances can be counted (15.0.0's grid) */
+  --grid-minor: rgb(128 128 128 / 35%);
+  --grid-major: rgb(128 128 128 / 67%);
   color-scheme: light dark;
 }
 
@@ -45,7 +51,8 @@ textarea {
 
 .editor {
   display: grid;
-  grid-template-rows: var(--titlebar-height) auto 1fr auto;
+  /* Title bar, toolbar, image, filmstrip (when there is one), status bar */
+  grid-template-rows: var(--titlebar-height) auto 1fr auto auto;
   height: 100%;
 }
 
@@ -107,8 +114,11 @@ textarea {
   box-shadow: inset 0 calc(-1 * var(--hairline)) 0 var(--border);
 }
 
+/* On a narrow window the toolbar wraps, a whole group at a time where it
+   can: every button and every key stays visible and nothing scrolls */
 .group {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   padding-right: var(--space-8);
   box-shadow: inset calc(-1 * var(--hairline)) 0 0 var(--border);
@@ -129,6 +139,22 @@ textarea {
   place-items: center;
   transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
     transform var(--dur-fast) var(--ease-out);
+}
+
+/* The key in brackets beside the icon, when one is assigned */
+.tool.with-hint {
+  width: auto;
+  min-width: var(--button);
+  grid-auto-flow: column;
+  gap: var(--space-4);
+  padding: 0 var(--space-6);
+}
+
+.key-hint {
+  font-size: var(--text-11);
+  font-weight: var(--weight-regular);
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .tool:hover:not(:disabled),
@@ -194,6 +220,21 @@ textarea {
 
 .viewport.cursor-eyedropper {
   cursor: copy;
+}
+
+.viewport.cursor-zoom {
+  cursor: zoom-in;
+}
+
+/* A view aid: over the image on screen, never in what is saved */
+.grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(to right, var(--grid-major) var(--hairline), transparent var(--hairline)),
+    linear-gradient(to bottom, var(--grid-major) var(--hairline), transparent var(--hairline)),
+    linear-gradient(to right, var(--grid-minor) var(--hairline), transparent var(--hairline)),
+    linear-gradient(to bottom, var(--grid-minor) var(--hairline), transparent var(--hairline));
 }
 
 .image {
@@ -269,6 +310,8 @@ textarea {
 
 .confirm {
   display: flex;
+  flex-wrap: wrap;
+  max-width: calc(100% - 2 * var(--space-24));
   gap: var(--space-8);
   align-items: center;
   color: var(--text-primary);
@@ -307,6 +350,7 @@ textarea {
 .color-button,
 .text-button,
 .number,
+.select,
 .hex {
   height: calc(var(--space-24) + var(--space-4));
   border: 0;
@@ -399,6 +443,143 @@ textarea {
 .toggle input {
   accent-color: var(--accent);
   margin: 0;
+}
+
+.select {
+  min-width: 0;
+}
+
+.text-button:disabled {
+  opacity: 0.4;
+}
+
+/* --- Filmstrip ------------------------------------------------------------------------- */
+
+.filmstrip {
+  display: flex;
+  gap: var(--space-12);
+  align-items: center;
+  padding: var(--space-8) var(--space-12);
+  box-shadow: inset 0 var(--hairline) 0 var(--border);
+  min-width: 0;
+}
+
+.filmstrip-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  flex: none;
+}
+
+.filmstrip-actions .text-button {
+  align-self: stretch;
+}
+
+/* Many images scroll sideways rather than shrink */
+.thumbs {
+  display: flex;
+  gap: var(--space-8);
+  margin: 0;
+  padding: var(--space-2);
+  list-style: none;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--thumb-width);
+  height: var(--thumb-height);
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-6);
+  background: var(--canvas-backdrop);
+  box-shadow: inset 0 0 0 var(--hairline) var(--border);
+  transition: box-shadow var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+.thumb:hover {
+  background: var(--fg-10);
+}
+
+.thumb.active {
+  box-shadow: inset 0 0 0 var(--space-2) var(--accent);
+}
+
+.thumb:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--space-2);
+}
+
+.thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.thumb-number {
+  position: absolute;
+  left: var(--space-4);
+  bottom: var(--space-4);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-4);
+  background: var(--bg);
+  font-size: var(--text-11);
+  font-weight: var(--weight-medium);
+}
+
+.thumb-unsaved {
+  position: absolute;
+  right: var(--space-6);
+  top: var(--space-6);
+  width: var(--space-8);
+  height: var(--space-8);
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 var(--space-2) var(--bg);
+}
+
+/* --- Empty editor ----------------------------------------------------------------------- */
+
+.empty {
+  display: grid;
+  grid-template-rows: var(--titlebar-height) 1fr;
+  height: 100%;
+}
+
+.empty-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-32);
+  text-align: center;
+  background: var(--canvas-backdrop);
+}
+
+.empty-icon {
+  width: calc(var(--space-24) * 3);
+  height: calc(var(--space-24) * 3);
+  color: var(--text-secondary);
+}
+
+.empty-icon .icon {
+  width: 100%;
+  height: 100%;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: var(--text-16);
+  font-weight: var(--weight-semibold);
+}
+
+.empty-hint {
+  margin: 0;
+  color: var(--text-secondary);
 }
 
 /* --- Status bar ------------------------------------------------------------------------ */

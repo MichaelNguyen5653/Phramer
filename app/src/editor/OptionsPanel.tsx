@@ -1,6 +1,7 @@
 // The side panel: what the selected tool (or the selected object) draws
 // with. Every control applies as it changes; nothing waits for an OK.
 
+import { useEffect } from "react";
 import { toHex, type Rgb } from "./color";
 import type { Annotation, ArrowHead, RedactStyle, ShapeStyle, TextAlign } from "./engine";
 import { Icon } from "./Icon";
@@ -14,6 +15,11 @@ export interface OptionsPanelProps {
   selected: Annotation | null;
   nextCounter: number;
   pickerOpen: boolean;
+  /** Text is being typed or edited again: its options show whatever the tool. */
+  editingText: boolean;
+  /** The system's font families; `null` until asked for (`onWantFonts`). */
+  fontFamilies: string[] | null;
+  onWantFonts(): void;
   onColorButton(button: HTMLElement): void;
   /** While the slider moves. */
   onSizePreview(size: number): void;
@@ -70,8 +76,14 @@ export function OptionsPanel(props: OptionsPanelProps) {
   const { tool, options, onOptions } = props;
   const toolName = tool ? TOOLS.find((entry) => entry.id === tool)?.name : null;
   const kind = props.selected?.shape.tool;
-  const title = toolName ?? (props.selected ? "Selected object" : "No tool");
+  const title = toolName ?? (props.editingText ? "Text" : props.selected ? "Selected object" : "No tool");
   const shows = (...tools: ToolId[]) => tool !== null && tools.includes(tool);
+  const textOptions = shows("text") || props.editingText;
+  const { fontFamilies, onWantFonts } = props;
+  // The families are read once, the first time text options show
+  useEffect(() => {
+    if (textOptions && fontFamilies === null) onWantFonts();
+  }, [textOptions, fontFamilies, onWantFonts]);
   const highlight =
     (shows("shape") && options.shapeStyle === "highlight") ||
     (shows("rectangle") && options.rectangleStyle === "highlight");
@@ -96,7 +108,7 @@ export function OptionsPanel(props: OptionsPanelProps) {
       </div>
 
       <div className="field">
-        <span className="field-label">{shows("text") ? "Font size" : "Size"}</span>
+        <span className="field-label">{textOptions ? "Font size" : "Size"}</span>
         <div className="size-row">
           <input
             type="range"
@@ -174,8 +186,31 @@ export function OptionsPanel(props: OptionsPanelProps) {
           <Toggle label="Head at the start" checked={options.reverseArrow} onChange={(reverseArrow) => onOptions({ reverseArrow })} />
         </>
       )}
-      {shows("text") && (
+      {textOptions && (
         <>
+          <div className="field">
+            <span className="field-label">Font</span>
+            <select
+              className="select"
+              aria-label="Font"
+              data-testid="font-family"
+              value={options.fontFamily}
+              onChange={(event) => onOptions({ fontFamily: event.target.value })}
+            >
+              <option value="">Default</option>
+              {/* The saved family stays listed while the list loads, or if it is gone */}
+              {options.fontFamily && !fontFamilies?.includes(options.fontFamily) && (
+                <option value={options.fontFamily}>{options.fontFamily}</option>
+              )}
+              {fontFamilies?.map((family) => (
+                <option key={family} value={family}>
+                  {family}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Toggle label="Bold" checked={options.bold} onChange={(bold) => onOptions({ bold })} />
+          <Toggle label="Italic" checked={options.italic} onChange={(italic) => onOptions({ italic })} />
           <Segmented<TextAlign>
             label="Align"
             value={options.textAlign}

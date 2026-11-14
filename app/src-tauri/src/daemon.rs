@@ -11,6 +11,7 @@ use crate::instance::Forwarded;
 use crate::reply::{self, EXIT_OK, Reply};
 use crate::restart::{self, Restart};
 use crate::{actions, editor, hotkeys, settings, settings_ui, startup, tray, updater, welcome};
+use crate::{handoff, launcher_ui, ocr_ui};
 
 /// Shared with the actions.
 pub(crate) struct DaemonState {
@@ -52,6 +53,11 @@ pub(crate) fn run(start: Option<Forwarded>) -> i32 {
             editor::editor_settings,
             editor::editor_set,
             editor::editor_export,
+            editor::editor_empty_state,
+            editor::editor_font_families,
+            editor::editor_font_faces,
+            editor::editor_save_all_begin,
+            editor::editor_save_all_end,
             settings_ui::ui_ready,
             settings_ui::settings_snapshot,
             settings_ui::settings_set,
@@ -67,6 +73,18 @@ pub(crate) fn run(start: Option<Forwarded>) -> i32 {
             settings_ui::settings_open,
             welcome::welcome_state,
             welcome::welcome_reached_end,
+            ocr_ui::ocr_init,
+            ocr_ui::ocr_languages,
+            ocr_ui::ocr_recognize,
+            ocr_ui::ocr_set_layout,
+            ocr_ui::ocr_set_language,
+            ocr_ui::ocr_copy,
+            launcher_ui::launcher_init,
+            launcher_ui::launcher_apps,
+            launcher_ui::launcher_icons,
+            launcher_ui::launcher_launch,
+            launcher_ui::launcher_open_with,
+            launcher_ui::launcher_set_keep_open,
         ])
         .setup(move |app| {
             app.manage(managed_restart);
@@ -113,6 +131,9 @@ fn setup(app: &mut App, settings_path: PathBuf, start: Option<Forwarded>) {
     app.manage(hotkeys::Registered::default());
     app.manage(editor::Editors::default());
     app.manage(welcome::Welcome::default());
+    app.manage(ocr_ui::OcrWindows::default());
+    app.manage(launcher_ui::Launchers::default());
+    handoff::set_app(&handle);
     editor::listen(&handle);
 
     if let Err(error) = tray::create(&handle, &current) {
@@ -148,6 +169,7 @@ pub(crate) fn settings_changed<R: Runtime>(app: &AppHandle<R>) {
     }
     hotkeys::apply(app, &current);
     settings_ui::changed(app);
+    editor::settings_changed(app);
 }
 
 /// Arguments from another process (or this one's start command).

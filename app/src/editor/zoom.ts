@@ -100,3 +100,16 @@ export function wheelSteps(deltaY: number): number {
   const notches = -deltaY / 120;
   return notches > 0 ? Math.max(1, Math.round(notches)) : Math.min(-1, Math.round(notches));
 }
+
+/** 15.0.0's grid steps, in image pixels. */
+const GRID_STEPS = [10, 20, 50, 100, 200, 500, 1000];
+/** The closest grid lines may come, in CSS pixels. */
+const GRID_MIN_SPACING = 12;
+
+/** The grid's step in image pixels at `unit` CSS pixels per image pixel:
+ * the lines stay on the image while zooming, and the step widens as the
+ * zoom drops so the grid never turns into a wash (`paintGrid`). Every
+ * fifth line is a major one. */
+export function gridStep(unit: number): number {
+  return GRID_STEPS.find((step) => step * unit >= GRID_MIN_SPACING) ?? GRID_STEPS[GRID_STEPS.length - 1];
+}

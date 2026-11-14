@@ -13,7 +13,9 @@ thiserror = "2"
 # same scalar code with the same `libm` float routines: identical pixels.
 tiny-skia = { version = "0.12", default-features = false, features = ["no-std-float"] }
 # Glyph outlines from caller-supplied font bytes; no system font access.
-ttf-parser = { version = "0.25", default-features = false, features = ["no-std-float"] }
+# `variable-fonts` sets a variable font's weight for bold; native builds had
+# it already through phramer-overlay, so wasm now draws the same.
+ttf-parser = { version = "0.25", default-features = false, features = ["no-std-float", "variable-fonts"] }
 # atan2 for the shift-constraint rule, the same routine on every target.
 libm = "0.2"
 

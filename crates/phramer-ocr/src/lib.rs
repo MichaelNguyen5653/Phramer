@@ -5,21 +5,32 @@
 //! - [`preprocess`] and [`run_pipeline`]: what the image goes through before
 //!   and between recognitions (`ocrpreprocess.cpp`, `ocrpipeline.cpp`).
 //!   Pure, with the engine passed in.
-//! - [`read_text`] (Windows only): Windows.Media.Ocr behind all of that.
+//! - [`tiling`]: images over the engine's size limit in overlapping tiles
+//!   (`ocrtiling.cpp`). Pure.
+//! - [`texts_agree`]: whether text read from a window matches what was
+//!   recognised (`ocrscore.cpp`). Pure.
+//! - [`uia`]: the text of the windows under the selection, read through UI
+//!   Automation (`uiatextreader.cpp`); its line walk is pure.
+//! - [`recognize_capture`] (Windows only): 15.0.0's `OcrWorker`, the
+//!   Windows.Media.Ocr pipeline plus the exact-text path.
 //!
 //! Coordinates are pixels of the image handed to the engine; only their
 //! relations matter to the layout, so a scaled pass needs no remapping.
 
+mod agree;
 pub mod layout;
 mod pipeline;
 pub mod preprocess;
+pub mod tiling;
+pub mod uia;
 #[cfg(windows)]
 mod win;
 
+pub use agree::texts_agree;
 pub use layout::{OcrTextLayout, assemble_text, order_lines};
-pub use pipeline::{run_pipeline, score};
+pub use pipeline::{OcrEffort, run_pipeline, score};
 #[cfg(windows)]
-pub use win::{available_languages, read_text, recognize};
+pub use win::{OcrLanguage, available_languages, read_text, recognize, recognize_capture};
 
 /// A rectangle in image pixels (`QRectF`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -46,6 +57,40 @@ impl Rect {
 
     pub fn bottom(&self) -> f64 {
         self.y + self.height
+    }
+
+    pub fn area(&self) -> f64 {
+        self.width.max(0.0) * self.height.max(0.0)
+    }
+
+    /// The overlap of both; empty (zero-sized) when they do not meet.
+    pub fn intersected(&self, other: &Rect) -> Rect {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = self.right().min(other.right());
+        let bottom = self.bottom().min(other.bottom());
+        if right <= x || bottom <= y {
+            return Rect::default();
+        }
+        Rect::new(x, y, right - x, bottom - y)
+    }
+
+    /// Whether `other` lies wholly inside, edges included (`QRectF::contains`).
+    pub fn contains(&self, other: &Rect) -> bool {
+        other.x >= self.x
+            && other.y >= self.y
+            && other.right() <= self.right()
+            && other.bottom() <= self.bottom()
+    }
+
+    /// Grown by `by` on every side.
+    pub fn expanded(&self, by: f64) -> Rect {
+        Rect::new(
+            self.x - by,
+            self.y - by,
+            self.width + 2.0 * by,
+            self.height + 2.0 * by,
+        )
     }
 
     /// The smallest rectangle holding both.
@@ -108,11 +153,24 @@ pub enum OcrStatus {
     EngineError(String),
 }
 
+/// Where the text came from (`OcrResult::Source`). Exact text is read back
+/// from the source application and has no recognition error in it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OcrSource {
+    #[default]
+    Recognized,
+    Exact,
+}
+
 /// What one recognition found.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OcrResult {
     pub lines: Vec<OcrLine>,
     pub status: OcrStatus,
+    pub source: OcrSource,
+    /// An account of what was attempted, for the user to read when a result
+    /// disappoints. Shown as is; never parsed.
+    pub diagnostics: String,
 }
 
 impl OcrResult {
@@ -120,7 +178,27 @@ impl OcrResult {
         Self {
             lines: Vec::new(),
             status,
+            source: OcrSource::Recognized,
+            diagnostics: String::new(),
         }
+    }
+
+    /// Text found in `lines`.
+    pub fn ok(lines: Vec<OcrLine>) -> Self {
+        Self {
+            lines,
+            ..Self::with_status(OcrStatus::Ok)
+        }
+    }
+
+    /// The lines' texts, one per line (`fullText`).
+    pub fn full_text(&self) -> String {
+        self.lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("
+")
     }
 }
 

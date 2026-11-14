@@ -100,10 +100,17 @@ pub extern "C" fn pa_session_free(handle: u32) {
 }
 
 /// Registers a font: the staging buffer holds the family name's UTF-8
-/// (`family_len` bytes) followed by the font file.
+/// (`family_len` bytes) followed by the font file; `index` is the face's
+/// place in a collection (`.ttc`), 0 for a single font.
 // SAFETY: a unique `pa_` symbol; nothing else in a binary defines it.
 #[unsafe(no_mangle)]
-pub extern "C" fn pa_add_font(handle: u32, bold: u32, italic: u32, family_len: u32) -> u32 {
+pub extern "C" fn pa_add_font(
+    handle: u32,
+    bold: u32,
+    italic: u32,
+    family_len: u32,
+    index: u32,
+) -> u32 {
     let mut registry = registry();
     let mut staged = registry.take_staging();
     let Some(session) = registry.session(handle) else {
@@ -112,7 +119,7 @@ pub extern "C" fn pa_add_font(handle: u32, bold: u32, italic: u32, family_len: u
     let split = (family_len as usize).min(staged.len());
     let data = staged.split_off(split);
     let family = String::from_utf8_lossy(&staged).into_owned();
-    match session.add_font(&family, bold != 0, italic != 0, data) {
+    match session.add_font(&family, bold != 0, italic != 0, data, index) {
         Ok(()) => OK,
         Err(error) => {
             session.out = error.into_bytes();
@@ -260,8 +267,13 @@ mod tests {
         let mut staged = b"Inter".to_vec();
         staged.extend_from_slice(BUNDLED_FONT);
         stage(&staged);
-        assert_eq!(pa_add_font(handle, 0, 0, 5), OK);
+        assert_eq!(pa_add_font(handle, 0, 0, 5, 0), OK);
         stage(b"Bad");
-        assert_eq!(pa_add_font(handle, 0, 0, 3), FAILED);
+        assert_eq!(pa_add_font(handle, 0, 0, 3, 0), FAILED);
+        // A single font has no second face
+        let mut staged = b"Inter".to_vec();
+        staged.extend_from_slice(BUNDLED_FONT);
+        stage(&staged);
+        assert_eq!(pa_add_font(handle, 0, 0, 5, 1), FAILED);
     }
 }

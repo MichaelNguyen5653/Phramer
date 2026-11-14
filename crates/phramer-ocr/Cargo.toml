@@ -9,6 +9,7 @@ repository.workspace = true
 log = "0.4"
 
 # Windows.Media.Ocr through WinRT; CoIncrementMTAUsage for its apartment.
+# UI Automation, the window list and DWM's cloaking for the exact-text path.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Foundation",
@@ -17,7 +18,13 @@ windows = { version = "0.62", features = [
     "Graphics_Imaging",
     "Media_Ocr",
     "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # tests/live.rs renders known text with the annotation engine and Inter.

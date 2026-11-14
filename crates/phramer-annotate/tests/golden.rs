@@ -447,6 +447,37 @@ fn floating_canvas() {
 }
 
 #[test]
+fn reorder() {
+    let capture = screenshot(160, 120);
+    let red = (RED, 0, rect(p(20, 20), p(90, 80), ShapeStyle::Filled, 2));
+    let blue = (BLUE, 0, rect(p(60, 40), p(130, 100), ShapeStyle::Filled, 2));
+    let marker = (YELLOW, 4, rect(p(10, 50), p(150, 70), ShapeStyle::Highlight, 0));
+    let mut editor = Editor::new(document(
+        &capture,
+        vec![red.clone(), blue.clone(), marker.clone()],
+    ));
+    let ids: Vec<_> = editor.document().objects().iter().map(|o| o.id).collect();
+    // Red to the top, then the highlight to the bottom
+    editor
+        .apply(Command::Reorder {
+            id: ids[0],
+            index: 2,
+        })
+        .expect("red exists");
+    editor
+        .apply(Command::Reorder {
+            id: ids[2],
+            index: 0,
+        })
+        .expect("the highlight exists");
+    let image = render_doc(editor.document(), &capture);
+    // The same pixels as objects placed in that order
+    let placed = document(&capture, vec![marker, blue, red]);
+    assert_eq!(image.rgba, render_doc(&placed, &capture).rgba);
+    check_golden("reorder", &image);
+}
+
+#[test]
 fn unannotated_rendering_is_the_image_exactly() {
     let capture = screenshot(64, 48);
     let doc = Document::new(Size::new(64, 48));

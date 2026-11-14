@@ -2,7 +2,10 @@
 // table uses, so the editor and the overlay show the same icon for a tool.
 
 import {
+  ArrowDown,
+  ArrowUp,
   ArrowUpRight,
+  Bold,
   Check,
   Circle,
   Contrast,
@@ -10,10 +13,14 @@ import {
   Crop,
   ExternalLink,
   FileImage,
+  FolderDown,
+  Grid2x2,
   Grid3x3,
   Hand,
   Hash,
   Highlighter,
+  Italic,
+  ImagePlus,
   type LucideIcon,
   Maximize2,
   Minus,
@@ -28,12 +35,16 @@ import {
   SaveAll,
   Scan,
   ScanText,
+  Search,
   Shapes,
   Slash,
   Square,
   SquareDashed,
   SquarePen,
+  Strikethrough,
+  Trash2,
   Type,
+  Underline,
   Undo2,
   X,
   ZoomIn,
@@ -42,7 +53,13 @@ import {
 
 export const ICONS: Record<string, LucideIcon> = {
   // phramer-overlay's table
+  "arrow-down": ArrowDown,
+  "arrow-up": ArrowUp,
   "arrow-up-right": ArrowUpRight,
+  bold: Bold,
+  italic: Italic,
+  strikethrough: Strikethrough,
+  underline: Underline,
   check: Check,
   circle: Circle,
   contrast: Contrast,
@@ -78,6 +95,11 @@ export const ICONS: Record<string, LucideIcon> = {
   "square-dashed": SquareDashed,
   "save-all": SaveAll,
   "maximize-2": Maximize2,
+  "folder-down": FolderDown,
+  "trash-2": Trash2,
+  search: Search,
+  "grid-2x2": Grid2x2,
+  "image-plus": ImagePlus,
 };
 
 export function Icon({ name }: { name: string }) {

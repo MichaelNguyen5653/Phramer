@@ -171,3 +171,70 @@ describe("saved state", () => {
     expect(editor.dirty).toBe(false);
   });
 });
+
+describe("text edited again", () => {
+  function placeText(text: string): number {
+    editor.startText({ x: 10, y: 10 }, RED, 10, { bold: false }, "left");
+    editor.typeText(text);
+    editor.commitText();
+    const placed = editor.session.objects().find((object) => object.shape.tool === "text");
+    if (!placed) throw new Error("no text placed");
+    return placed.id;
+  }
+
+  it("opens a placed text with its words, caret at the end, and changes it as one step", () => {
+    const id = placeText("Hello");
+    expect(editor.editText(id)).toBe(true);
+    expect(editor.text?.text).toBe("Hello");
+    expect(editor.text?.caret).toBe(5);
+    // Drawn from what is typed, not twice
+    expect(editor.previewEdits()[0]).toEqual({ kind: "delete", id });
+    editor.typeText(" there");
+    editor.text = { ...editor.text!, font: { ...editor.text!.font, bold: true }, size: 14 };
+    editor.commitText();
+    expect(editor.session.state().objects).toBe(1);
+    const changed = editor.session.object(id);
+    expect(changed?.shape).toMatchObject({ tool: "text", text: "Hello there", font: { bold: true } });
+    expect(changed?.size).toBe(14);
+    // One undo takes the whole edit back
+    editor.undo();
+    expect(editor.session.object(id)?.shape).toMatchObject({ text: "Hello" });
+    expect(editor.session.object(id)?.size).toBe(10);
+    editor.redo();
+    expect(editor.session.object(id)?.shape).toMatchObject({ text: "Hello there" });
+  });
+
+  it("records nothing when nothing changed, and removes a text emptied", () => {
+    const id = placeText("Hi");
+    const before = editor.canRedo;
+    editor.undo();
+    editor.redo();
+    editor.editText(id);
+    editor.commitText();
+    expect(editor.canRedo).toBe(before);
+    editor.undo();
+    // The undo took the placing back, not an empty edit
+    expect(editor.session.state().objects).toBe(0);
+    editor.redo();
+    editor.editText(id);
+    editor.textKey("backspace");
+    editor.textKey("backspace");
+    editor.commitText();
+    expect(editor.session.object(id)).toBeNull();
+  });
+
+  it("is only for text", () => {
+    const id = draw(10);
+    expect(editor.editText(id)).toBe(false);
+    expect(editor.text).toBeNull();
+  });
+});
+
+describe("disposing", () => {
+  it("frees the image and the crops kept for undo", () => {
+    draw(10);
+    expect(editor.crop({ x: 0, y: 0, width: 50, height: 40 }, 0xffffffff)).toBe(true);
+    editor.dispose();
+    expect(editor.canUndo).toBe(false);
+  });
+});

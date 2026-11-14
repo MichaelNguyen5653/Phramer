@@ -16,7 +16,7 @@ use phramer_annotate::{
 use phramer_capture::{LogicalPoint, LogicalRect};
 use phramer_core::config::ButtonType;
 
-use super::toolbar::{BUTTON_SIZE, SEPARATOR, button_at, layout};
+use super::toolbar::{BUTTON_SIZE, EXTENDED, SEPARATOR, button_at, layout_with_pitch};
 use super::tools::{
     MAX_TOOL_SIZE, SettingChange, ShapeKind, ToolSettings, button_info, draws, is_tool, offered,
 };
@@ -53,10 +53,24 @@ impl std::fmt::Debug for Fonts {
 
 impl Fonts {
     pub(crate) fn bundled() -> Self {
+        Self::with_faces(&[])
+    }
+
+    /// Inter, the default, then `faces` as (family, bold, italic, file,
+    /// face index). Bold and italic that no face has are made up, as Qt did
+    /// for the 15.0.0 text tool.
+    pub(crate) fn with_faces(faces: &[(String, bool, bool, Vec<u8>, u32)]) -> Self {
         let mut library = FontLibrary::new();
         if let Err(error) = library.add("Inter", false, false, crate::BUNDLED_FONT.to_vec()) {
             log::error!("overlay font: {error}");
         }
+        for (family, bold, italic, data, index) in faces {
+            let added = library.add_face(family.clone(), *bold, *italic, data.clone(), *index);
+            if let Err(error) = added {
+                log::warn!("text font: {error}");
+            }
+        }
+        library.set_synthetic_styles(true);
         Self(Arc::new(library))
     }
 }
@@ -68,6 +82,10 @@ pub(crate) struct TextEdit {
     text: String,
     /// In characters.
     caret: usize,
+    pub(crate) font: TextFont,
+    /// A placed text being edited again (double-click), with the colour and
+    /// size it keeps; `None` for new text.
+    editing: Option<(ObjectId, Color, u32)>,
 }
 
 /// What the colour wheel points at.
@@ -168,6 +186,9 @@ pub(crate) struct Tools {
     pub(crate) hover: Option<usize>,
     pub(crate) hover_since: Millis,
     pub(crate) fonts: Fonts,
+    /// The family and style new text takes (`fontFamily`, and the side
+    /// panel's toggles for this capture).
+    pub(crate) text_font: TextFont,
 }
 
 impl Tools {
@@ -196,6 +217,10 @@ impl Tools {
             hover: None,
             hover_since: 0,
             fonts: Fonts::bundled(),
+            text_font: TextFont {
+                family: settings.font_family.clone(),
+                ..TextFont::default()
+            },
             settings: settings.clone(),
         }
     }
@@ -390,7 +415,12 @@ impl OverlayState {
     fn button_rects(&self) -> (Vec<LogicalRect>, bool) {
         match self.selection {
             Some(selection) if self.toolbar_visible() => {
-                layout(selection, self.monitor_rect(), self.tools.buttons.len())
+                layout_with_pitch(
+                    selection,
+                    self.monitor_rect(),
+                    self.tools.buttons.len(),
+                    self.toolbar_pitch(),
+                )
             }
             _ => (Vec::new(), false),
         }
@@ -524,6 +554,10 @@ impl OverlayState {
     /// The document's objects to draw from the cache, and the one left out
     /// because it is drawn as a preview (dragged or recoloured).
     pub fn excluded_object(&self) -> Option<ObjectId> {
+        // A text edited again shows as the edit's preview
+        if let Some((id, _, _)) = self.tools.text.as_ref().and_then(|edit| edit.editing) {
+            return Some(id);
+        }
         let selected = self.tools.selected?;
         let recolouring = self
             .tools
@@ -564,14 +598,21 @@ impl OverlayState {
     }
 
     fn text_annotation(&self, edit: &TextEdit) -> Annotation {
+        let (color, size) = match edit.editing {
+            Some((_, color, size)) => (color, size),
+            None => (
+                self.tools.color,
+                self.object_size(ToolKind::Text, self.tools.size),
+            ),
+        };
         Annotation {
             id: PREVIEW_ID,
-            color: self.tools.color,
-            size: self.object_size(ToolKind::Text, self.tools.size),
+            color,
+            size,
             shape: Shape::Text {
                 top_left: edit.top_left,
                 text: edit.text.clone(),
-                font: TextFont::default(),
+                font: edit.font.clone(),
                 align: TextAlign::Left,
             },
         }
@@ -601,7 +642,7 @@ impl OverlayState {
                 shape: Shape::Text {
                     top_left: edit.top_left,
                     text: text.to_owned(),
-                    font: TextFont::default(),
+                    font: edit.font.clone(),
                     align: TextAlign::Left,
                 },
                 ..self.text_annotation(edit)
@@ -746,13 +787,15 @@ impl OverlayState {
         self.tools.selected = None;
         if tool == ButtonType::Text {
             let size = self.object_size(ToolKind::Text, self.tools.size);
-            let top_left =
-                text_top_left_for_anchor(point, &TextFont::default(), size, &self.tools.fonts.0)
-                    .unwrap_or(point);
+            let font = self.tools.text_font.clone();
+            let top_left = text_top_left_for_anchor(point, &font, size, &self.tools.fonts.0)
+                .unwrap_or(point);
             self.tools.text = Some(TextEdit {
                 top_left,
                 text: String::new(),
                 caret: 0,
+                font,
+                editing: None,
             });
             effects.redraw(self.active);
             return;
@@ -1325,12 +1368,28 @@ impl OverlayState {
         effects.redraw(self.active);
     }
 
-    /// Places the typed text; empty text places nothing.
+    /// Places the typed text; empty text places nothing. A text edited
+    /// again takes its new text and style in one step, or goes when emptied.
     pub(crate) fn commit_text(&mut self, effects: &mut Effects) {
         let Some(edit) = self.tools.text.take() else {
             return;
         };
         effects.redraw(self.active);
+        if let Some((id, _, _)) = edit.editing {
+            let command = if edit.text.is_empty() {
+                self.tools.selected = None;
+                Command::Delete { id }
+            } else {
+                Command::Reshape {
+                    id,
+                    shape: self.text_annotation(&edit).shape,
+                }
+            };
+            if let Err(error) = self.tools.editor.apply(command) {
+                log::warn!("cannot change text {id}: {error}");
+            }
+            return;
+        }
         if edit.text.is_empty() {
             return;
         }
@@ -1342,6 +1401,38 @@ impl OverlayState {
         }) {
             log::warn!("cannot place text: {error}");
         }
+    }
+
+    /// Double-click on a placed text (`CaptureWidget::mouseDoubleClickEvent`):
+    /// it is typed into again, caret at the end, keeping its colour, size
+    /// and style. Returns false when `id` is not a text.
+    pub(crate) fn edit_text(&mut self, id: ObjectId, effects: &mut Effects) -> bool {
+        let Some(object) = self.tools.editor.document().get(id) else {
+            return false;
+        };
+        let Shape::Text {
+            top_left,
+            text,
+            font,
+            ..
+        } = &object.shape
+        else {
+            return false;
+        };
+        let edit = TextEdit {
+            top_left: *top_left,
+            caret: text.chars().count(),
+            text: text.clone(),
+            font: font.clone(),
+            editing: Some((id, object.color, object.size)),
+        };
+        self.commit_text(effects);
+        self.tools.draft = None;
+        self.tools.moving = None;
+        self.tools.selected = Some(id);
+        self.tools.text = Some(edit);
+        effects.redraw(self.active);
+        true
     }
 
     /// Ctrl+Enter (`TYPE_COMMIT_CURRENT_TOOL`).
@@ -1398,6 +1489,211 @@ fn kind_of(button: ButtonType) -> ToolKind {
         ButtonType::Invert => ToolKind::Invert,
         // Shape, Selection, Rectangle: a box, constrained as one
         _ => ToolKind::Rectangle,
+    }
+}
+
+/// Two left presses this close in time make a double-click (Windows'
+/// default double-click time).
+const DOUBLE_CLICK_MS: Millis = 500;
+/// And this close together (`SM_CXDOUBLECLK` is 4 pixels).
+const DOUBLE_CLICK_DISTANCE: i32 = 4;
+/// The names under the buttons: `--text-11`, medium, with 2 px above and
+/// below and `--space-6` on each side.
+const LABEL_TEXT: f32 = 11.0;
+const LABEL_PAD_X: i32 = 6;
+const LABEL_PAD_Y: i32 = 2;
+/// Between a button and its name (`placeLabel`).
+const LABEL_GAP: i32 = 2;
+
+/// A button's short name (`ToolFactory::shortName`).
+fn short_name(button: ButtonType) -> &'static str {
+    match button {
+        ButtonType::Pencil => "Pencil",
+        ButtonType::Line => "Line",
+        ButtonType::Arrow => "Arrow",
+        ButtonType::Selection => "Outline",
+        ButtonType::Rectangle => "Box",
+        ButtonType::Circle => "Circle",
+        ButtonType::Marker => "Marker",
+        ButtonType::MoveSelection => "Move",
+        ButtonType::Undo => "Undo",
+        ButtonType::Copy => "Copy",
+        ButtonType::CopyFile => "Copy File",
+        ButtonType::Save => "Save",
+        ButtonType::Exit => "Close",
+        ButtonType::OpenApp => "Open",
+        ButtonType::Pixelate => "Blur",
+        ButtonType::Redo => "Redo",
+        ButtonType::Pin => "Pin",
+        ButtonType::Text => "Text",
+        ButtonType::CircleCount => "Number",
+        ButtonType::SizeIncrease => "Bigger",
+        ButtonType::SizeDecrease => "Smaller",
+        ButtonType::Invert => "Invert",
+        ButtonType::Accept => "Done",
+        ButtonType::Ocr => "OCR",
+        ButtonType::OpenInEditor => "Editor",
+        ButtonType::Shape => "Shape",
+        ButtonType::MoveObject => "Hand",
+    }
+}
+
+impl OverlayState {
+    // --- Text fonts --------------------------------------------------------------------
+
+    /// The fonts text objects are measured and drawn with: Inter, then the
+    /// `fontFamily` faces once they are given.
+    pub(crate) fn text_fonts(&self) -> &FontLibrary {
+        &self.tools.fonts.0
+    }
+
+    /// The `fontFamily` that new text is set in, as the setting has it;
+    /// empty for Inter.
+    pub fn text_font_family(&self) -> &str {
+        &self.tools.text_font.family
+    }
+
+    /// Gives the faces of the `fontFamily` family, as (bold, italic, file,
+    /// face index), which the shell reads from the system after the first
+    /// frame. Until then, and for a family with no faces, text is drawn in
+    /// Inter.
+    pub fn set_text_font_faces(&mut self, faces: Vec<(bool, bool, Vec<u8>, u32)>) {
+        let family = self.tools.text_font.family.clone();
+        let faces: Vec<_> = faces
+            .into_iter()
+            .map(|(bold, italic, data, index)| (family.clone(), bold, italic, data, index))
+            .collect();
+        self.tools.fonts = Fonts::with_faces(&faces);
+    }
+
+    // --- Tool names ------------------------------------------------------------------
+
+    /// Measures the toolbar's names when `showToolLabels` is on: the short
+    /// name, and the key when it is one key without modifiers
+    /// (`ToolFactory::labelWithShortcut`).
+    pub(crate) fn with_labels(mut self) -> Self {
+        if !self.config.tool_labels {
+            return self;
+        }
+        let Ok(mut font) = crate::render::text::Font::parse(crate::BUNDLED_FONT) else {
+            return self;
+        };
+        let height = font.metrics(LABEL_TEXT).height.ceil() as i32 + 2 * LABEL_PAD_Y;
+        self.labels = self
+            .tools
+            .buttons
+            .iter()
+            .map(|button| {
+                let name = short_name(*button);
+                let text = match self
+                    .config
+                    .bindings
+                    .shortcut(crate::input::button_action(*button))
+                {
+                    Some(shortcut) if shortcut.modifiers == Modifiers::NONE => {
+                        format!("{name} ({})", shortcut.label())
+                    }
+                    _ => name.to_owned(),
+                };
+                let width = font
+                    .measure(&text, LABEL_TEXT, crate::render::text::Weight::Medium)
+                    .ceil() as i32
+                    + 2 * LABEL_PAD_X;
+                (text, (width, height))
+            })
+            .collect();
+        self
+    }
+
+    /// The distance between buttons: taller cells for the names, and wide
+    /// names push the neighbours apart (`ButtonHandler::setButtons`).
+    pub(crate) fn toolbar_pitch(&self) -> i32 {
+        let (width, height) = self
+            .labels
+            .iter()
+            .fold((0, 0), |(w, h), (_, (lw, lh))| (w.max(*lw), h.max(*lh)));
+        if self.labels.is_empty() {
+            return EXTENDED;
+        }
+        (BUTTON_SIZE + SEPARATOR + height + LABEL_GAP).max(width + SEPARATOR / 2)
+    }
+
+    /// The names under the toolbar's buttons, where they are drawn: each
+    /// centred under its button.
+    pub fn toolbar_labels(&self) -> Vec<(LogicalRect, String)> {
+        if self.labels.is_empty() {
+            return Vec::new();
+        }
+        self.toolbar()
+            .iter()
+            .filter_map(|button| {
+                let index = self.tools.buttons.iter().position(|b| *b == button.button)?;
+                let (text, (width, height)) = self.labels.get(index)?;
+                Some((
+                    LogicalRect::new(
+                        button.rect.x + (BUTTON_SIZE - width) / 2,
+                        button.rect.bottom() + LABEL_GAP,
+                        *width,
+                        *height,
+                    ),
+                    text.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    // --- Double-click ------------------------------------------------------------------
+
+    /// Whether a left press at `at` is the second of a double-click; it is
+    /// remembered as the first of the next one otherwise.
+    pub(crate) fn double_click(&mut self, at: LogicalPoint) -> bool {
+        let double = self.last_press.is_some_and(|(time, point)| {
+            self.now.saturating_sub(time) <= DOUBLE_CLICK_MS
+                && manhattan(at, point) <= DOUBLE_CLICK_DISTANCE
+        });
+        self.last_press = if double { None } else { Some((self.now, at)) };
+        double
+    }
+
+    /// `CaptureWidget::mouseDoubleClickEvent`: a placed text is typed into
+    /// again; elsewhere in the selection, `copyOnDoubleClick` copies it.
+    /// Returns whether the double-click did either.
+    pub(crate) fn double_clicked(&mut self, at: LogicalPoint, effects: &mut Effects) -> bool {
+        if self.tools.wheel.is_some() || self.over_toolbar(at) {
+            return false;
+        }
+        // The first click of the pair may have started a new, still empty
+        // text; the double-click is about what is under it
+        if self
+            .tools
+            .text
+            .as_ref()
+            .is_some_and(|edit| edit.text.is_empty() && edit.editing.is_none())
+        {
+            self.tools.text = None;
+        } else if self.tools.text.is_some() {
+            return false;
+        }
+        let point = self.image_point(at);
+        let hit = self
+            .tools
+            .editor
+            .document()
+            .hit_test(point, &self.tools.fonts.0);
+        if let Some(id) = hit
+            && self.edit_text(id, effects)
+        {
+            return true;
+        }
+        if self.config.copy_on_double_click
+            && self
+                .selection
+                .is_some_and(|selection| super::side_at(selection, at) == Some(super::Side::Center))
+        {
+            self.export(ExportAction::Copy, effects);
+            return true;
+        }
+        false
     }
 }
 

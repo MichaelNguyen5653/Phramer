@@ -1135,8 +1135,8 @@ fn wait_for_editor(daemon_pid: u32, log_path: &Path) -> (Window, Duration) {
 }
 
 /// Closes the editor (nothing drawn, so no question) and checks that its
-/// webview and temporary image go.
-fn close_editor(daemon_pid: u32, editor: &Window, image: &Path) {
+/// webview and temporary images go.
+fn close_editor(daemon_pid: u32, editor: &Window, images: &[PathBuf]) {
     // SAFETY: posting a message to a window handle; a stale one just fails.
     let posted = unsafe { PostMessageW(editor.hwnd as HWND, WM_CLOSE, 0, 0) };
     assert_ne!(posted, 0, "WM_CLOSE could not be posted");
@@ -1144,11 +1144,13 @@ fn close_editor(daemon_pid: u32, editor: &Window, image: &Path) {
         wait_until(Duration::from_secs(10), || editors(daemon_pid).is_empty()),
         "the editor did not close"
     );
-    assert!(
-        wait_until(Duration::from_secs(5), || !image.exists()),
-        "{} was left behind",
-        image.display()
-    );
+    for image in images {
+        assert!(
+            wait_until(Duration::from_secs(5), || !image.exists()),
+            "{} was left behind",
+            image.display()
+        );
+    }
 }
 
 /// No webview left: no WebView2 process under the daemon and no Tauri
@@ -1301,8 +1303,59 @@ fn open_in_editor_shows_the_editor_window() {
         let (processes, mb) = daemon_memory(daemon_pid);
         println!("memory, daemon + editor ({processes} processes): {mb:.1} MB");
 
-        // 4. Closing it frees the webview and the temporary image
-        close_editor(daemon_pid, &editor, &image);
+        // 3b. With the editor open, another capture's Open in Editor joins
+        // it (15.0.0's session): no window is pre-warmed or built, and the
+        // one window shows the image in its filmstrip
+        let mut images = vec![image];
+        if round == 2 {
+            println!("--- Open in Editor with the editor open ---");
+            let before = read_log();
+            let overlay = region_capture(&exe, daemon_pid, target, &mut cleanup);
+            assert!(
+                wait_until(Duration::from_secs(15), || read_log()[before.len()..]
+                    .contains(" is open; nothing to pre-warm")),
+                "a window was pre-warmed with the editor open\n--- log ---\n{}",
+                read_log()
+            );
+            post_key(&overlay, u16::from(b'E'));
+            let joined = || {
+                let text = read_log();
+                let this_round = &text[before.len()..];
+                this_round.contains(" gets image 2 (") && logged_editor_open(this_round).is_some()
+            };
+            assert!(
+                wait_until(Duration::from_secs(15), joined),
+                "the image did not join the open editor\n--- log ---\n{}",
+                read_log()
+            );
+            let text = read_log();
+            let this_round = &text[before.len()..];
+            println!(
+                "second image drawn {:?} ms after it was handed over",
+                logged_editor_open(this_round)
+            );
+            assert!(
+                !this_round.contains(" created in "),
+                "a window was built:\n{this_round}"
+            );
+            let shown = editors(daemon_pid);
+            assert_eq!(shown.len(), 1, "one editor window: {shown:?}");
+            assert_eq!(
+                shown[0].hwnd, editor.hwnd,
+                "the image went to another window"
+            );
+            let second = this_round
+                .lines()
+                .rev()
+                .find_map(|line| line.split("editor: opening ").nth(1))
+                .map(|path| PathBuf::from(path.trim()))
+                .expect("the daemon logged the second image");
+            assert!(second.exists(), "{} is missing", second.display());
+            images.push(second);
+        }
+
+        // 4. Closing it frees the webview and the temporary images
+        close_editor(daemon_pid, &editor, &images);
         assert_no_webview(daemon_pid);
         println!(
             "after closing: {:.1} MB, no child processes",
@@ -1335,7 +1388,7 @@ fn open_in_editor_shows_the_editor_window() {
         .find_map(|line| line.split("editor: opening ").nth(1))
         .map(|path| PathBuf::from(path.trim()))
         .expect("the daemon logged the image it opened");
-    close_editor(daemon_pid, &editor, &image);
+    close_editor(daemon_pid, &editor, std::slice::from_ref(&image));
     assert_no_webview(daemon_pid);
 
     // 6. A capture ended with Esc leaves no webview behind

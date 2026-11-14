@@ -665,3 +665,90 @@ fn colour_grab_held_click_at_150_percent() {
     assert!(state.color_grab().is_some_and(|grab| grab.precise));
     check("color_grab_precise", &draw(&state, 0, width, height, &bgra));
 }
+
+#[test]
+fn mode_bar_with_video_hovered() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let config = OverlayConfig {
+        video_mode: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, config).expect("state");
+    focused(&mut state);
+    let video = state.mode_bar().expect("mode bar").layout.video;
+    pointer(&mut state, "move", video.x + 10, video.y + 10);
+    check("mode_bar", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn bold_italic_underlined_text_from_the_side_panel() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    key(&mut state, Key::Char('t'), Modifiers::NONE);
+    key(&mut state, Key::Space, Modifiers::NONE);
+    let styles = state.side_panel().expect("panel").layout.text_styles;
+    for rect in &styles[..3] {
+        // Apart in time, so no two presses make a double-click
+        state.handle(
+            Event::PointerDown {
+                monitor: 0,
+                at: LogicalPoint::new(rect.x + 5, rect.y + 5),
+                button: PointerButton::Left,
+                modifiers: Modifiers::NONE,
+            },
+            1_000 * (rect.x as u64),
+        );
+        state.handle(
+            Event::PointerUp {
+                monitor: 0,
+                at: LogicalPoint::new(rect.x + 5, rect.y + 5),
+                button: PointerButton::Left,
+                modifiers: Modifiers::NONE,
+            },
+            1_000 * (rect.x as u64),
+        );
+    }
+    let at = |t: u64| 2_000_000 + t;
+    state.handle(
+        Event::Key {
+            key: Key::Space,
+            modifiers: Modifiers::NONE,
+        },
+        at(0),
+    );
+    // Past the panel's fade
+    state.handle(Event::Tick, at(1_000));
+    for (index, event) in [
+        Event::PointerDown {
+            monitor: 0,
+            at: LogicalPoint::new(150, 100),
+            button: PointerButton::Left,
+            modifiers: Modifiers::NONE,
+        },
+        Event::PointerUp {
+            monitor: 0,
+            at: LogicalPoint::new(150, 100),
+            button: PointerButton::Left,
+            modifiers: Modifiers::NONE,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        state.handle(event, at(2_000 + index as u64));
+    }
+    for c in "Styled 16".chars() {
+        state.handle(Event::Text(c), at(3_000));
+    }
+    state.handle(
+        Event::PointerMove {
+            monitor: 0,
+            at: LogicalPoint::new(600, 360),
+            left_down: false,
+            modifiers: Modifiers::NONE,
+        },
+        at(4_000),
+    );
+    assert!(state.side_panel().is_none());
+    check("text_styled", &draw(&state, 0, width, height, &bgra));
+}

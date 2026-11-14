@@ -198,6 +198,16 @@ impl Document {
         Some(removed)
     }
 
+    /// Moves an object to `index` (clamped to the top), the others keeping
+    /// their order. `None` when there is no such object.
+    pub(crate) fn reorder(&mut self, id: ObjectId, index: usize) -> Option<()> {
+        let from = self.objects.iter().position(|object| object.id == id)?;
+        let object = self.objects.remove(from);
+        let to = index.min(self.objects.len());
+        self.objects.insert(to, object);
+        Some(())
+    }
+
     /// Replaces every object, as undo and redo do, and picks the counter
     /// sequence up after the largest number present.
     pub(crate) fn restore(&mut self, objects: Vec<Annotation>) -> Vec<Annotation> {

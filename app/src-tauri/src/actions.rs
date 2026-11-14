@@ -11,7 +11,7 @@ use crate::capture::{self, OverlayPlan, Placement};
 use crate::cli::{FullRequest, GuiRequest, ScreenRequest};
 use crate::daemon::DaemonState;
 use crate::reply::Reply;
-use crate::{notify, settings, settings_ui, snipping, updater, welcome};
+use crate::{editor, notify, settings, settings_ui, snipping, updater, welcome};
 
 fn not_implemented(feature: &str, detail: &dyn std::fmt::Debug) {
     log::info!("{feature}: not implemented yet ({detail:?})");
@@ -119,8 +119,8 @@ fn check_report(settings: &phramer_core::config::Settings) -> (String, i32) {
 }
 
 /// `EditorWindow::openEmpty`.
-pub(crate) fn open_editor<R: Runtime>(_app: &AppHandle<R>) {
-    not_implemented("editor", &());
+pub(crate) fn open_editor<R: Runtime>(app: &AppHandle<R>) {
+    editor::open_empty(app);
 }
 
 /// `FlameshotDaemon::checkForUpdates`.

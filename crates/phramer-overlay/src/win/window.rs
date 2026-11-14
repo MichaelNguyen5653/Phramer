@@ -208,6 +208,10 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
         monitor.bounds().height
     );
 
+    // `fontFamily`: its files are read once the first frame is up, so that
+    // never waits for them; nothing can be typed before they are in
+    load_text_fonts();
+
     // Snip across all monitors: the rest are grabbed after the first frame
     // is up, so the user never waits for them, then dimmed
     if is_following() {
@@ -233,7 +237,7 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
     let exported = match outcome {
         Outcome::Export(export) => Some((export.monitor, export.region)),
         Outcome::Deferred(deferred) => Some((deferred.monitor, deferred.region)),
-        Outcome::Cancelled => None,
+        Outcome::Cancelled | Outcome::RecordVideo => None,
     };
     let capture = match (exported, shell.state.as_ref()) {
         (Some((index, region)), Some(state)) => {
@@ -244,7 +248,7 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
                 .and_then(|slot| slot.frame.take());
             match (frame, state.monitors().get(index)) {
                 (Some(frame), Some(monitor)) => Some((
-                    capture_region(state.document(), &frame.0, region, font)?,
+                    capture_region(state.document(), &frame.0, region, state.text_fonts())?,
                     monitor.rect_to_physical(region),
                 )),
                 _ => None,
@@ -253,6 +257,40 @@ pub fn run_overlay(session: OverlaySession<'_>) -> Result<Finished, OverlayError
         _ => None,
     };
     Ok(Finished { outcome, capture })
+}
+
+/// Gives the state the faces of its `fontFamily`, read from the system.
+fn load_text_fonts() {
+    let family = with_shell(|shell| {
+        shell
+            .state
+            .as_ref()
+            .map(|state| state.text_font_family().to_owned())
+    })
+    .flatten()
+    .unwrap_or_default();
+    if family.is_empty() {
+        return;
+    }
+    let started = Instant::now();
+    let faces: Vec<_> = super::fonts::system_font_faces(&family)
+        .into_iter()
+        .map(|face| (face.bold, face.italic, face.data, face.index))
+        .collect();
+    log::info!(
+        "overlay: {} faces of {family:?} read in {} ms",
+        faces.len(),
+        started.elapsed().as_millis()
+    );
+    if faces.is_empty() {
+        log::warn!("text font {family:?} is not installed; text is set in Inter");
+        return;
+    }
+    with_shell(|shell| {
+        if let Some(state) = shell.state.as_mut() {
+            state.set_text_font_faces(faces);
+        }
+    });
 }
 
 fn is_following() -> bool {
@@ -360,7 +398,7 @@ fn capture_region(
     document: &Document,
     frame: &Frame,
     region: LocalRect,
-    font: &[u8],
+    fonts: &phramer_annotate::FontLibrary,
 ) -> Result<CapturedImage, OverlayError> {
     let bounds = (
         u32::try_from(region.x).unwrap_or(0),
@@ -377,14 +415,10 @@ fn capture_region(
     }
     let base = phramer_annotate::BaseImage::new(frame.width(), frame.height(), &rgba)
         .map_err(|error| OverlayError::Encode(error.to_string()))?;
-    let mut fonts = phramer_annotate::FontLibrary::new();
-    fonts
-        .add("Inter", false, false, font.to_vec())
-        .map_err(|error| OverlayError::Font(error.to_string()))?;
     let rendered = phramer_annotate::render(
         document,
         base,
-        &fonts,
+        fonts,
         &phramer_annotate::RenderOptions::default(),
     )
     .map_err(|error| OverlayError::Encode(error.to_string()))?;
@@ -598,7 +632,7 @@ impl Shell {
     fn attach(&mut self, monitor: usize, hwnd: HWND, frame: Option<Frame>, theme: &Theme) {
         let painter = frame
             .as_ref()
-            .map(|frame| Painter::new(FrameView::from_frame(frame), theme, &self.font));
+            .map(|frame| Painter::new(FrameView::from_frame(frame), theme));
         let buffer = frame
             .as_ref()
             .map(|frame| vec![0; frame.bgra().len()])
@@ -1252,7 +1286,7 @@ mod tests {
         let view = FrameView::new(width, height, &frame).unwrap();
         let theme = Theme::default();
         let started = Instant::now();
-        let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+        let mut painter = Painter::new(view, &theme);
         let dimmed = started.elapsed();
         let mut font = Font::parse(crate::BUNDLED_FONT).unwrap();
         let mut buffer = vec![0u8; frame.len()];
@@ -1310,7 +1344,7 @@ mod tests {
         let frame = frame_4k();
         let view = FrameView::new(width, height, &frame).unwrap();
         let theme = Theme::default();
-        let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+        let mut painter = Painter::new(view, &theme);
         let mut font = Font::parse(crate::BUNDLED_FONT).unwrap();
         let mut buffer = vec![0u8; frame.len()];
         let started = Instant::now();
@@ -1397,7 +1431,7 @@ mod tests {
                     0,
                 );
             }
-            let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+            let mut painter = Painter::new(view, &theme);
             pointer(&mut state, "down", 300, 200);
             pointer(&mut state, "drag", 900, 700);
             painter
@@ -1481,7 +1515,7 @@ mod tests {
                 .collect();
             let view = FrameView::new(width, height, &frame).unwrap();
             let started = Instant::now();
-            let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+            let mut painter = Painter::new(view, &theme);
             let mut buffer = vec![0u8; frame.len()];
             painter
                 .paint(&state, index, view, &theme, &mut font, &mut buffer)
@@ -1502,7 +1536,7 @@ mod tests {
         assert!(!state.toolbar().is_empty());
         let frame = frame_4k();
         let view = FrameView::new(3840, 2160, &frame).unwrap();
-        let mut painter = Painter::new(view, &theme, crate::BUNDLED_FONT);
+        let mut painter = Painter::new(view, &theme);
         let mut buffer = vec![0u8; frame.len()];
         let started = Instant::now();
         painter

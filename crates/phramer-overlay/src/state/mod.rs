@@ -12,6 +12,7 @@
 
 mod annotate;
 mod grab;
+mod modebar;
 mod panel;
 mod selection;
 pub(crate) mod toolbar;
@@ -26,10 +27,11 @@ use crate::input::{Bindings, Direction, Key, KeyAction, Modifiers, PointerButton
 pub(crate) use annotate::{HOVER_FADE_MS, disc_color};
 pub use annotate::{ShapeOption, ToolbarButton, WheelView};
 pub use grab::{GRAB_KEYS, GrabView, MagnifierShape, MagnifierView, Pixels, Zoom};
+pub use modebar::{CaptureMode, ModeBarLayout, ModeBarView, mode_bar_layout};
 pub(crate) use panel::THUMB;
 pub use panel::{
-    PanelControl, PanelLayout, PanelRow, SidePanelView, disc_position, side_panel_layout,
-    side_panel_tab,
+    PanelControl, PanelLayout, PanelRow, SidePanelView, TextStyle, disc_position,
+    side_panel_layout, side_panel_tab,
 };
 pub use selection::Side;
 use selection::{CLICK_DISTANCE, nudged, resize, side_at, spanned, translated};
@@ -98,6 +100,13 @@ pub struct OverlayConfig {
     pub show_magnifier: bool,
     /// `squareMagnifier`: square rather than round.
     pub square_magnifier: bool,
+    /// `showToolLabels`: each toolbar button's name under it.
+    pub tool_labels: bool,
+    /// `copyOnDoubleClick`: a double-click in the selection copies it.
+    pub copy_on_double_click: bool,
+    /// `videoCaptureEnabled`: the Screenshot/Video mode bar shows until a
+    /// selection is started.
+    pub video_mode: bool,
 }
 
 impl OverlayConfig {
@@ -119,6 +128,9 @@ impl OverlayConfig {
             side_panel_button: settings.show_side_panel_button(),
             show_magnifier: settings.show_magnifier(),
             square_magnifier: settings.square_magnifier(),
+            tool_labels: settings.show_tool_labels(),
+            copy_on_double_click: settings.copy_on_double_click(),
+            video_mode: settings.video_capture_enabled(),
         }
     }
 }
@@ -237,6 +249,9 @@ pub enum Outcome {
     Export(Export),
     /// An action whose backend does not exist yet.
     Deferred(Deferred),
+    /// The mode bar's Video: nothing is exported, and Snipping Tool's
+    /// recorder takes over once the overlay is gone.
+    RecordVideo,
 }
 
 /// What the shell must do after an event.
@@ -325,6 +340,13 @@ pub struct OverlayState {
     pixels: Vec<Option<grab::Pixels>>,
     grab: Option<grab::Grab>,
     panel: panel::Panel,
+    /// The last left press, for double-clicks.
+    last_press: Option<(Millis, LogicalPoint)>,
+    /// The mode bar is up: video mode is on and nothing was pressed yet.
+    mode_bar: bool,
+    mode_hover: Option<CaptureMode>,
+    /// The toolbar's names, by button, with their sizes, when they show.
+    labels: Vec<(String, (i32, i32))>,
 }
 
 /// Collects effects, one redraw per monitor.
@@ -385,8 +407,13 @@ impl OverlayState {
             pixels: vec![None; monitors_len],
             grab: None,
             panel: panel::Panel::new(),
+            last_press: None,
+            mode_bar: config.video_mode && selection.is_none(),
+            mode_hover: None,
+            labels: Vec::new(),
             config,
-        })
+        }
+        .with_labels())
     }
 
     /// The effects of opening: draw everything, and with a region given up
@@ -662,6 +689,7 @@ impl OverlayState {
         }
         match self.drag {
             Drag::Idle => {
+                self.mode_bar_hover(at, effects);
                 self.panel_hover(at, effects);
                 if self.over_panel(at) {
                     if self.hover.take().is_some() {
@@ -741,6 +769,11 @@ impl OverlayState {
             self.grab_press(at, button, effects);
             return;
         }
+        if button == PointerButton::Left && self.mode_bar_press(at, effects) {
+            self.update_cursor(Some(at), effects);
+            return;
+        }
+        let double = button == PointerButton::Left && self.double_click(at);
         if button == PointerButton::Right {
             // The colour wheel, centred on the press; not over the panel
             if !self.over_panel(at) {
@@ -753,6 +786,12 @@ impl OverlayState {
         }
         if self.panel_press(at, effects) {
             self.update_cursor(Some(at), effects);
+            return;
+        }
+        if double && self.double_clicked(at, effects) {
+            if !self.closed {
+                self.update_cursor(Some(at), effects);
+            }
             return;
         }
         if self.tools_press(at, modifiers, effects) {
@@ -865,6 +904,12 @@ impl OverlayState {
             }
             return;
         }
+        if self.mode_bar_visible()
+            && let Some(mode) = self.config.bindings.capture_mode(key, modifiers)
+        {
+            self.choose_mode(mode, effects);
+            return;
+        }
         let plain = !modifiers.ctrl && !modifiers.alt && !modifiers.meta && !modifiers.shift;
         if let Key::Char(c) = key
             && plain
@@ -914,6 +959,8 @@ impl OverlayState {
             // Not in the middle of a drag: what it draws would be left behind
             KeyAction::GrabColor if self.drag == Drag::Idle => self.start_grab(effects),
             KeyAction::GrabColor => {}
+            // Only while the mode bar is up, above
+            KeyAction::CaptureMode(_) => {}
         }
     }
 
@@ -1079,7 +1126,10 @@ impl OverlayState {
             Drag::Button(_) => CursorShape::Arrow,
             Drag::Idle | Drag::Pending { .. }
                 if at.is_some_and(|at| {
-                    self.over_toolbar(at) || self.over_panel(at) || self.tools.wheel.is_some()
+                    self.over_toolbar(at)
+                        || self.over_panel(at)
+                        || self.over_mode_bar(at)
+                        || self.tools.wheel.is_some()
                 }) =>
             {
                 CursorShape::Arrow

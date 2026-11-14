@@ -88,6 +88,11 @@ pub enum Request {
     SetUndoLimit {
         limit: usize,
     },
+    /// Whether bold and italic with no matching face are made up (on from
+    /// the start, as on the overlay); answers whether they are.
+    SetSyntheticStyles {
+        on: bool,
+    },
     HitTest {
         x: i32,
         y: i32,
@@ -153,6 +158,9 @@ impl Session {
             return Err("the image has no pixels".to_owned());
         }
         let mut fonts = FontLibrary::new();
+        // Bold and italic text in a family with no such face is still drawn
+        // bold and italic, as the overlay draws it
+        fonts.set_synthetic_styles(true);
         if bundled_font {
             fonts
                 .add(BUNDLED_FAMILY, false, false, BUNDLED_FONT.to_vec())
@@ -166,15 +174,18 @@ impl Session {
         })
     }
 
+    /// Registers face `index` of a font file (a collection's place, 0 for
+    /// a single font).
     pub fn add_font(
         &mut self,
         family: &str,
         bold: bool,
         italic: bool,
         data: Vec<u8>,
+        index: u32,
     ) -> Result<(), String> {
         self.fonts
-            .add(family, bold, italic, data)
+            .add_face(family, bold, italic, data, index)
             .map_err(|error| error.to_string())
     }
 
@@ -231,6 +242,10 @@ impl Session {
             Request::SetUndoLimit { limit } => {
                 self.editor.set_undo_limit(limit);
                 json!(self.state())
+            }
+            Request::SetSyntheticStyles { on } => {
+                self.fonts.set_synthetic_styles(on);
+                json!(self.fonts.synthetic_styles())
             }
             Request::HitTest { x, y } => {
                 json!(
@@ -345,6 +360,30 @@ mod tests {
         // The line was drawn; nothing was recorded
         assert!(s.out[RENDER_HEADER..].iter().any(|&byte| byte < 255));
         assert!(s.document().objects().is_empty());
+    }
+
+    #[test]
+    fn bold_text_with_no_bold_face_is_made_up_as_on_the_overlay() {
+        // `None`: as a session starts
+        let bold = |synthetic: Option<bool>| {
+            let mut s = Session::new(60, 30, vec![255; 60 * 30 * 4], true).unwrap();
+            if let Some(on) = synthetic {
+                let set = s
+                    .call(&format!(r#"{{"op":"set_synthetic_styles","on":{on}}}"#))
+                    .unwrap();
+                assert_eq!(set, on);
+            }
+            s.call(
+                r#"{"op":"apply","edit":{"kind":"add","color":{"r":0,"g":0,"b":0},"size":4,
+                "shape":{"tool":"text","top_left":{"x":2,"y":2},"text":"Hi",
+                "font":{"bold":true},"align":"left"}}}"#,
+            )
+            .unwrap();
+            s.render(Vec::new(), Color::WHITE).unwrap();
+            s.out.clone()
+        };
+        assert_eq!(bold(None), bold(Some(true)));
+        assert_ne!(bold(None), bold(Some(false)));
     }
 
     #[test]

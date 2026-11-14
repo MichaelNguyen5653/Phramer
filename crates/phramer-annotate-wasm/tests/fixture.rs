@@ -101,8 +101,14 @@ fn checksum_through_session(items: &[(Color, u32, Shape)]) -> u64 {
     let mut session =
         Session::new(capture.width, capture.height, capture.rgba.clone(), false).expect("session");
     session
-        .add_font("Pixel", false, false, pixel_font())
+        .add_font("Pixel", false, false, pixel_font(), 0)
         .expect("test font");
+    // determinism.rs pins the library's default: no made-up bold or italic.
+    // A session starts with them on, as the overlay draws.
+    let off = session
+        .call(&json!({"op": "set_synthetic_styles", "on": false}).to_string())
+        .expect("synthetic styles");
+    assert_eq!(off, json!(false));
     for (color, size, shape) in items {
         let request = json!({"op": "apply", "edit": {"kind": "add", "color": color, "size": size, "shape": shape}});
         session.call(&request.to_string()).expect("drawable");

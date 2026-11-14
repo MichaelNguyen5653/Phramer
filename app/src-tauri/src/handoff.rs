@@ -1,25 +1,33 @@
 //! Where the overlay's other actions send a capture: OCR, the editor and
 //! another application (App Launcher). Each runs on the capture's thread
 //! and reports through the same notices as an export.
+//!
+//! OCR and App Launcher open windows of their own (`ocr_ui`, `launcher_ui`)
+//! through the daemon's app handle, kept here at start-up ([`set_app`]), so
+//! their callers need no handle of their own.
 
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use phramer_capture::PhysicalRect;
 use phramer_core::config::Settings;
-use phramer_ocr::{OcrStatus, OcrTextLayout, RgbaImage, status_message};
+use phramer_ocr::{Rect, RgbaImage};
 use phramer_overlay::{
-    CapturedImage, ExportReport, Handoff, ImageFormat, LocalTime, Notice, SystemClipboard, encode,
-    expand_pattern,
+    CapturedImage, ExportReport, ImageFormat, LocalTime, Notice, encode, expand_pattern,
 };
 use tauri::{AppHandle, Emitter, Runtime};
+
+use crate::{launcher_ui, ocr_ui};
+
+/// The daemon's app handle, for the windows OCR and App Launcher open.
+static APP: OnceLock<AppHandle> = OnceLock::new();
 
 /// The event the editor window listens for (`editor::listen`); the payload
 /// is the path of a PNG of the capture.
 pub(crate) const EDITOR_OPEN_EVENT: &str = "editor:open";
-/// What the user is told once the text is on the clipboard.
-const TEXT_COPIED: &str = "Text copied to clipboard.";
 /// Characters Windows refuses in a file name.
 const RESERVED: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
 
@@ -39,38 +47,45 @@ fn notice(text: String, error: bool) -> ExportReport {
     }
 }
 
-/// OCR: the text in the capture, laid out as `ocrTextLayout` says, goes on
-/// the clipboard. 15.0.0 showed it in a results window; until there is a
-/// window, the clipboard and a notification stand in for it.
-pub(crate) fn read_text(settings: &Settings, image: &CapturedImage) -> ExportReport {
+/// At start-up: the handle OCR and App Launcher open their windows with.
+pub(crate) fn set_app(app: &AppHandle) {
+    let _ = APP.set(app.clone());
+}
+
+/// The daemon's handle, or the notice that there is none (never seen: it is
+/// set before any capture can start).
+fn app() -> Result<&'static AppHandle, ExportReport> {
+    APP.get()
+        .ok_or_else(|| notice("Unable to open the window: Phramer is not ready.".to_owned(), true))
+}
+
+/// OCR: the results window for the capture (15.0.0's `OcrResultsWindow`),
+/// with no screen position, so recognition only. The text is copied when
+/// the user asks, as in 15.0.0.
+pub(crate) fn read_text(_settings: &Settings, image: &CapturedImage) -> ExportReport {
+    read_text_at(image, None)
+}
+
+/// OCR of a capture that sat at `geometry` (physical screen pixels): the
+/// exact-text path may read the windows under it.
+pub(crate) fn read_text_at(image: &CapturedImage, geometry: Option<PhysicalRect>) -> ExportReport {
+    let app = match app() {
+        Ok(app) => app,
+        Err(report) => return report,
+    };
     let rgba = RgbaImage::from_bgra(image.width, image.height, &image.bgra);
-    let language = settings.ocr_language();
-    let layout = OcrTextLayout::from_setting(i64::from(settings.ocr_text_layout()));
-    // A thread of its own: WinRT is blocked on there, which a thread with a
-    // single-threaded apartment must not do
-    let read = std::thread::Builder::new()
-        .name("ocr".to_owned())
-        .spawn(move || phramer_ocr::read_text(&rgba, &language, layout))
-        .map_err(|error| error.to_string())
-        .and_then(|worker| {
-            worker
-                .join()
-                .map_err(|_| "the recognizer stopped".to_owned())
-        });
-    match read {
-        Ok(Ok(text)) => match SystemClipboard.copy_text(&text) {
-            Ok(()) => notice(TEXT_COPIED.to_owned(), false),
-            Err(error) => notice(format!("Error while saving to clipboard: {error}"), true),
-        },
-        Ok(Err(status)) => {
-            let text = status_message(&status).unwrap_or_default();
-            notice(text, status != OcrStatus::NoTextFound)
-        }
-        Err(error) => notice(
-            status_message(&OcrStatus::EngineError(error)).unwrap_or_default(),
-            true,
-        ),
-    }
+    ocr_ui::open(app, rgba, geometry.map(screen_rect));
+    ExportReport::default()
+}
+
+/// A capture's geometry as the OCR crate's rectangle.
+fn screen_rect(geometry: PhysicalRect) -> Rect {
+    Rect::new(
+        f64::from(geometry.x),
+        f64::from(geometry.y),
+        f64::from(geometry.width),
+        f64::from(geometry.height),
+    )
 }
 
 /// A name for a new file: time and process, in base 36.
@@ -129,35 +144,41 @@ pub(crate) fn open_in_editor<R: Runtime>(app: &AppHandle<R>, path: &Path) {
 }
 
 /// App Launcher: the capture saved to the temporary folder, named after the
-/// filename pattern, then Windows' "Open with" dialog for it.
+/// filename pattern (as 15.0.0 named it), then the launcher's list of apps
+/// for it.
 pub(crate) fn open_with(settings: &Settings, image: &CapturedImage) -> ExportReport {
+    let app = match app() {
+        Ok(app) => app,
+        Err(report) => return report,
+    };
     let folder = std::env::temp_dir();
     let stem: String = expand_pattern(&settings.filename_pattern(), &LocalTime::now())
         .chars()
         .map(|c| if RESERVED.contains(&c) { '_' } else { c })
         .collect();
-    let path = match write_png(image, &folder, &format!("{stem}_")) {
-        Ok(path) => path,
-        Err(error) => {
-            return notice(
-                format!("Unable to write in {}: {error}", folder.display()),
-                true,
-            );
+    match write_png(image, &folder, &format!("{stem}_")) {
+        Ok(path) => {
+            launcher_ui::open(app, path);
+            ExportReport::default()
         }
-    };
-    // Modal and as long as the user likes: off the capture's thread, so the
-    // next capture need not wait for it
-    let spawned = std::thread::Builder::new()
+        Err(error) => notice(
+            format!("Unable to write in {}: {error}", folder.display()),
+            true,
+        ),
+    }
+}
+
+/// Windows' "Open with" dialog for `path`: modal and as long as the user
+/// likes, so on a thread of its own.
+pub(crate) fn show_open_with(path: PathBuf) -> io::Result<()> {
+    std::thread::Builder::new()
         .name("open-with".to_owned())
         .spawn(move || {
             if let Err(error) = open_with_dialog(&path) {
                 log::error!("cannot open {} with another app: {error}", path.display());
             }
-        });
-    match spawned {
-        Ok(_) => ExportReport::default(),
-        Err(error) => notice(format!("Unable to open the capture: {error}"), true),
-    }
+        })
+        .map(|_| ())
 }
 
 /// `SHOpenWithDialog`: lets the user pick an app, and runs it on `path`.

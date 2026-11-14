@@ -81,7 +81,7 @@ interface Exports {
   pa_stage(len: number): number;
   pa_session_new(width: number, height: number, bundledFont: number): number;
   pa_session_free(handle: number): void;
-  pa_add_font(handle: number, bold: number, italic: number, familyLen: number): number;
+  pa_add_font(handle: number, bold: number, italic: number, familyLen: number, index: number): number;
   pa_call(handle: number): number;
   pa_render(handle: number, workspace: number): number;
   pa_out_ptr(handle: number): number;
@@ -93,9 +93,46 @@ const RENDER_HEADER = 16;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/** One face of a font family, as the daemon reads it from the system
+ * (`editor_font_faces`); `index` is its place in a collection (.ttc). */
+export interface FontFace {
+  family: string;
+  bold: boolean;
+  italic: boolean;
+  index: number;
+  data: Uint8Array;
+}
+
 /** The loaded module. One per page; sessions share it. */
 export class Engine {
+  /** Faces every session gets, the ones made later included. */
+  private readonly fonts: FontFace[] = [];
+  private readonly live = new Set<Session>();
+
   private constructor(private readonly exports: Exports) {}
+
+  /** Adds `face` to every session, now and to come. A face that cannot be
+   * read is left out and reported. */
+  addFont(face: FontFace): void {
+    this.fonts.push(face);
+    for (const session of this.live) Engine.register(session, face);
+  }
+
+  private static register(session: Session, face: FontFace): void {
+    try {
+      session.addFont(face.family, face.data, face.bold, face.italic, face.index);
+    } catch (error) {
+      console.warn(`font ${face.family}: ${String(error)}`);
+    }
+  }
+
+  hasFont(family: string): boolean {
+    return this.fonts.some((face) => face.family.toLowerCase() === family.toLowerCase());
+  }
+
+  forget(session: Session): void {
+    this.live.delete(session);
+  }
 
   /** Instantiates the module from its bytes. */
   static async fromBytes(bytes: BufferSource): Promise<Engine> {
@@ -134,7 +171,10 @@ export class Engine {
     this.stage(rgba);
     const handle = this.exports.pa_session_new(width, height, bundledFont ? 1 : 0);
     if (handle === 0) throw new Error(`no session for a ${width}x${height} image`);
-    return new Session(this, this.exports, handle, width, height);
+    const session = new Session(this, this.exports, handle, width, height);
+    this.live.add(session);
+    for (const face of this.fonts) Engine.register(session, face);
+    return session;
   }
 }
 
@@ -148,13 +188,13 @@ export class Session {
     readonly height: number,
   ) {}
 
-  addFont(family: string, data: Uint8Array, bold = false, italic = false): void {
+  addFont(family: string, data: Uint8Array, bold = false, italic = false, index = 0): void {
     const name = encoder.encode(family);
     const staged = new Uint8Array(name.length + data.length);
     staged.set(name);
     staged.set(data, name.length);
     this.engine.stage(staged);
-    if (this.exports.pa_add_font(this.handle, bold ? 1 : 0, italic ? 1 : 0, name.length) !== OK) {
+    if (this.exports.pa_add_font(this.handle, bold ? 1 : 0, italic ? 1 : 0, name.length, index) !== OK) {
       throw new Error(decoder.decode(this.engine.out(this.handle)));
     }
   }
@@ -243,6 +283,7 @@ export class Session {
   }
 
   free(): void {
+    this.engine.forget(this);
     this.exports.pa_session_free(this.handle);
   }
 }

@@ -58,10 +58,12 @@ phramer-annotate = { path = "../../crates/phramer-annotate" }
 
 # Run value, single-instance lock check, tray balloons, the Open with
 # dialog, phramer-cli's reply pipe, the update check (WinHTTP) and whether
-# Snipping Tool is installed.
+# Snipping Tool is installed. App Launcher: the Start Menu folders, the
+# image "Open with" lists, the programs' icons (GDI) and starting them.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_Storage_FileSystem",
@@ -76,10 +78,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 # Snipping Tool's recorder: Launcher with a target package (WinRT), and
-# the app activation manager as the fallback.
+# the app activation manager as the fallback. App Launcher reads Start Menu
+# shortcuts through IShellLinkW (its GetPath needs Storage_FileSystem).
 windows = { version = "0.62", features = [
     "Foundation",
     "System",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_UI_Shell",
 ] }

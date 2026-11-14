@@ -24,6 +24,8 @@ export interface EditorSettings {
   redact: RedactStyle;
   undo_limit: number;
   shortcuts: Record<string, string>;
+  /** `fontFamily`; empty: the bundled font. */
+  font_family: string;
 }
 
 export interface Picker {
@@ -47,6 +49,11 @@ export interface UiState {
   view: View;
   picker: Picker;
   cropping: boolean;
+  /** 15.0.0's Zoom mode (Z): the plain wheel zooms. A view mode, so no
+   * tool is picked while it is on. */
+  zoomMode: boolean;
+  /** Grid lines over the view; one state for every image, off in a new window. */
+  grid: boolean;
 }
 
 export type Action =
@@ -59,7 +66,9 @@ export type Action =
   | { type: "close_picker" }
   | { type: "eyedropper"; on: boolean }
   | { type: "set_view"; view: View }
-  | { type: "crop"; on: boolean };
+  | { type: "crop"; on: boolean }
+  | { type: "zoom_mode"; on: boolean }
+  | { type: "toggle_grid" };
 
 const rgb = ([r, g, b]: [number, number, number]): Rgb => ({ r, g, b });
 
@@ -82,10 +91,15 @@ export function initialState(settings: EditorSettings): UiState {
       textAlign: "left",
       underline: false,
       strikeout: false,
+      fontFamily: settings.font_family,
+      bold: false,
+      italic: false,
     },
     view: { scale: 1, x: 0, y: 0 },
     picker: { open: false, anchor: null, hue: rgbToHsv(color).h, eyedropper: false },
     cropping: false,
+    zoomMode: false,
+    grid: false,
   };
 }
 
@@ -109,7 +123,7 @@ export function reduce(state: UiState, action: Action): UiState {
     case "select_tool": {
       // Picking the selected tool again puts it down, as on the overlay
       const tool = action.tool === state.tool ? null : action.tool;
-      return { ...state, tool, cropping: false, picker: { ...state.picker, eyedropper: false } };
+      return { ...state, tool, cropping: false, zoomMode: false, picker: { ...state.picker, eyedropper: false } };
     }
     case "set_size":
       return withSize(state, action.size);
@@ -140,6 +154,10 @@ export function reduce(state: UiState, action: Action): UiState {
     case "set_view":
       return { ...state, view: action.view };
     case "crop":
-      return { ...state, cropping: action.on, tool: action.on ? null : state.tool };
+      return { ...state, cropping: action.on, tool: action.on ? null : state.tool, zoomMode: action.on ? false : state.zoomMode };
+    case "zoom_mode":
+      return { ...state, zoomMode: action.on, tool: action.on ? null : state.tool, cropping: action.on ? false : state.cropping };
+    case "toggle_grid":
+      return { ...state, grid: !state.grid };
   }
 }

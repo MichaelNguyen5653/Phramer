@@ -4,7 +4,7 @@
 //! the Tool Settings tab on the left edge does when `showSidePanelButton`
 //! is on. Every control applies at once; there is no OK.
 
-use phramer_annotate::{Annotation, Color, Command, Shape, ToolKind};
+use phramer_annotate::{Annotation, Color, Command, Shape, TextFont, ToolKind};
 use phramer_capture::{LogicalPoint, LogicalRect};
 use phramer_core::config::ButtonType;
 
@@ -53,11 +53,68 @@ pub enum PanelControl {
     Grid,
     GridSmaller,
     GridLarger,
+    /// Text style toggles: they set the style of new text, the text being
+    /// typed and a selected text object (`TextConfig`).
+    TextStyle(TextStyle),
     /// Deletes the selected object.
     Delete,
+    /// Moves the selected object one row up the list: one step towards the
+    /// bottom of the drawing order (`moveUpClicked`).
+    MoveUp,
+    /// One row down the list: one step towards the top.
+    MoveDown,
     /// A row of the object list: 0 is `<Empty>`, then the objects.
     Row(usize),
     Close,
+}
+
+/// A text style the side panel toggles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TextStyle {
+    Bold,
+    Italic,
+    Underline,
+    Strikeout,
+}
+
+impl TextStyle {
+    /// In the order the panel shows them.
+    pub const ALL: [TextStyle; 4] = [
+        TextStyle::Bold,
+        TextStyle::Italic,
+        TextStyle::Underline,
+        TextStyle::Strikeout,
+    ];
+
+    /// Whether `font` has this style.
+    pub fn of(self, font: &TextFont) -> bool {
+        match self {
+            TextStyle::Bold => font.bold,
+            TextStyle::Italic => font.italic,
+            TextStyle::Underline => font.underline,
+            TextStyle::Strikeout => font.strikeout,
+        }
+    }
+
+    pub(crate) fn toggle(self, font: &mut TextFont) {
+        let flag = match self {
+            TextStyle::Bold => &mut font.bold,
+            TextStyle::Italic => &mut font.italic,
+            TextStyle::Underline => &mut font.underline,
+            TextStyle::Strikeout => &mut font.strikeout,
+        };
+        *flag = !*flag;
+    }
+
+    /// Its icon in [`crate::ICONS`].
+    pub fn icon(self) -> &'static str {
+        match self {
+            TextStyle::Bold => "bold",
+            TextStyle::Italic => "italic",
+            TextStyle::Underline => "underline",
+            TextStyle::Strikeout => "strikethrough",
+        }
+    }
 }
 
 /// Where the side panel's parts are, in logical pixels.
@@ -67,6 +124,10 @@ pub struct PanelLayout {
     /// "Active tool size" and the size.
     pub size_label: LogicalRect,
     pub slider: LogicalRect,
+    /// "Text style".
+    pub text_label: LogicalRect,
+    /// The text style toggles, in [`TextStyle::ALL`] order.
+    pub text_styles: [LogicalRect; 4],
     /// "Active color".
     pub color_label: LogicalRect,
     pub hex: LogicalRect,
@@ -81,6 +142,8 @@ pub struct PanelLayout {
     /// The hairline above the object list.
     pub separator_y: i32,
     pub delete: LogicalRect,
+    pub move_up: LogicalRect,
+    pub move_down: LogicalRect,
     /// The list rows that fit, top first.
     pub rows: Vec<LogicalRect>,
     pub close: LogicalRect,
@@ -100,6 +163,17 @@ pub fn side_panel_layout(screen: LogicalRect, rows: usize) -> PanelLayout {
     y += LABEL + GAP / 2;
     let slider = LogicalRect::new(x, y, inner, LABEL);
     y += LABEL + GAP;
+    let styles_width = 4 * CONTROL + 3 * (GAP / 2);
+    let text_styles: [LogicalRect; 4] = std::array::from_fn(|index| {
+        LogicalRect::new(
+            right - styles_width + (CONTROL + GAP / 2) * index as i32,
+            y,
+            CONTROL,
+            CONTROL,
+        )
+    });
+    let text_label = LogicalRect::new(x, y, inner - styles_width - GAP, CONTROL);
+    y += CONTROL + GAP;
     let color_label = LogicalRect::new(x, y, inner - HEX_WIDTH - GAP, CONTROL);
     let hex = LogicalRect::new(right - HEX_WIDTH, y, HEX_WIDTH, CONTROL);
     y += CONTROL + GAP;
@@ -115,6 +189,8 @@ pub fn side_panel_layout(screen: LogicalRect, rows: usize) -> PanelLayout {
     let separator_y = y;
     y += 1 + GAP;
     let delete = LogicalRect::new(x, y, CONTROL, CONTROL);
+    let move_up = LogicalRect::new(delete.right() + GAP / 2, y, CONTROL, CONTROL);
+    let move_down = LogicalRect::new(move_up.right() + GAP / 2, y, CONTROL, CONTROL);
     y += CONTROL + GAP / 2;
     let fixed = y - top + GAP + BUTTON + PAD;
     let room = (screen.height - 2 * MARGIN - fixed).max(0) / CONTROL;
@@ -129,6 +205,8 @@ pub fn side_panel_layout(screen: LogicalRect, rows: usize) -> PanelLayout {
         panel,
         size_label,
         slider,
+        text_label,
+        text_styles,
         color_label,
         hex,
         disc,
@@ -139,6 +217,8 @@ pub fn side_panel_layout(screen: LogicalRect, rows: usize) -> PanelLayout {
         grid_larger,
         separator_y,
         delete,
+        move_up,
+        move_down,
         rows,
         close,
     }
@@ -218,6 +298,14 @@ pub struct SidePanelView {
     pub grid_size: u32,
     /// An object is selected, so Delete does something.
     pub can_delete: bool,
+    /// The selected object has a row above or below it to move to.
+    pub can_move_up: bool,
+    pub can_move_down: bool,
+    /// The style toggles apply to something: the Text tool, text being
+    /// typed or a selected text object.
+    pub text_enabled: bool,
+    /// The style shown on the toggles, in [`TextStyle::ALL`] order.
+    pub text_styles: [bool; 4],
     /// The list rows that fit, from the scroll position.
     pub rows: Vec<PanelRow>,
     /// The list entry the first row shows (`PanelControl::Row` numbers
@@ -411,6 +499,15 @@ impl OverlayState {
             grid: self.panel.grid,
             grid_size: self.panel.grid_size,
             can_delete: self.tools.selected.is_some(),
+            can_move_up: self.selected_index().is_some_and(|index| index > 0),
+            can_move_down: self
+                .selected_index()
+                .is_some_and(|index| index + 1 < objects.len()),
+            text_enabled: self.text_style_target().is_some(),
+            text_styles: {
+                let font = self.shown_text_font();
+                TextStyle::ALL.map(|style| style.of(&font))
+            },
             rows,
             first_row: scroll,
             hovered: self.panel.hovered,
@@ -443,8 +540,13 @@ impl OverlayState {
             (layout.grid_smaller, PanelControl::GridSmaller),
             (layout.grid_larger, PanelControl::GridLarger),
             (layout.delete, PanelControl::Delete),
+            (layout.move_up, PanelControl::MoveUp),
+            (layout.move_down, PanelControl::MoveDown),
             (layout.close, PanelControl::Close),
         ];
+        if let Some(index) = layout.text_styles.iter().position(|rect| rect.contains(at)) {
+            return Some(PanelControl::TextStyle(TextStyle::ALL[index]));
+        }
         if let Some((_, control)) = fixed.iter().find(|(rect, _)| rect.contains(at)) {
             return Some(*control);
         }
@@ -536,6 +638,9 @@ impl OverlayState {
                 self.panel.grid_size = (self.panel.grid_size + GRID_STEP).min(GRID_MAX);
             }
             Some(PanelControl::Delete) => self.delete_selected(effects),
+            Some(PanelControl::MoveUp) => self.move_selected(-1, effects),
+            Some(PanelControl::MoveDown) => self.move_selected(1, effects),
+            Some(PanelControl::TextStyle(style)) => self.toggle_text_style(style, effects),
             Some(PanelControl::Row(index)) => {
                 let objects = self.tools.editor.document().objects();
                 self.tools.selected = index
@@ -650,6 +755,124 @@ impl OverlayState {
             && let Err(error) = self.tools.editor.apply(Command::SetColor { id, color })
         {
             log::warn!("cannot recolour object {id}: {error}");
+        }
+        effects.redraw(self.active);
+    }
+
+    // --- The object list's buttons ---------------------------------------------
+
+    /// Where the selected object is in the list of objects.
+    fn selected_index(&self) -> Option<usize> {
+        let id = self.tools.selected?;
+        self.tools
+            .editor
+            .document()
+            .objects()
+            .iter()
+            .position(|object| object.id == id)
+    }
+
+    /// Move up (-1) or Move down (1): the selected object trades places with
+    /// its neighbour in the list, in one undoable step.
+    pub(crate) fn move_selected(&mut self, step: isize, effects: &mut Effects) {
+        let (Some(id), Some(index)) = (self.tools.selected, self.selected_index()) else {
+            return;
+        };
+        let Some(to) = index.checked_add_signed(step) else {
+            return;
+        };
+        if to >= self.object_count() {
+            return;
+        }
+        if let Err(error) = self.tools.editor.apply(Command::Reorder { id, index: to }) {
+            log::warn!("cannot reorder object {id}: {error}");
+        }
+        effects.redraw(self.active);
+    }
+
+    // --- Text style ----------------------------------------------------------------
+
+    /// What the style toggles change: the text being typed, else a selected
+    /// text object (by id), else new text when the Text tool is on. `None`
+    /// when they apply to nothing.
+    fn text_style_target(&self) -> Option<Option<phramer_annotate::ObjectId>> {
+        if self.tools.text.is_some() {
+            return Some(None);
+        }
+        if let Some(id) = self.tools.selected
+            && self
+                .tools
+                .editor
+                .document()
+                .get(id)
+                .is_some_and(|object| matches!(object.shape, Shape::Text { .. }))
+        {
+            return Some(Some(id));
+        }
+        (self.tools.active == Some(ButtonType::Text)).then_some(None)
+    }
+
+    /// The style the toggles show: of the text they would change.
+    fn shown_text_font(&self) -> TextFont {
+        if let Some(edit) = &self.tools.text {
+            return edit.font.clone();
+        }
+        if let Some(Some(id)) = self.text_style_target()
+            && let Some(Shape::Text { font, .. }) = self
+                .tools
+                .editor
+                .document()
+                .get(id)
+                .map(|object| &object.shape)
+        {
+            return font.clone();
+        }
+        self.tools.text_font.clone()
+    }
+
+    /// A style toggle: new text takes it, and so does whatever it shows.
+    pub(crate) fn toggle_text_style(&mut self, style: TextStyle, effects: &mut Effects) {
+        let Some(target) = self.text_style_target() else {
+            return;
+        };
+        let mut font = self.shown_text_font();
+        style.toggle(&mut font);
+        self.tools.text_font = TextFont {
+            family: self.tools.text_font.family.clone(),
+            ..font.clone()
+        };
+        match target {
+            None => {
+                if let Some(edit) = self.tools.text.as_mut() {
+                    edit.font = font;
+                }
+            }
+            Some(id) => {
+                let shape = self
+                    .tools
+                    .editor
+                    .document()
+                    .get(id)
+                    .map(|object| object.shape.clone());
+                if let Some(Shape::Text {
+                    top_left,
+                    text,
+                    align,
+                    ..
+                }) = shape
+                    && let Err(error) = self.tools.editor.apply(Command::Reshape {
+                        id,
+                        shape: Shape::Text {
+                            top_left,
+                            text,
+                            font,
+                            align,
+                        },
+                    })
+                {
+                    log::warn!("cannot restyle text {id}: {error}");
+                }
+            }
         }
         effects.redraw(self.active);
     }

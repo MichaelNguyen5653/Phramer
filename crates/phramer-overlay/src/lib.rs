@@ -45,16 +45,17 @@ pub use pin::{
 pub use render::{FrameView, RgbaImage, Theme, render};
 pub use state::tools::{ButtonInfo, MAX_TOOL_SIZE, TOOLBAR_ORDER, button_info, is_tool};
 pub use state::{
-    CursorShape, Deferred, DeferredAction, Effect, Event, Export, ExportAction, GRAB_KEYS,
-    GeometryLabel, GrabView, MagnifierShape, MagnifierView, Millis, Outcome, OverlayConfig,
-    OverlayState, PanelControl, PanelLayout, PanelRow, Pixels, SettingChange, ShapeKind,
-    ShapeOption, SidePanelView, ToolSettings, ToolbarButton, WheelView, Zoom, disc_position,
-    side_panel_layout, side_panel_tab,
+    CaptureMode, CursorShape, Deferred, DeferredAction, Effect, Event, Export, ExportAction,
+    GRAB_KEYS, GeometryLabel, GrabView, MagnifierShape, MagnifierView, Millis, ModeBarLayout,
+    ModeBarView, Outcome, OverlayConfig, OverlayState, PanelControl, PanelLayout, PanelRow,
+    Pixels, SettingChange, ShapeKind, ShapeOption, SidePanelView, TextStyle, ToolSettings,
+    ToolbarButton, WheelView, Zoom, disc_position, mode_bar_layout, side_panel_layout,
+    side_panel_tab,
 };
 #[cfg(windows)]
 pub use win::{
-    Finished, OverlaySession, PinHandler, PinOptions, SystemClipboard, open_pins, run_overlay,
-    show_in_folder, spawn_pin,
+    Finished, OverlaySession, PinHandler, PinOptions, SystemClipboard, SystemFace, open_pins,
+    run_overlay, show_in_folder, spawn_pin, system_font_faces, system_font_families,
 };
 
 /// Inter Variable 4.1 (SIL Open Font License 1.1; see

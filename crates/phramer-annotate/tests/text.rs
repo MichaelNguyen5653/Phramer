@@ -113,6 +113,122 @@ fn unknown_family_falls_back_to_the_default_face() {
     );
 }
 
+/// "SET" in the test font, in `font`, rendered with `fonts`.
+fn styled_render(fonts: &FontLibrary, font: TextFont) -> phramer_annotate::RenderedImage {
+    let capture = common::screenshot(120, 60);
+    let mut editor = Editor::new(Document::new(Size::new(120, 60)));
+    editor
+        .apply(Command::Add {
+            color: Color::BLACK,
+            size: 6,
+            shape: Shape::Text {
+                top_left: Point::new(4, 4),
+                text: "SET".into(),
+                font,
+                align: TextAlign::Left,
+            },
+        })
+        .unwrap();
+    phramer_annotate::render(
+        editor.document(),
+        capture.base(),
+        fonts,
+        &phramer_annotate::RenderOptions::default(),
+    )
+    .unwrap()
+}
+
+fn ink(image: &phramer_annotate::RenderedImage) -> usize {
+    image
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] < 100 && pixel[1] < 100 && pixel[2] < 100)
+        .count()
+}
+
+#[test]
+fn bold_and_italic_without_a_face_are_unchanged_unless_synthesised() {
+    let regular = TextFont::default();
+    let bold = TextFont {
+        bold: true,
+        ..TextFont::default()
+    };
+    let italic = TextFont {
+        italic: true,
+        ..TextFont::default()
+    };
+    // Off (the default): the one face as it is, pixel for pixel
+    let plain = fonts();
+    assert!(!plain.synthetic_styles());
+    let reference = styled_render(&plain, regular.clone());
+    assert_eq!(styled_render(&plain, bold.clone()).rgba, reference.rgba);
+    assert_eq!(styled_render(&plain, italic.clone()).rgba, reference.rgba);
+
+    let mut synthetic = fonts();
+    synthetic.set_synthetic_styles(true);
+    // Regular text is untouched by the switch
+    assert_eq!(styled_render(&synthetic, regular).rgba, reference.rgba);
+    let emboldened = styled_render(&synthetic, bold.clone());
+    assert!(ink(&emboldened) > ink(&reference), "bold adds ink");
+    let slanted = styled_render(&synthetic, italic);
+    assert_ne!(slanted.rgba, reference.rgba, "italic leans");
+
+    // A bold face widens the text area by the emboldening
+    let area = |fonts: &FontLibrary, font: &TextFont| {
+        let shape = Shape::Text {
+            top_left: Point::new(0, 0),
+            text: "SET".into(),
+            font: font.clone(),
+            align: TextAlign::Left,
+        };
+        let mut editor = Editor::new(Document::new(Size::new(50, 50)));
+        let id = editor
+            .apply(Command::Add {
+                color: Color::BLACK,
+                size: 6,
+                shape,
+            })
+            .unwrap()
+            .unwrap();
+        editor.document().get(id).and_then(|o| o.bounding_rect(fonts))
+    };
+    let wide = area(&synthetic, &bold).unwrap();
+    let narrow = area(&plain, &bold).unwrap();
+    assert!(wide.width > narrow.width, "{wide:?} vs {narrow:?}");
+    assert_eq!(wide.height, narrow.height);
+}
+
+#[test]
+fn a_registered_bold_face_is_used_as_it_is() {
+    let mut fonts = fonts();
+    fonts.set_synthetic_styles(true);
+    // The same bytes registered as bold: chosen for bold text, so nothing is
+    // synthesised and it draws exactly like the regular face
+    fonts
+        .add_face("Pixel", true, false, common::pixel_font(), 0)
+        .unwrap();
+    let regular = styled_render(&fonts, TextFont::default());
+    let bold = styled_render(
+        &fonts,
+        TextFont {
+            bold: true,
+            ..TextFont::default()
+        },
+    );
+    assert_eq!(bold.rgba, regular.rgba);
+    assert!(fonts.has_family("pixel"));
+    assert!(!fonts.has_family("Arial"));
+}
+
+#[test]
+fn a_face_index_past_the_font_is_rejected() {
+    let mut fonts = FontLibrary::new();
+    assert!(fonts.add_face("Pixel", false, false, common::pixel_font(), 1).is_err());
+    assert!(fonts.is_empty());
+}
+
 #[test]
 fn bad_font_bytes_are_rejected() {
     let mut fonts = FontLibrary::new();

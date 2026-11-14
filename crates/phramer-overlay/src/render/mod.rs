@@ -12,11 +12,11 @@
 
 pub(crate) mod layer;
 mod magnify;
+mod modebar;
 mod panel;
 pub(crate) mod text;
 mod tools;
 
-use phramer_annotate::FontLibrary;
 use phramer_capture::{Frame, LogicalRect, Monitor};
 use phramer_core::config::Settings;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, PixmapMut, Rect, Transform};
@@ -148,7 +148,7 @@ pub fn render(
     theme: &Theme,
     font: &[u8],
 ) -> Result<RgbaImage, OverlayError> {
-    let mut painter = Painter::new(frame, theme, font);
+    let mut painter = Painter::new(frame, theme);
     let mut font = Font::parse(font)?;
     let mut pixels = vec![0; frame.bgra.len()];
     painter.paint(state, monitor, frame, theme, &mut font, &mut pixels)?;
@@ -169,22 +169,16 @@ pub(crate) struct Painter {
     dimmed: Vec<u8>,
     dim_alpha: u8,
     layer: Layer,
-    fonts: FontLibrary,
     panel: panel::PanelCache,
 }
 
 impl Painter {
-    /// A painter for `frame`; `font` is the font text objects are set in.
-    pub(crate) fn new(frame: FrameView<'_>, theme: &Theme, font: &[u8]) -> Self {
-        let mut fonts = FontLibrary::new();
-        if let Err(error) = fonts.add("Inter", false, false, font.to_vec()) {
-            log::error!("annotation font: {error}");
-        }
+    /// A painter for `frame`. Text objects are set in the state's fonts.
+    pub(crate) fn new(frame: FrameView<'_>, theme: &Theme) -> Self {
         Self {
             dimmed: dim(frame.bgra, theme.dim_alpha),
             dim_alpha: theme.dim_alpha,
             layer: Layer::new(),
-            fonts,
             panel: panel::PanelCache::default(),
         }
     }
@@ -197,7 +191,7 @@ impl Painter {
             (frame.width, frame.height),
             state.document().objects(),
             state.excluded_object(),
-            &self.fonts,
+            state.text_fonts(),
         );
         let Some(area) = changed else {
             return;
@@ -238,14 +232,14 @@ impl Painter {
             return;
         }
         let image = phramer_annotate::Rect::new(0, 0, frame.width, frame.height);
-        let area = layer::reach(&previews, &self.fonts).intersection(&image);
+        let area = layer::reach(&previews, state.text_fonts()).intersection(&image);
         let source = self.layer.pixels(frame.bgra);
         let Some(pixels) = layer::render_area(
             source,
             (frame.width, frame.height),
             area,
             &previews,
-            &self.fonts,
+            state.text_fonts(),
         ) else {
             return;
         };
@@ -344,11 +338,13 @@ impl Painter {
         }
         ui.grid(&mut canvas, state, &mapping, selection, theme);
         ui.toolbar(&mut canvas, font, state, &mapping, theme);
+        ui.tool_labels(&mut canvas, font, state, &mapping);
         ui.wheel(&mut canvas, state, &mapping, theme);
         ui.size_notice(&mut canvas, font, state);
         if state.help_visible() {
             ui.help(&mut canvas, font, &state.help_rows());
         }
+        ui.mode_bar(&mut canvas, font, state, &mapping);
         ui.side_panel_tab(&mut canvas, font, state, &mapping);
         ui.side_panel(&mut canvas, font, state, &mapping, theme, &mut self.panel);
         ui.magnifier(&mut canvas, state, frame, theme);

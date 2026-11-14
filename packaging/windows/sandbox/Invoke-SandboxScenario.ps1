@@ -19,13 +19,15 @@
         C:\installers  -InstallersDir: the 15.0.0 MSI (read-only)
         C:\sdk         -SdkBinDir: Windows SDK x64 bin, for signtool (read-only)
         C:\results     a new folder under -ResultsDir (read-write)
+        tests only: the checkout at its host path, and Node.js at
+        C:\tools\nodejs (read-only); see scenario-tests.ps1
 
 .EXAMPLE
     .\Invoke-SandboxScenario.ps1 -Scenario fresh -ArtifactsDir D:\out -ResultsDir D:\results
 #>
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('probe', 'fresh', 'upgrade', 'repair', 'msix')]
+    [ValidateSet('probe', 'fresh', 'upgrade', 'repair', 'msix', 'tests')]
     [string] $Scenario,
     [Parameter(Mandatory = $true)] [string] $ArtifactsDir,
     [Parameter(Mandatory = $true)] [string] $ResultsDir,
@@ -59,6 +61,14 @@ $maps = @(
 )
 if ($InstallersDir) { $maps += Get-MappedFolder $InstallersDir 'C:\installers' $true }
 if ($SdkBinDir) { $maps += Get-MappedFolder $SdkBinDir 'C:\sdk' $true }
+if ($Scenario -eq 'tests') {
+    # Test executables find fixtures and scripts through the checkout path
+    # compiled into them; settings_smoke drives the webview with Node.js
+    $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+    $maps += Get-MappedFolder $repo $repo $true
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if ($node) { $maps += Get-MappedFolder (Split-Path $node.Source) 'C:\tools\nodejs' $true }
+}
 
 # Networking off: nothing inside may download (WebView2 bootstrapper, Store)
 $command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\harness\Run-Scenario.ps1 -Scenario $Scenario"

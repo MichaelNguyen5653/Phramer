@@ -627,10 +627,20 @@ fn draw_text(
         }
         baseline += f64::from(face.line_advance());
     }
-    for builder in [glyphs, bars] {
-        if let Some(path) = builder.finish() {
-            target.fill(&path, color);
+    if let Some(path) = glyphs.finish() {
+        target.fill(&path, color);
+        // Synthetic bold: the outline widened by a stroke around it
+        if face.embolden > 0.0 {
+            let pen = Stroke {
+                width: face.embolden as f32,
+                line_join: LineJoin::Round,
+                ..Stroke::default()
+            };
+            target.stroke(&path, color, &pen);
         }
+    }
+    if let Some(path) = bars.finish() {
+        target.fill(&path, color);
     }
 }
 

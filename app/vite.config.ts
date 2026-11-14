@@ -16,6 +16,8 @@ export default defineConfig(() => ({
         editor: "editor.html",
         settings: "settings.html",
         welcome: "welcome.html",
+        ocr: "ocr.html",
+        launcher: "launcher.html",
       },
     },
   },

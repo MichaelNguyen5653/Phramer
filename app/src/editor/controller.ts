@@ -6,10 +6,11 @@ import type { Rgb } from "./color";
 import { sameRgb } from "./color";
 import type { Annotation, Edit, Engine, Point, Rect, Rendered, Rgba, Session, Shape, TextAlign, TextFont } from "./engine";
 
-/** One step of undo. `doc` steps are the engine's; a colour pick is
- * remembered so undo gives the old colour back; a crop swaps sessions. */
+/** One step of undo. `doc` is how many of the engine's steps it takes (a
+ * text edited again can be several); a colour pick is remembered so undo
+ * gives the old colour back; a crop swaps sessions. */
 interface Entry {
-  doc: boolean;
+  doc: number;
   color?: { before: Rgb; after: Rgb };
   crop?: { before: Session; after: Session };
 }
@@ -23,6 +24,8 @@ export interface TextEdit {
   size: number;
   font: TextFont;
   align: TextAlign;
+  /** The placed text object being edited again (double-click). */
+  editing?: number;
 }
 
 export interface UndoResult {
@@ -103,7 +106,7 @@ export class EditorController {
     const result = this.session.apply(edit);
     // An edit that changed nothing is not recorded by the engine either
     if (result.recorded) {
-      this.record({ doc: true, color });
+      this.record({ doc: 1, color });
     }
     this.forgetMissing();
     this.changed();
@@ -114,7 +117,7 @@ export class EditorController {
     this.commitText();
     const entry = this.undoStack.pop();
     if (!entry) return {};
-    if (entry.doc) this.session.undo();
+    for (let step = 0; step < entry.doc; step++) this.session.undo();
     if (entry.crop) this.session = entry.crop.before;
     this.redoStack.push(entry);
     this.dirty = true;
@@ -127,7 +130,7 @@ export class EditorController {
     const entry = this.redoStack.pop();
     if (!entry) return {};
     if (entry.crop) this.session = entry.crop.after;
-    if (entry.doc) this.session.redo();
+    for (let step = 0; step < entry.doc; step++) this.session.redo();
     this.undoStack.push(entry);
     this.dirty = true;
     this.forgetMissing();
@@ -240,7 +243,7 @@ export class EditorController {
       }
     }
     if (!sameRgb(before, after)) {
-      this.record({ doc: false, color: { before, after } });
+      this.record({ doc: 0, color: { before, after } });
     }
     this.changed();
   }
@@ -270,6 +273,30 @@ export class EditorController {
     const topLeft = this.session.textTopLeft(at, size, font);
     this.text = { topLeft, text: "", caret: 0, color, size, font, align };
     this.changed();
+  }
+
+  /** Opens the placed text `id` for typing again, the caret at its end
+   * (15.0.0: double-click a text). Returns false for any other object. */
+  editText(id: number): boolean {
+    const object = this.session.object(id);
+    if (!object || object.shape.tool !== "text") return false;
+    this.commitText();
+    const shape = object.shape;
+    this.selected = null;
+    this.moving = null;
+    this.restyle = null;
+    this.text = {
+      topLeft: shape.top_left,
+      text: shape.text,
+      caret: [...shape.text].length,
+      color: { ...object.color, a: 255 },
+      size: object.size,
+      font: shape.font,
+      align: shape.align,
+      editing: id,
+    };
+    this.changed();
+    return true;
   }
 
   typeText(typed: string): void {
@@ -324,16 +351,41 @@ export class EditorController {
     return { tool: "text", top_left: edit.topLeft, text, font: edit.font, align: edit.align };
   }
 
-  /** Places the typed text; empty text places nothing. */
+  /** Places the typed text; empty text places nothing. A text edited
+   * again is changed in place, as one undo step; emptied, it goes. */
   commitText(): void {
     const edit = this.text;
     if (!edit) return;
     this.text = null;
+    if (edit.editing !== undefined) {
+      this.replaceText(edit.editing, edit);
+      return;
+    }
     if (edit.text.length > 0) {
       this.apply({ kind: "add", color: edit.color, size: edit.size, shape: this.textShape(edit) });
     } else {
       this.changed();
     }
+  }
+
+  private replaceText(id: number, edit: TextEdit): void {
+    const object = this.session.object(id);
+    if (!object) {
+      this.changed();
+      return;
+    }
+    if (edit.text.length === 0) {
+      this.apply({ kind: "delete", id });
+      return;
+    }
+    const edits: Edit[] = [{ kind: "reshape", id, shape: this.textShape(edit) }];
+    const { r, g, b } = object.color;
+    if (r !== edit.color.r || g !== edit.color.g || b !== edit.color.b) edits.push({ kind: "set_color", id, color: edit.color });
+    if (object.size !== edit.size) edits.push({ kind: "set_size", id, size: edit.size });
+    // The engine leaves out an edit that changes nothing
+    const steps = edits.filter((change) => this.session.apply(change).recorded).length;
+    if (steps > 0) this.record({ doc: steps });
+    this.changed();
   }
 
   /** The caret's top-left in image pixels and its height (the overlay's
@@ -366,6 +418,8 @@ export class EditorController {
   /** What is drawn over the document: drag, recolour, drawing, typing. */
   previewEdits(): Edit[] {
     const edits: Edit[] = [];
+    // A text edited again is drawn from what is typed, not where it was
+    if (this.text?.editing !== undefined) edits.push({ kind: "delete", id: this.text.editing });
     if (this.selected !== null) {
       if (this.moving) edits.push({ kind: "move", id: this.selected, ...this.moving });
       if (this.restyle?.color) edits.push({ kind: "set_color", id: this.selected, color: this.restyle.color });
@@ -409,7 +463,7 @@ export class EditorController {
     after.setUndoLimit(this.limit);
     this.session = after;
     this.selected = null;
-    this.record({ doc: false, crop: { before, after } });
+    this.record({ doc: 0, crop: { before, after } });
     this.changed();
     return true;
   }
@@ -427,5 +481,20 @@ export class EditorController {
   markSaved(): void {
     this.dirty = false;
     this.changed();
+  }
+
+  /** Frees the engine sessions it holds: the image, and the ones crops
+   * keep for undo and redo. The controller is not used again. */
+  dispose(): void {
+    const sessions = new Set<Session>([this.session]);
+    for (const entry of [...this.undoStack, ...this.redoStack]) {
+      if (entry.crop) {
+        sessions.add(entry.crop.before);
+        sessions.add(entry.crop.after);
+      }
+    }
+    this.undoStack = [];
+    this.redoStack = [];
+    for (const session of sessions) session.free();
   }
 }

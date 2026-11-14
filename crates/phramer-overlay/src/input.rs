@@ -3,6 +3,8 @@
 
 use phramer_core::config::{ButtonType, Settings};
 
+use crate::state::CaptureMode;
+
 /// A key, independent of the keyboard layout's modifiers. Letters are
 /// lower case; digits and punctuation are their unshifted character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -215,6 +217,9 @@ pub(crate) enum KeyAction {
     TogglePanel,
     /// Picks the draw colour from the screen (`TYPE_GRAB_COLOR`).
     GrabColor,
+    /// A segment of the mode bar (`CAPTURE_MODE_SCREENSHOT`,
+    /// `CAPTURE_MODE_VIDEO`); only while the bar shows.
+    CaptureMode(CaptureMode),
 }
 
 /// The key action a toolbar button shares its shortcut with.
@@ -315,6 +320,15 @@ const BOUND_ACTIONS: &[(&str, KeyAction)] = &[
     ("TYPE_DELETE_CURRENT_TOOL", KeyAction::DeleteTool),
     ("TYPE_TOGGLE_PANEL", KeyAction::TogglePanel),
     ("TYPE_GRAB_COLOR", KeyAction::GrabColor),
+    // Last: on keys the other actions do not take while the bar is gone
+    (
+        "CAPTURE_MODE_SCREENSHOT",
+        KeyAction::CaptureMode(CaptureMode::Screenshot),
+    ),
+    (
+        "CAPTURE_MODE_VIDEO",
+        KeyAction::CaptureMode(CaptureMode::Video),
+    ),
 ];
 
 /// The overlay's key bindings, read from `[Shortcuts]`. Esc is fixed and
@@ -354,6 +368,17 @@ impl Bindings {
             .iter()
             .find(|(shortcut, _)| shortcut.matches(key, modifiers))
             .map(|(_, action)| *action)
+    }
+
+    /// The mode bar segment a key press picks, if any; it goes before any
+    /// other binding while the bar shows.
+    pub(crate) fn capture_mode(&self, key: Key, modifiers: Modifiers) -> Option<CaptureMode> {
+        self.entries
+            .iter()
+            .find_map(|(shortcut, action)| match action {
+                KeyAction::CaptureMode(mode) if shortcut.matches(key, modifiers) => Some(*mode),
+                _ => None,
+            })
     }
 
     /// The shortcut bound to an action, for the help message.

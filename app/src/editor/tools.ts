@@ -37,6 +37,8 @@ export type ActionId =
   | "zoom_out"
   | "fit"
   | "actual_size"
+  | "zoom_mode"
+  | "grid"
   | "delete"
   | "commit";
 
@@ -86,6 +88,8 @@ export const ACTIONS: ButtonInfo<ActionId>[] = [
   { id: "zoom_in", name: "Zoom In", description: "Zoom in", icon: "zoom-in" },
   { id: "fit", name: "Fit", description: "Fit the image in the window", icon: "scan" },
   { id: "actual_size", name: "100%", description: "Show the image at its actual size", icon: "square-dashed" },
+  { id: "zoom_mode", name: "Zoom", description: "Zoom the view with the wheel; Ctrl+wheel zooms from any tool", icon: "search" },
+  { id: "grid", name: "Grid", description: "Show grid lines. View only: never saved or copied", icon: "grid-2x2" },
   { id: "close", name: "Close", description: "Close the editor", icon: "x", shortcut: "TYPE_EXIT" },
 ];
 
@@ -99,11 +103,27 @@ export const FIXED_SHORTCUTS: [string, ActionId][] = [
   ["Ctrl+0", "fit"],
   ["Ctrl+1", "actual_size"],
   ["Ctrl+W", "close"],
+  // 15.0.0's editor: Zoom mode and the grid
+  ["Z", "zoom_mode"],
+  ["Ctrl+'", "grid"],
   ["Backspace", "delete"],
 ];
 
 /** `MAX_TOOL_SIZE`. */
 export const MAX_TOOL_SIZE = 50;
+
+/** A digit key typed as a tool size, as on the overlay (`digit`): sizes
+ * are typed digit by digit; a value out of range is clamped and typing
+ * starts over. `typed` is what was typed so far (`null`: nothing). */
+export function typeSizeDigit(typed: number | null, digit: number): { size: number; typed: number | null } {
+  const value = (typed ?? 0) * 10 + digit;
+  const size = Math.min(MAX_TOOL_SIZE, Math.max(1, value));
+  return { size, typed: size === value ? value : null };
+}
+
+/** How long typed digits wait for the next one before the size is kept
+ * (the overlay's `SIZE_NOTICE_MS`). */
+export const SIZE_DIGITS_MS = 600;
 
 export function isDrawing(tool: ToolId | null): tool is Exclude<ToolId, "move_object"> {
   return tool !== null && tool !== "move_object";
@@ -140,6 +160,10 @@ export interface ToolOptions {
   textAlign: TextAlign;
   underline: boolean;
   strikeout: boolean;
+  /** `fontFamily`; empty: the bundled font. */
+  fontFamily: string;
+  bold: boolean;
+  italic: boolean;
 }
 
 /** A tool size (logical, as the settings hold it) as an object's `size`
@@ -308,14 +332,39 @@ export function matchesShortcut(shortcut: Shortcut, event: KeyLike): boolean {
   );
 }
 
-/** The shortcut as a tooltip shows it: `Ctrl+S`, `Enter`. */
+/** The shortcut as a tooltip shows it: `Ctrl+S`, `Enter`, with the
+ * overlay's key names (`Shortcut::label`). */
 export function shortcutLabel(shortcut: Shortcut): string {
   const parts: string[] = [];
   if (shortcut.ctrl) parts.push("Ctrl");
   if (shortcut.alt) parts.push("Alt");
   if (shortcut.shift) parts.push("Shift");
   if (shortcut.meta) parts.push("Win");
-  const names: Record<string, string> = { escape: "Esc", enter: "Enter", delete: "Del", backspace: "Backspace", space: "Space" };
+  const names: Record<string, string> = {
+    escape: "Esc",
+    enter: "Enter",
+    delete: "Del",
+    backspace: "Backspace",
+    insert: "Ins",
+    tab: "Tab",
+    space: "Space",
+    left: "Left",
+    right: "Right",
+    up: "Up",
+    down: "Down",
+    home: "Home",
+    end: "End",
+    pageup: "PgUp",
+    pagedown: "PgDown",
+  };
   parts.push(names[shortcut.key] ?? shortcut.key.toUpperCase());
   return parts.join("+");
+}
+
+/** The key a toolbar button shows beside its icon, `(P)`, `(Ctrl+Z)`: its
+ * `[Shortcuts]` entry. `null` when the entry is empty or unusable, so no
+ * hint is drawn at all. */
+export function shortcutHint(entry: string | undefined, shortcuts: Record<string, string>): string | null {
+  const shortcut = entry ? parseShortcut(shortcuts[entry] ?? "") : null;
+  return shortcut ? `(${shortcutLabel(shortcut)})` : null;
 }

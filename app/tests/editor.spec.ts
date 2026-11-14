@@ -1,12 +1,14 @@
 // The editor page in Edge with the Tauri runtime mocked: reference
-// screenshots (light, dark, a drawn shape, the colour picker), no layout
-// shift, and a picker that applies on pointer move with no confirm step.
+// screenshots (light, dark, a drawn shape, the colour picker, the toolbar's
+// keys, a narrow window, the filmstrip, the close prompt, the grid, the
+// empty editor), no layout shift, and a picker that applies on pointer move
+// with no confirm step.
 
 import { expect, test, type Page } from "@playwright/test";
-import { installTauriMock } from "./tauri-mock";
+import { installTauriMock, type MockOptions } from "./tauri-mock";
 
-async function open(page: Page) {
-  await page.addInitScript(installTauriMock);
+async function open(page: Page, options: MockOptions = {}) {
+  await page.addInitScript(installTauriMock, options);
   // Layout shifts, recorded from the first paint
   await page.addInitScript(() => {
     (window as unknown as { __shift: number }).__shift = 0;
@@ -166,4 +168,225 @@ test("text is typed on the image and placed with Esc", async ({ page }) => {
   // The tool shortcuts work again once the text is placed
   await page.keyboard.press("p");
   await expect(page.getByTestId("tool-pencil")).toHaveAttribute("aria-pressed", "true");
+});
+
+const hint = (page: Page, testId: string) => page.getByTestId(testId).locator(".key-hint");
+
+async function drawRectangle(page: Page, from: [number, number], to: [number, number]) {
+  await page.keyboard.press("r");
+  const canvas = await page.getByTestId("canvas").boundingBox();
+  if (!canvas) throw new Error("no canvas");
+  await page.mouse.move(canvas.x + from[0], canvas.y + from[1]);
+  await page.mouse.down();
+  await page.mouse.move(canvas.x + to[0], canvas.y + to[1], { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.press("Escape");
+}
+
+test("toolbar keys: in brackets when assigned, nothing when not, live", async ({ page }) => {
+  await open(page);
+  await expect(hint(page, "tool-pencil")).toHaveText("(P)");
+  await expect(hint(page, "action-undo")).toHaveText("(Ctrl+Z)");
+  await expect(hint(page, "action-redo")).toHaveText("(Ctrl+Shift+Z)");
+  await expect(hint(page, "action-copy_file")).toHaveText("(Ctrl+Shift+C)");
+  // Unassigned in [Shortcuts], or no entry at all: no hint and no brackets
+  for (const id of ["tool-shape", "tool-circle_count", "action-pin", "action-crop", "action-save_as", "action-fit"]) {
+    await expect(hint(page, id)).toHaveCount(0);
+    expect(await page.getByTestId(id).textContent()).not.toContain("(");
+  }
+  // The tooltip keeps the full description and its key
+  await expect(page.getByTestId("tool-pencil")).toHaveAttribute("title", "Set the Pencil as the paint tool (P)");
+  // A key set or cleared in Settings shows at once
+  await page.evaluate(() => {
+    window.__setShortcut("TYPE_SHAPE", "H");
+    window.__setShortcut("TYPE_PENCIL", "");
+  });
+  await expect(hint(page, "tool-shape")).toHaveText("(H)");
+  await expect(hint(page, "tool-pencil")).toHaveCount(0);
+  await page.keyboard.press("h");
+  await expect(page.getByTestId("tool-shape")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("toolbar")).toHaveScreenshot("editor-toolbar-keys.png");
+});
+
+test("a narrow window wraps the toolbar: every button and key visible, nothing scrolls", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 520 });
+  await open(page);
+  const toolbar = page.getByTestId("toolbar");
+  const overflow = await toolbar.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+  const outside = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>(".toolbar .tool")]
+      .map((button) => ({ id: button.dataset.testid, box: button.getBoundingClientRect() }))
+      .filter(({ box }) => box.right > window.innerWidth || box.left < 0 || box.width === 0)
+      .map(({ id }) => id),
+  );
+  expect(outside).toEqual([]);
+  // The image still has room
+  const viewport = await page.getByTestId("viewport").boundingBox();
+  expect(viewport!.height).toBeGreaterThan(200);
+  await expect(page).toHaveScreenshot("editor-narrow.png");
+});
+
+test("filmstrip: images join, each keeps its own history, and the strip shows them", async ({ page }) => {
+  await open(page);
+  // One image: no strip
+  await expect(page.getByTestId("filmstrip")).toHaveCount(0);
+  await expect(page.getByTestId("position")).toHaveCount(0);
+  await page.evaluate(() => {
+    window.__addImage(1);
+    window.__addImage(2);
+  });
+  await expect(page.getByTestId("filmstrip")).toBeVisible();
+  await expect(page.getByTestId("thumb-3")).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("position")).toHaveText("Image 3 of 3");
+  // The daemon is told each joined image is drawn, so it can bring the window up
+  await expect.poll(async () => (await calls(page, "editor_ready")).length).toBe(3);
+  await drawRectangle(page, [80, 90], [260, 200]);
+  await expect(page.getByTestId("action-undo")).toBeEnabled();
+  await page.getByTestId("thumb-1").click();
+  await expect(page.getByTestId("position")).toHaveText("Image 1 of 3");
+  await expect(page.getByTestId("action-undo")).toBeDisabled();
+  await drawRectangle(page, [300, 120], [420, 260]);
+  await page.getByTestId("thumb-2").click();
+  await expect(page.getByTestId("action-undo")).toBeDisabled();
+  await page.getByTestId("thumb-3").click();
+  await expect(page.getByTestId("action-undo")).toBeEnabled();
+  await expect(page.getByTestId("unsaved")).toHaveCount(2);
+  await expect(page.locator(".thumb img")).toHaveCount(3);
+  await page.waitForTimeout(400);
+  await expect(page).toHaveScreenshot("editor-filmstrip.png");
+
+  // Closing names the images that are not saved
+  await page.getByRole("button", { name: "Close" }).click();
+  const confirm = page.getByTestId("confirm");
+  await expect(confirm).toContainText(
+    "Images 1 and 3 of 3 have changes that are not saved. Closing the editor discards every image in it.",
+  );
+  await expect(page).toHaveScreenshot("editor-close-prompt.png");
+  await confirm.getByRole("button", { name: "Keep editing" }).click();
+  await expect(confirm).toBeHidden();
+
+  // Save All: one folder, every image numbered, all saved after
+  await page.getByTestId("save-all").click();
+  await expect(page.getByTestId("statusbar")).toContainText("3 images saved to C:\\Pictures\\Phramer set");
+  const exports = await page.evaluate(() =>
+    window.__calls.filter((call) => call.cmd === "editor_export").map((call) => call.headers),
+  );
+  expect(exports.map((headers) => [headers?.["x-action"], headers?.["x-number"]])).toEqual([
+    ["save_all", "1"],
+    ["save_all", "2"],
+    ["save_all", "3"],
+  ]);
+  expect((await calls(page, "editor_save_all_begin")).length).toBe(1);
+  expect((await calls(page, "editor_save_all_end")).length).toBe(1);
+  await expect(page.getByTestId("unsaved")).toHaveCount(0);
+  // Nothing unsaved: Close closes at once
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect.poll(async () => (await calls(page, "plugin:window|destroy")).length).toBe(1);
+});
+
+test("Remove Image asks for an unsaved image, and the strip goes with the second-last image", async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => window.__addImage(1));
+  await expect(page.getByTestId("thumb-2")).toHaveAttribute("aria-current", "true");
+  await drawRectangle(page, [80, 90], [260, 200]);
+  await page.getByTestId("remove-image").click();
+  const confirm = page.getByTestId("confirm");
+  await expect(confirm).toContainText("Image 2 of 2 has changes that are not saved.");
+  await confirm.getByRole("button", { name: "Remove without saving" }).click();
+  await expect(page.getByTestId("filmstrip")).toHaveCount(0);
+  await expect(page.getByTestId("action-undo")).toBeDisabled();
+  // A clean image goes without a question
+  await page.evaluate(() => window.__addImage(2));
+  await expect(page.getByTestId("thumb-2")).toBeVisible();
+  await page.getByTestId("thumb-1").click();
+  await page.getByTestId("remove-image").click();
+  await expect(page.getByTestId("confirm")).toHaveCount(0);
+  await expect(page.getByTestId("filmstrip")).toHaveCount(0);
+});
+
+test("grid and Zoom mode, as in 15.0.0", async ({ page }) => {
+  await open(page);
+  await expect(page.getByTestId("grid")).toHaveCount(0);
+  await page.keyboard.press("Control+Quote");
+  await expect(page.getByTestId("grid")).toBeVisible();
+  await expect(page.getByTestId("action-grid")).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveScreenshot("editor-grid.png");
+  // Z: the plain wheel zooms at the pointer; Esc puts it down
+  await page.keyboard.press("p");
+  await page.keyboard.press("z");
+  await expect(page.getByTestId("action-zoom_mode")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("tool-pencil")).toHaveAttribute("aria-pressed", "false");
+  const canvas = await page.getByTestId("canvas").boundingBox();
+  await page.mouse.move(canvas!.x + 100, canvas!.y + 100);
+  await page.mouse.wheel(0, -120);
+  await expect(page.getByTestId("zoom")).toHaveText("125%");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("action-zoom_mode")).toHaveAttribute("aria-pressed", "false");
+  // Without it the plain wheel pans again
+  await page.mouse.wheel(0, -120);
+  await expect(page.getByTestId("zoom")).toHaveText("125%");
+  await page.getByTestId("action-grid").click();
+  await expect(page.getByTestId("grid")).toHaveCount(0);
+});
+
+test("digit keys type the tool size, as on the overlay", async ({ page }) => {
+  await open(page);
+  await page.keyboard.press("p");
+  await page.keyboard.press("1");
+  await page.keyboard.press("2");
+  await expect(page.getByTestId("size-slider")).toHaveValue("12");
+  // Kept once the digits stop
+  await expect
+    .poll(async () => (await calls(page, "editor_set")).map((args) => JSON.stringify(args)))
+    .toContain(JSON.stringify({ change: { key: "tool_size", tool: "pencil", size: 12 } }));
+  await page.keyboard.press("9");
+  await expect(page.getByTestId("size-slider")).toHaveValue("9");
+});
+
+test("a placed text opens again on double-click, with bold, italic and font", async ({ page }) => {
+  await open(page);
+  await page.getByTestId("tool-text").click();
+  const font = page.getByTestId("font-family");
+  await expect(font.locator("option")).toHaveCount(4);
+  await font.selectOption("Cambria");
+  await expect.poll(async () => (await calls(page, "editor_font_faces")).length).toBe(1);
+  await expect
+    .poll(async () => (await calls(page, "editor_set")).map((args) => JSON.stringify(args)))
+    .toContain(JSON.stringify({ change: { key: "font_family", family: "Cambria" } }));
+  await page.getByRole("checkbox", { name: "Bold" }).check();
+  const canvas = await page.getByTestId("canvas").boundingBox();
+  if (!canvas) throw new Error("no canvas");
+  await page.mouse.click(canvas.x + 100, canvas.y + 120);
+  await page.keyboard.type("Hello");
+  await page.keyboard.press("Escape");
+  // No tool, then a double-click on the text
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("tool-text")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("checkbox", { name: "Bold" })).toHaveCount(0);
+  await page.mouse.dblclick(canvas.x + 112, canvas.y + 128);
+  await expect(page.getByRole("textbox", { name: "Text" })).toBeFocused();
+  await expect(page.getByTestId("options-panel")).toContainText("Text");
+  await expect(page.getByRole("checkbox", { name: "Bold" })).toBeChecked();
+  await page.keyboard.type("!");
+  await page.keyboard.press("Escape");
+  // Placing and the edit: two steps back to nothing
+  await page.keyboard.press("Control+z");
+  await expect(page.getByTestId("action-undo")).toBeEnabled();
+  await page.keyboard.press("Control+z");
+  await expect(page.getByTestId("action-undo")).toBeDisabled();
+});
+
+test("the empty editor says how to capture, and the first image replaces it", async ({ page }) => {
+  await page.addInitScript(installTauriMock, { empty: true });
+  await page.goto("/editor.html");
+  await expect(page.getByTestId("empty-hint")).toHaveText(
+    "Press Shift+Win+X or Print Screen to capture. Then pick Editor (E) on the capture toolbar.",
+  );
+  await expect.poll(async () => (await calls(page, "editor_ready")).length).toBe(1);
+  await expect(page).toHaveScreenshot("editor-empty.png");
+  await page.evaluate(() => window.__addImage(0));
+  await expect(page.getByTestId("editor")).toBeVisible();
+  await expect.poll(async () => (await calls(page, "editor_ready")).length).toBe(2);
+  await expect(page.getByTestId("filmstrip")).toHaveCount(0);
 });

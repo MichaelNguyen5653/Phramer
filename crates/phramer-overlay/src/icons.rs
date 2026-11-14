@@ -19,10 +19,13 @@ const STROKE_WIDTH: f32 = 2.0;
 
 /// Every icon the overlay draws: its Lucide name and the SVG file.
 pub const ICONS: &[(&str, &str)] = &[
+    ("arrow-down", include_str!("../assets/icons/arrow-down.svg")),
+    ("arrow-up", include_str!("../assets/icons/arrow-up.svg")),
     (
         "arrow-up-right",
         include_str!("../assets/icons/arrow-up-right.svg"),
     ),
+    ("bold", include_str!("../assets/icons/bold.svg")),
     ("check", include_str!("../assets/icons/check.svg")),
     ("circle", include_str!("../assets/icons/circle.svg")),
     ("contrast", include_str!("../assets/icons/contrast.svg")),
@@ -39,6 +42,7 @@ pub const ICONS: &[(&str, &str)] = &[
         "highlighter",
         include_str!("../assets/icons/highlighter.svg"),
     ),
+    ("italic", include_str!("../assets/icons/italic.svg")),
     ("minus", include_str!("../assets/icons/minus.svg")),
     ("move", include_str!("../assets/icons/move.svg")),
     ("pencil", include_str!("../assets/icons/pencil.svg")),
@@ -56,8 +60,13 @@ pub const ICONS: &[(&str, &str)] = &[
     ("slash", include_str!("../assets/icons/slash.svg")),
     ("square", include_str!("../assets/icons/square.svg")),
     ("square-pen", include_str!("../assets/icons/square-pen.svg")),
+    (
+        "strikethrough",
+        include_str!("../assets/icons/strikethrough.svg"),
+    ),
     ("trash-2", include_str!("../assets/icons/trash-2.svg")),
     ("type", include_str!("../assets/icons/type.svg")),
+    ("underline", include_str!("../assets/icons/underline.svg")),
     ("undo-2", include_str!("../assets/icons/undo-2.svg")),
     ("x", include_str!("../assets/icons/x.svg")),
 ];

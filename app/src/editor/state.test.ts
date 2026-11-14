@@ -15,6 +15,7 @@ const settings: EditorSettings = {
   redact: "frosted",
   undo_limit: 100,
   shortcuts: {},
+  font_family: "",
 };
 
 describe("editor state", () => {

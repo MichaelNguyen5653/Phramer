@@ -40,6 +40,9 @@ describe("the wasm engine", () => {
       const engine = await loadEngine();
       const session = engine.session(fixture.width, fixture.height, bytes(fixture.base), false);
       session.addFont(fixture.font_family, bytes(fixture.font));
+      // The pinned checksums are the library's default, with no made-up
+      // bold or italic; a session starts with them on, as the overlay draws
+      expect(session.call({ op: "set_synthetic_styles", on: false })).toBe(false);
       for (const edit of document.edits) session.apply(edit);
       const [r, g, b, a] = fixture.workspace;
       const image = session.render([], ((r << 24) | (g << 16) | (b << 8) | a) >>> 0);
