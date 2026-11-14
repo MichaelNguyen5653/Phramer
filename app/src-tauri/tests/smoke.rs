@@ -650,6 +650,13 @@ fn daemon_tray_forwarding_and_spawn() {
             .expect("the spawned daemon did not open the overlay");
     close_overlay(spawned_pid, &overlay);
     std::thread::sleep(Duration::from_secs(2));
+    // The editor pre-warmed for the capture is released once its build
+    // finishes; on a slow machine (Windows Sandbox: ~4 s) that is after Esc.
+    wait_until(Duration::from_secs(20), || {
+        !windows_of(spawned_pid)
+            .iter()
+            .any(|w| w.class.contains("Tauri") || w.class.contains("WebView"))
+    });
     let tray = check_daemon(&exe, spawned_pid);
     stop(spawned_pid, &tray);
 

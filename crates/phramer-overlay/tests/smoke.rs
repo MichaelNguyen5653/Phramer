@@ -172,6 +172,9 @@ fn draw_a_rectangle_and_export() {
             other => panic!("no overlay window; run_overlay returned {:?}", other.err()),
         }
     };
+    // Let the move Windows sends at the real cursor arrive first: mid-drag it
+    // would end the posted drag
+    std::thread::sleep(Duration::from_millis(500));
     // Select, pick the rectangle tool (R), draw inside, accept (Enter)
     drag(hwnd, (100, 100), (600, 400));
     key(hwnd, u16::from(b'R'));
@@ -437,6 +440,8 @@ fn side_panel_and_colour_grab() {
             other => panic!("no overlay window; run_overlay returned {:?}", other.err()),
         }
     };
+    // As above: the cursor move on show must not land mid-drag
+    std::thread::sleep(Duration::from_millis(500));
     // A selection, then the panel (Space) and its Grab Color button
     drag(hwnd, (100, 100), (600, 400));
     key(hwnd, VK_SPACE);
