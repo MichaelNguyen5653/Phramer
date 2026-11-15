@@ -3,6 +3,7 @@
 // (docs/design/raycast-notes.md): tokens only, feedback at once, no Apply.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { formatLabel } from "../formats";
 import { ColorField, PaletteEditor } from "./ColorEditors";
 import { Keys, NumberField, Percent, Row, Select, Switch } from "./controls";
 import { Icon } from "./Icon";
@@ -171,7 +172,7 @@ export function SettingsApp({ initial, backend }: { initial: Snapshot; backend: 
           node: (
             <Select
               value={value as string}
-              options={view.extensions.map((extension) => [extension, extension.toUpperCase()] as const)}
+              options={view.extensions.map((extension) => [extension, formatLabel(extension)] as const)}
               label={def.label}
               onChange={(next) => save(def.key, next)}
             />

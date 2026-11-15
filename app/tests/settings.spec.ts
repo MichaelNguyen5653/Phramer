@@ -174,6 +174,22 @@ test.describe("settings", () => {
     expect((await calls(page, "settings_set")).some((args) => (args as { value: string }).value === "bad*name")).toBe(false);
   });
 
+  test("the file type offers the five formats and writes only when one is picked", async ({ page }) => {
+    await openSettings(page);
+    await page.getByTestId("nav-saving").click();
+    const type = page.getByTestId("row-saveAsFileExtension").getByRole("combobox", { name: "File type" });
+    await expect(type.locator("option")).toHaveText(["PNG", "JPEG", "BMP", "WebP", "PDF"]);
+    await expect(type).toHaveValue("png");
+    // Shown, not written: a stored type of 15.0.0's reaches the page as PNG
+    expect(await calls(page, "settings_set")).toEqual([]);
+    await type.selectOption({ label: "PDF" });
+    await expect.poll(() => calls(page, "settings_set")).toEqual([{ key: "saveAsFileExtension", value: "pdf" }]);
+    await expect(page.getByTestId("pattern-preview")).toContainText("2026-11-13_09-41.pdf");
+    await type.selectOption({ label: "WebP" });
+    await expect.poll(async () => (await calls(page, "settings_set")).at(-1)).toEqual({ key: "saveAsFileExtension", value: "webp" });
+    await expect(page.getByTestId("row-saveAsFileExtension")).toHaveScreenshot("settings-file-type.png");
+  });
+
   test("palette colours change live and are saved when the gesture ends", async ({ page }) => {
     await openSettings(page);
     await page.getByTestId("nav-appearance").click();

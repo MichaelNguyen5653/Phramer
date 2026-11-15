@@ -3,7 +3,9 @@
 // `window.__calls` for the tests to read. Events the daemon sends are
 // raised with `window.__emit`; `__addImage` gives the window another image
 // (Open in Editor while it is open) and `__setShortcut` changes a key as
-// the settings window would.
+// the settings window would. The Export as choice is kept in session
+// storage, so a reload (the next session) reads it back as the settings
+// file would.
 
 export interface MockCall {
   cmd: string;
@@ -83,6 +85,7 @@ export function installTauriMock(options: MockOptions = {}): void {
       TYPE_SHAPE: "", TYPE_CIRCLECOUNT: "", TYPE_PIN: "", TYPE_SIZEINCREASE: "", TYPE_SIZEDECREASE: "",
     } as Record<string, string>,
     font_family: "",
+    export_format: sessionStorage.getItem("mock-export-format") ?? "png",
   };
   window.__calls = [];
   let callbacks = 0;
@@ -124,6 +127,14 @@ export function installTauriMock(options: MockOptions = {}): void {
         }
         case "editor_settings":
           return JSON.parse(JSON.stringify(settings));
+        case "editor_set": {
+          const change = (args as { change: { key: string; format?: string } }).change;
+          if (change.key === "export_format" && change.format) {
+            settings.export_format = change.format;
+            sessionStorage.setItem("mock-export-format", change.format);
+          }
+          return null;
+        }
         case "editor_empty_state":
           return { capture_hotkey: "Meta+Shift+x", print_screen: true, auto_open_in_editor: false, editor_key: "E" };
         case "editor_font_families":
@@ -132,7 +143,7 @@ export function installTauriMock(options: MockOptions = {}): void {
           return new ArrayBuffer(4);
         case "editor_export":
           return options?.headers?.["x-action"] === "save_all"
-            ? [{ text: `Capture saved as C:\\Pictures\\Phramer set\\${options.headers["x-number"]} - ${decodeURIComponent(options.headers["x-name"] ?? "")}.png`, error: false }]
+            ? [{ text: `Capture saved as C:\\Pictures\\Phramer set\\${options.headers["x-number"]} - ${decodeURIComponent(options.headers["x-name"] ?? "")}.${options.headers["x-format"] ?? "png"}`, error: false }]
             : [{ text: "Capture saved to clipboard.", error: false }];
         case "editor_save_all_begin":
           return "C:\\Pictures\\Phramer set";

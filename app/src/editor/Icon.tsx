@@ -7,6 +7,7 @@ import {
   ArrowUpRight,
   Bold,
   Check,
+  ChevronDown,
   Circle,
   Contrast,
   Copy,
@@ -100,6 +101,7 @@ export const ICONS: Record<string, LucideIcon> = {
   search: Search,
   "grid-2x2": Grid2x2,
   "image-plus": ImagePlus,
+  "chevron-down": ChevronDown,
 };
 
 export function Icon({ name }: { name: string }) {

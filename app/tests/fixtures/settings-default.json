@@ -82,8 +82,9 @@
   "extensions": [
     "png",
     "jpg",
-    "jpeg",
-    "bmp"
+    "bmp",
+    "webp",
+    "pdf"
   ],
   "file": "C:\\Users\\you\\AppData\\Roaming\\phramer\\phramer.ini",
   "hotkey_failures": [],

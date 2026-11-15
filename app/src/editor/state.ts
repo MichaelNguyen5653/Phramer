@@ -26,6 +26,9 @@ export interface EditorSettings {
   shortcuts: Record<string, string>;
   /** `fontFamily`; empty: the bundled font. */
   font_family: string;
+  /** `Editor/exportFormat`: the Export as choice, what a new image is
+   * saved as (`png`, `jpg`, `bmp`, `webp` or `pdf`). */
+  export_format: string;
 }
 
 export interface Picker {

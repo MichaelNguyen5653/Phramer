@@ -67,6 +67,7 @@ fn example_file_values_load() {
     assert_eq!(settings.draw_color(), Color::rgb(0xff, 0x00, 0x00));
     assert!(!settings.save_path_fixed());
     assert_eq!(settings.save_as_file_extension(), "png");
+    assert_eq!(settings.export_format(), "png");
     assert_eq!(settings.ui_language(), "auto");
     assert_eq!(settings.ignore_update_to_version(), "");
     assert_eq!(settings.filename_pattern(), "%F_%H-%M");

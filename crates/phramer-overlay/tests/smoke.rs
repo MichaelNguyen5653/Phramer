@@ -1,8 +1,9 @@
 //! A live smoke test of the overlay windows: opens the overlay on the
 //! primary monitor, draws a rectangle with posted mouse and key messages,
-//! accepts, and exports to a PNG. Ignored by default (it shows a fullscreen
-//! window); skipped when the session is locked, when the screen cannot be
-//! grabbed and nothing could be shown anyway.
+//! accepts, and exports to a PNG, then to each format a save can be given.
+//! Ignored by default (it shows a fullscreen window); skipped when the
+//! session is locked, when the screen cannot be grabbed and nothing could
+//! be shown anyway.
 //!
 //! ```text
 //! cargo test -p phramer-overlay --test smoke -- --ignored --nocapture
@@ -16,9 +17,9 @@ use std::time::{Duration, Instant};
 use phramer_capture::{LocalRect, LogicalRect, enumerate_monitors};
 use phramer_core::config::Settings;
 use phramer_overlay::{
-    BUNDLED_FONT, CaptureTasks, CapturedImage, ExportAction, ExportContext, Handoff, LocalTime,
-    Outcome, OverlayConfig, OverlayError, OverlaySession, SaveTarget, Theme, export, run_overlay,
-    side_panel_layout,
+    BUNDLED_FONT, CaptureTasks, CapturedImage, ExportAction, ExportContext, Handoff, ImageFormat,
+    LocalTime, Outcome, OverlayConfig, OverlayError, OverlaySession, SaveTarget, Theme, export,
+    run_overlay, side_panel_layout,
 };
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::StationsAndDesktops::{
@@ -228,6 +229,7 @@ fn draw_a_rectangle_and_export() {
         time: &time,
         handoff: &mut handoff,
         name: None,
+        format: None,
     };
     let report = export(
         &image,
@@ -242,8 +244,111 @@ fn draw_a_rectangle_and_export() {
     assert_eq!(report.saved.as_deref(), Some(file.as_path()), "{report:?}");
     let bytes = std::fs::read(&file).expect("saved png");
     assert_eq!(&bytes[1..4], b"PNG");
+    save_in_each_format(&image, geometry, &dir, (200, 150));
     std::fs::remove_dir_all(&dir).expect("temp folder removed");
     println!("drew, accepted and saved {}x{}", image.width, image.height);
+}
+
+/// The capture saved as each format a save can be given (the editor's
+/// Export as), read back: the pixel at `at` is the rectangle's red, exactly
+/// but in JPEG; the PDF is one page with the image at full size.
+fn save_in_each_format(
+    image: &CapturedImage,
+    geometry: phramer_capture::PhysicalRect,
+    dir: &Path,
+    at: (u32, u32),
+) {
+    let settings = Settings::default();
+    let time = LocalTime::now();
+    let index = ((at.1 * image.width + at.0) * 3) as usize;
+    for format in [
+        ImageFormat::Png,
+        ImageFormat::Jpeg,
+        ImageFormat::Bmp,
+        ImageFormat::WebP,
+        ImageFormat::Pdf,
+    ] {
+        let mut handoff = NoClipboard;
+        let mut context = ExportContext {
+            settings: &settings,
+            time: &time,
+            handoff: &mut handoff,
+            name: Some("each"),
+            format: Some(format),
+        };
+        let report = export(
+            image,
+            geometry,
+            ExportAction::Accept,
+            &CaptureTasks {
+                save: Some(SaveTarget::Path(dir.to_owned())),
+                ..CaptureTasks::default()
+            },
+            &mut context,
+        );
+        let file = dir.join(format!("each.{}", format.extension()));
+        assert_eq!(report.saved.as_deref(), Some(file.as_path()), "{report:?}");
+        let bytes = std::fs::read(&file).expect("saved");
+        let (size, rgb) = match format {
+            ImageFormat::Png => {
+                let decoder = png::Decoder::new(std::io::Cursor::new(&bytes));
+                let mut reader = decoder.read_info().expect("png");
+                let mut rgba = vec![0; reader.output_buffer_size().expect("size")];
+                let info = reader.next_frame(&mut rgba).expect("png frame");
+                let rgb = rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[0], p[1], p[2]]);
+                ((info.width, info.height), rgb.collect::<Vec<u8>>())
+            }
+            ImageFormat::Jpeg => {
+                let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(&bytes));
+                let rgb = decoder.decode().expect("jpeg");
+                let info = decoder.info().expect("jpeg info");
+                ((u32::from(info.width), u32::from(info.height)), rgb)
+            }
+            ImageFormat::Bmp => {
+                let offset = u32::from_le_bytes(bytes[10..14].try_into().expect("offset")) as usize;
+                let rows = bytes[offset..].chunks_exact(image.width as usize * 4).rev();
+                let rgb = rows.flat_map(|row| {
+                    row.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .flat_map(|p| [p[2], p[1], p[0]])
+                });
+                ((image.width, image.height), rgb.collect())
+            }
+            ImageFormat::WebP => {
+                let mut decoder =
+                    image_webp::WebPDecoder::new(std::io::Cursor::new(&bytes)).expect("webp");
+                let mut rgb = vec![0; decoder.output_buffer_size().expect("size")];
+                decoder.read_image(&mut rgb).expect("webp image");
+                (decoder.dimensions(), rgb)
+            }
+            ImageFormat::Pdf => {
+                let document = lopdf::Document::load_mem(&bytes).expect("pdf");
+                let pages = document.get_pages();
+                assert_eq!(pages.len(), 1);
+                let images = document.get_page_images(pages[&1]).expect("images");
+                assert_eq!(images.len(), 1);
+                let stream = document
+                    .get_object(images[0].id)
+                    .and_then(lopdf::Object::as_stream)
+                    .expect("image stream");
+                let size = (images[0].width as u32, images[0].height as u32);
+                (size, stream.decompressed_content().expect("pixels"))
+            }
+        };
+        assert_eq!(size, (image.width, image.height), "{format:?}");
+        let red = &rgb[index..index + 3];
+        if format == ImageFormat::Jpeg {
+            assert!(red[0] > 200 && red[1] < 60 && red[2] < 60, "JPEG: {red:?}");
+        } else {
+            assert_eq!(red, [255, 0, 0], "{format:?}");
+        }
+        println!("saved and read back {}", file.display());
+    }
 }
 
 /// The daemon's log, as far as the overlay writes it.

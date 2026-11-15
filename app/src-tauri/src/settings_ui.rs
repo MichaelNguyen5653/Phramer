@@ -33,9 +33,10 @@ const WIDTH: f64 = 880.0;
 const HEIGHT: f64 = 620.0;
 const MIN_WIDTH: f64 = 680.0;
 const MIN_HEIGHT: f64 = 480.0;
-/// The formats a capture can be saved as (`ImageFormat::from_extension`).
-/// 15.0.0 listed every format Qt could write; this build writes these.
-const EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "bmp"];
+/// The formats a capture can be saved as (`ImageFormat::from_extension`),
+/// one entry each. 15.0.0 listed every format Qt could write; this build
+/// writes these.
+const EXTENSIONS: [&str; 5] = ["png", "jpg", "bmp", "webp", "pdf"];
 /// An imported file larger than this is not a settings file.
 const IMPORT_LIMIT: usize = 1 << 20;
 
@@ -172,15 +173,9 @@ fn read(settings: &Settings, key: &str) -> Option<Value> {
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default()
         ),
-        // None stored saves PNG, the same as `png`
-        "saveAsFileExtension" => {
-            let extension = settings.save_as_file_extension();
-            json!(if extension.is_empty() {
-                "png".to_owned()
-            } else {
-                extension
-            })
-        }
+        // What saves are written as: none stored, or a format of 15.0.0's
+        // this build cannot write, saves PNG; `jpeg` is the JPEG entry
+        "saveAsFileExtension" => json!(settings.save_format()),
         "filenamePattern" => json!(settings.filename_pattern()),
         "uiLanguage" => json!(settings.ui_language()),
         "uiColor" => json!(hex(settings.ui_color())),
@@ -245,12 +240,9 @@ fn write(settings: &mut Settings, key: &str, value: &Value) -> Result<(), String
         }
         "saveAsFileExtension" => {
             let extension = text()?.trim_start_matches('.').to_ascii_lowercase();
-            if !EXTENSIONS.contains(&extension.as_str()) {
-                return Err(format!("Phramer cannot save {extension} files"));
-            }
             settings
                 .set_save_as_file_extension(&extension)
-                .map_err(|error| config_error(&error))?;
+                .map_err(|_| format!("Phramer cannot save {extension} files"))?;
         }
         "filenamePattern" => {
             let pattern = text()?;
@@ -544,7 +536,7 @@ pub(crate) struct Snapshot {
     defaults: BTreeMap<&'static str, Value>,
     shortcuts: Vec<ShortcutRow>,
     toolbar: Vec<ToolbarChoice>,
-    extensions: [&'static str; 4],
+    extensions: [&'static str; 5],
     /// Windows opens its snipping tool on Print Screen.
     snipping_claims_print_screen: bool,
     snipping_tool_installed: bool,
@@ -1064,6 +1056,28 @@ mod tests {
     }
 
     #[test]
+    fn the_file_type_offers_five_formats_and_shows_a_legacy_one_as_png() {
+        assert_eq!(EXTENSIONS, ["png", "jpg", "bmp", "webp", "pdf"]);
+        // 15.0.0 could write TIFF: shown as what it saves as, written only
+        // once another type is picked
+        let original = "[General]\r\nsaveAsFileExtension=tif\r\n";
+        let mut current = Settings::parse(original.as_bytes());
+        assert_eq!(read(&current, "saveAsFileExtension"), Some(json!("png")));
+        assert_eq!(defaults(&current)["saveAsFileExtension"], json!("png"));
+        assert_eq!(String::from_utf8(current.to_bytes()).unwrap(), original);
+        write(&mut current, "saveAsFileExtension", &json!("webp")).unwrap();
+        assert_eq!(read(&current, "saveAsFileExtension"), Some(json!("webp")));
+        // `jpeg` stays a valid stored value; it is the JPEG entry
+        let jpeg = Settings::parse(b"[General]\r\nsaveAsFileExtension=.jpeg\r\n");
+        assert_eq!(read(&jpeg, "saveAsFileExtension"), Some(json!("jpg")));
+        for format in EXTENSIONS {
+            let mut each = Settings::default();
+            write(&mut each, "saveAsFileExtension", &json!(format)).unwrap();
+            assert_eq!(read(&each, "saveAsFileExtension"), Some(json!(format)));
+        }
+    }
+
+    #[test]
     fn refused_values_write_nothing() {
         let mut current = Settings::default();
         for (key, value) in [
@@ -1071,7 +1085,7 @@ mod tests {
             ("jpegQuality", json!(-1)),
             ("showHelp", json!("yes")),
             ("captureRegionMode", json!(3)),
-            ("saveAsFileExtension", json!("webp")),
+            ("saveAsFileExtension", json!("tif")),
             ("savePath", json!("C:\\no\\such\\folder\\anywhere")),
             ("filenamePattern", json!("  ")),
             ("uiColor", json!("red")),

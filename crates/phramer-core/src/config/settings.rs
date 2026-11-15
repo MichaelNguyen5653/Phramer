@@ -24,11 +24,21 @@ const FILENAME_PATTERN_DEFAULT: &str = "%F_%H-%M";
 const USER_COLORS_RANGE: std::ops::RangeInclusive<usize> = 3..=17;
 
 /// `QImageWriter::supportedImageFormats()` of the shipped Windows build
-/// (Qt 6 with the `qtimageformats` module).
+/// (Qt 6 with the `qtimageformats` module): what 15.0.0 accepted in
+/// `saveAsFileExtension`. Such a value still reads (and passes the check);
+/// the formats among them this build cannot write are saved as PNG.
 const SAVE_EXTENSIONS: &[&str] = &[
     "bmp", "cur", "icns", "ico", "jpeg", "jpg", "pbm", "pgm", "png", "ppm", "tif", "tiff", "wbmp",
     "webp", "xbm", "xpm",
 ];
+
+/// The formats this build writes: the only values `saveAsFileExtension`
+/// and `Editor/exportFormat` are set to.
+const WRITABLE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "webp", "pdf"];
+
+/// The editor's remembered Export as format. A key of 16.0 in a section
+/// 15.0.0's `config --check` does not look at.
+const EXPORT_FORMAT_KEY: &str = "Editor/exportFormat";
 
 /// `ColorPickerWidget::defaultSmallColorPalette`; `None` is the picker.
 const SMALL_PALETTE: &[Option<Color>] = &[
@@ -394,20 +404,50 @@ impl Settings {
     }
 
     /// The `saveAsFileExtension` setting without its leading dot; empty when
-    /// unset or not a writable image format.
+    /// unset or not an image format. A format 15.0.0 wrote and this build
+    /// cannot (`tif`) is returned as stored; the export saves it as PNG.
     pub fn save_as_file_extension(&self) -> String {
         self.stored_text("saveAsFileExtension")
             .and_then(|text| checked_extension(&text))
             .unwrap_or_default()
     }
 
-    /// Sets `saveAsFileExtension` (`png` or `.png`); fails for a format the
-    /// application cannot write.
+    /// Sets `saveAsFileExtension` (`png` or `.png`); fails for a format this
+    /// build cannot write (PNG, JPEG, BMP, WebP and PDF are written).
     pub fn set_save_as_file_extension(&mut self, value: &str) -> Result<(), ConfigError> {
         let extension =
-            checked_extension(value).ok_or_else(|| invalid("saveAsFileExtension", value))?;
+            writable_extension(value).ok_or_else(|| invalid("saveAsFileExtension", value))?;
         if extension != self.save_as_file_extension() {
             self.write_text("saveAsFileExtension", value);
+        }
+        Ok(())
+    }
+
+    /// What saves are written as: `saveAsFileExtension` as one of `png`,
+    /// `jpg`, `bmp`, `webp` and `pdf`; `png` when it is unset or a format
+    /// this build cannot write.
+    pub fn save_format(&self) -> String {
+        format_of(&self.save_as_file_extension()).unwrap_or_else(|| "png".to_owned())
+    }
+
+    /// The editor's remembered Export as format (`Editor/exportFormat`),
+    /// one of `png`, `jpg`, `bmp`, `webp` and `pdf`; [`Self::save_format`]
+    /// until one is chosen.
+    pub fn export_format(&self) -> String {
+        self.stored_text(EXPORT_FORMAT_KEY)
+            .and_then(|text| format_of(&text))
+            .unwrap_or_else(|| self.save_format())
+    }
+
+    /// Remembers the editor's Export as format (`webp` or `.webp`); fails
+    /// for a format this build cannot write. A choice is written even when
+    /// it matches the default, so it stays when `saveAsFileExtension`
+    /// changes.
+    pub fn set_export_format(&mut self, value: &str) -> Result<(), ConfigError> {
+        let format = format_of(value).ok_or_else(|| invalid(EXPORT_FORMAT_KEY, value))?;
+        let unchanged = self.doc.get(EXPORT_FORMAT_KEY).is_some() && format == self.export_format();
+        if !unchanged {
+            self.write_text(EXPORT_FORMAT_KEY, &format);
         }
         Ok(())
     }
@@ -649,13 +689,29 @@ fn default_shortcut(action: &str) -> Option<&'static str> {
         .map(|&(_, default)| default)
 }
 
-/// `SaveFileExtension`: the extension without its dot, if it is a format the
-/// application can write.
+/// `SaveFileExtension`: the extension without its dot, if it is a format
+/// 15.0.0 could write or one this build writes (PDF is new).
 pub(super) fn checked_extension(text: &str) -> Option<String> {
     let extension = text.strip_prefix('.').unwrap_or(text);
-    SAVE_EXTENSIONS
+    (SAVE_EXTENSIONS.contains(&extension) || WRITABLE_EXTENSIONS.contains(&extension))
+        .then(|| extension.to_owned())
+}
+
+/// The extension without its dot, if it is a format this build writes.
+fn writable_extension(text: &str) -> Option<String> {
+    let extension = text.strip_prefix('.').unwrap_or(text);
+    WRITABLE_EXTENSIONS
         .contains(&extension)
         .then(|| extension.to_owned())
+}
+
+/// A format this build writes, by the name the editor and the settings
+/// window use for it: its extension, `jpg` for JPEG.
+fn format_of(text: &str) -> Option<String> {
+    writable_extension(text).map(|extension| match extension.as_str() {
+        "jpeg" => "jpg".to_owned(),
+        _ => extension,
+    })
 }
 
 /// One `userColors` entry: `Some(None)` is the picker, `None` is invalid.
@@ -834,6 +890,78 @@ mod tests {
             Err(ConfigError::ReservedShortcut(_))
         ));
         assert_eq!(text(&settings), "");
+    }
+
+    #[test]
+    fn only_the_five_formats_can_be_chosen() {
+        let mut settings = Settings::default();
+        for value in ["png", "jpg", "jpeg", "bmp", "webp", "pdf", ".pdf", ".webp"] {
+            settings
+                .set_save_as_file_extension(value)
+                .unwrap_or_else(|error| panic!("{value}: {error}"));
+            assert_eq!(
+                settings.save_as_file_extension(),
+                value.trim_start_matches('.')
+            );
+        }
+        let before = text(&settings);
+        for value in ["tif", ".tiff", "gif", "ico", "xpm", "exe", "PNG", ""] {
+            assert!(
+                matches!(
+                    settings.set_save_as_file_extension(value),
+                    Err(ConfigError::InvalidValue { .. })
+                ),
+                "{value}"
+            );
+        }
+        assert_eq!(text(&settings), before);
+        settings
+            .set_save_as_file_extension("jpeg")
+            .expect("writable");
+        assert_eq!(settings.save_format(), "jpg");
+    }
+
+    #[test]
+    fn a_format_15_0_0_wrote_reads_as_stored_and_saves_as_png() {
+        let original = "[General]\r\nsaveAsFileExtension=tif\r\nshowHelp=false\r\n";
+        let settings = Settings::parse(original.as_bytes());
+        assert_eq!(settings.save_as_file_extension(), "tif");
+        assert_eq!(settings.save_format(), "png");
+        assert_eq!(settings.export_format(), "png");
+        // Reading changes nothing in the file
+        assert_eq!(text(&settings), original);
+        assert!(settings.errors().is_empty());
+    }
+
+    #[test]
+    fn the_export_format_follows_the_save_format_until_chosen() {
+        let mut settings = Settings::parse(b"[General]\r\nsaveAsFileExtension=.pdf\r\n");
+        assert_eq!(settings.save_format(), "pdf");
+        assert_eq!(settings.export_format(), "pdf");
+        // Chosen: kept, even when it is what it read as already
+        settings.set_export_format("pdf").expect("writable");
+        settings
+            .set_save_as_file_extension("bmp")
+            .expect("writable");
+        assert_eq!(settings.export_format(), "pdf");
+        settings.set_export_format(".jpeg").expect("writable");
+        assert_eq!(settings.export_format(), "jpg");
+        assert!(matches!(
+            settings.set_export_format("tif"),
+            Err(ConfigError::InvalidValue { .. })
+        ));
+        let reread = Settings::parse(&settings.to_bytes());
+        assert_eq!(reread.export_format(), "jpg");
+        assert_eq!(reread.save_format(), "bmp");
+        assert_eq!(
+            text(&reread),
+            "[General]\r\nsaveAsFileExtension=bmp\r\n\r\n[Editor]\r\nexportFormat=jpg\r\n"
+        );
+        // A section 15.0.0's check skips; PDF passes it too
+        assert!(reread.errors().is_empty(), "{:?}", reread.errors());
+        // A value that is not a format reads as the default
+        let odd = Settings::parse(b"[Editor]\r\nexportFormat=tif\r\n");
+        assert_eq!(odd.export_format(), "png");
     }
 
     #[test]

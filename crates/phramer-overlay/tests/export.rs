@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use phramer_capture::{LogicalPoint, Monitor, MonitorId, PhysicalRect};
 use phramer_core::config::Settings;
 use phramer_overlay::{
-    CaptureTasks, CapturedImage, Effect, Event, ExportAction, ExportContext, Handoff, Key,
-    Modifiers, Outcome, OverlayConfig, OverlayError, OverlayState, PointerButton, SaveTarget,
+    CaptureTasks, CapturedImage, Effect, Event, ExportAction, ExportContext, Handoff, ImageFormat,
+    Key, Modifiers, Outcome, OverlayConfig, OverlayError, OverlayState, PointerButton, SaveTarget,
     TimeFormat, export, screenshot_path,
 };
 
@@ -113,6 +113,7 @@ fn run(
         time: &Fixed,
         handoff,
         name: None,
+        format: None,
     };
     export(
         image,
@@ -226,6 +227,7 @@ fn a_given_name_replaces_the_pattern_and_keeps_its_dots() {
             time: &Fixed,
             handoff: &mut handoff,
             name: Some("v1.2 notes"),
+            format: None,
         };
         export(
             &image(4, 4),
@@ -433,11 +435,10 @@ fn accept_runs_the_request_tasks() {
 
 #[test]
 fn a_format_this_build_cannot_write_is_saved_as_png() {
-    let folder = TempDir::new("webp");
-    let mut settings = settings_saving_to(&folder.0);
-    settings
-        .set_save_as_file_extension("webp")
-        .expect("webp was writable in 15.0.0");
+    let folder = TempDir::new("legacy");
+    // 15.0.0 could write TIFF; a file it left keeps saving, as PNG
+    let mut settings = Settings::parse(b"saveAsFileExtension=tif\n");
+    settings.set_save_path(&folder.0);
     run(
         &settings,
         &image(3, 2),
@@ -447,6 +448,77 @@ fn a_format_this_build_cannot_write_is_saved_as_png() {
     );
     assert_eq!(folder.files(), ["2026-11-11_20-26.png"]);
     assert_eq!(png_size(&folder.0.join("2026-11-11_20-26.png")), (3, 2));
+}
+
+#[test]
+fn webp_and_pdf_are_saved_as_configured() {
+    for (extension, signature) in [("webp", &b"RIFF"[..]), ("pdf", &b"%PDF"[..])] {
+        let folder = TempDir::new(extension);
+        let mut settings = settings_saving_to(&folder.0);
+        settings
+            .set_save_as_file_extension(extension)
+            .expect("a format this build writes");
+        run(
+            &settings,
+            &image(3, 2),
+            ExportAction::Save,
+            &CaptureTasks::default(),
+            &mut Recorded::default(),
+        );
+        let file = format!("2026-11-11_20-26.{extension}");
+        assert_eq!(folder.files(), std::slice::from_ref(&file));
+        let bytes = std::fs::read(folder.0.join(&file)).expect("saved");
+        assert!(bytes.starts_with(signature), "{file}");
+    }
+}
+
+#[test]
+fn a_format_given_with_the_name_wins_over_the_setting() {
+    let folder = TempDir::new("given-format");
+    let mut settings = settings_saving_to(&folder.0);
+    settings
+        .set_save_as_file_extension("jpg")
+        .expect("writable");
+    for format in [ImageFormat::Pdf, ImageFormat::WebP, ImageFormat::Png] {
+        let mut handoff = Recorded::default();
+        let mut context = ExportContext {
+            settings: &settings,
+            time: &Fixed,
+            handoff: &mut handoff,
+            name: Some("shot"),
+            format: Some(format),
+        };
+        export(
+            &image(4, 4),
+            PhysicalRect::new(0, 0, 4, 4),
+            ExportAction::Save,
+            &CaptureTasks::default(),
+            &mut context,
+        );
+    }
+    assert_eq!(folder.files(), ["shot.pdf", "shot.png", "shot.webp"]);
+    // A file picked by name gets the given format's extension
+    let picked = folder.0.join("picked.jpg");
+    let mut handoff = Recorded::default();
+    let mut context = ExportContext {
+        settings: &settings,
+        time: &Fixed,
+        handoff: &mut handoff,
+        name: None,
+        format: Some(ImageFormat::Bmp),
+    };
+    let tasks = CaptureTasks {
+        save: Some(SaveTarget::Path(picked)),
+        ..CaptureTasks::default()
+    };
+    export(
+        &image(4, 4),
+        PhysicalRect::new(0, 0, 4, 4),
+        ExportAction::Accept,
+        &tasks,
+        &mut context,
+    );
+    assert!(folder.files().contains(&"picked.bmp".to_owned()));
 }
 
 #[test]

@@ -27,7 +27,7 @@ use phramer_annotate::{ArrowHead, RedactStyle, ShapeStyle};
 use phramer_capture::PhysicalRect;
 use phramer_core::config::{ButtonType, Settings};
 use phramer_overlay::{
-    CapturedImage, ExportAction, ExportReport, SettingChange, ShapeKind, ToolSettings,
+    CapturedImage, ExportAction, ExportReport, ImageFormat, SettingChange, ShapeKind, ToolSettings,
 };
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -770,6 +770,9 @@ pub(crate) struct EditorSettings {
     shortcuts: HashMap<&'static str, String>,
     /// `fontFamily`, the text tool's family; empty for the bundled font.
     font_family: String,
+    /// `Editor/exportFormat`: what a new image is saved as (`png`, `jpg`,
+    /// `bmp`, `webp` or `pdf`).
+    export_format: String,
 }
 
 fn editor_settings_of(settings: &Settings) -> EditorSettings {
@@ -799,6 +802,7 @@ fn editor_settings_of(settings: &Settings) -> EditorSettings {
             .map(|name| (*name, settings.shortcut(name).unwrap_or_default()))
             .collect(),
         font_family: settings.font_family(),
+        export_format: settings.export_format(),
     }
 }
 
@@ -891,7 +895,7 @@ pub(crate) async fn editor_font_faces(family: String) -> Result<Response, String
 }
 
 /// A choice made in the editor, saved to the existing key the overlay
-/// uses for it. The editor has no keys of its own.
+/// uses for it. Export as is the editor's own key (`Editor/exportFormat`).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "key", rename_all = "snake_case")]
 pub(crate) enum EditorChange {
@@ -903,6 +907,7 @@ pub(crate) enum EditorChange {
     HighlightOutline { width: u32 },
     Redact { style: RedactStyle },
     FontFamily { family: String },
+    ExportFormat { format: String },
 }
 
 fn apply_change(settings: &mut Settings, change: EditorChange) -> Result<(), String> {
@@ -949,6 +954,7 @@ fn apply_change(settings: &mut Settings, change: EditorChange) -> Result<(), Str
             settings.set_font_family(&family);
             Ok(())
         }
+        EditorChange::ExportFormat { format } => settings.set_export_format(&format).map_err(error),
     }
 }
 
@@ -1037,8 +1043,9 @@ fn percent_decode(text: &str) -> Option<String> {
 
 /// The editor's image, rendered by the page with its annotations, goes
 /// where the action says. The body is straight RGBA8; headers
-/// `x-action`, `x-width` and `x-height` describe it, and `x-name` is what
-/// Save, Save As and Save All call the file.
+/// `x-action`, `x-width` and `x-height` describe it, `x-name` is what
+/// Save, Save As and Save All call the file and `x-format` (an extension)
+/// what they write it as. Copy and Copy as File keep the settings' format.
 #[tauri::command]
 pub(crate) async fn editor_export<R: Runtime>(
     app: AppHandle<R>,
@@ -1053,6 +1060,7 @@ pub(crate) async fn editor_export<R: Runtime>(
     };
     let (width, height) = (number("x-width"), number("x-height"));
     let name = header(&request, "x-name").and_then(image_name);
+    let format = header(&request, "x-format").and_then(ImageFormat::from_extension);
     let InvokeBody::Raw(rgba) = request.body() else {
         return Err("the image must be sent as raw bytes".to_owned());
     };
@@ -1078,7 +1086,7 @@ pub(crate) async fn editor_export<R: Runtime>(
             geometry,
             ExportAction::Copy,
             Tasks::default(),
-            None,
+            (None, None),
         ),
         "copy_file" => export(
             &settings,
@@ -1086,7 +1094,7 @@ pub(crate) async fn editor_export<R: Runtime>(
             geometry,
             ExportAction::CopyFile,
             Tasks::default(),
-            None,
+            (None, None),
         ),
         "save" => export(
             &settings,
@@ -1094,12 +1102,15 @@ pub(crate) async fn editor_export<R: Runtime>(
             geometry,
             ExportAction::Save,
             Tasks::default(),
-            name.as_deref(),
+            (name.as_deref(), format),
         ),
         "save_as" => {
-            let Some(path) = ask_save_path(&app, &window, &settings, name.as_deref()) else {
+            let format = format.unwrap_or(ImageFormat::Png);
+            let Some(path) = ask_save_path(&app, &window, &settings, name.as_deref(), format)
+            else {
                 return Ok(Vec::new());
             };
+            let format = picked_format(&path, format);
             let tasks = Tasks {
                 save: Some(SaveTo::Path(path)),
                 ..Tasks::default()
@@ -1110,7 +1121,7 @@ pub(crate) async fn editor_export<R: Runtime>(
                 geometry,
                 ExportAction::Accept,
                 tasks,
-                None,
+                (None, Some(format)),
             )
         }
         "pin" => {
@@ -1128,8 +1139,8 @@ pub(crate) async fn editor_export<R: Runtime>(
                 &settings,
                 &image,
                 geometry,
-                number("x-number"),
-                name.as_deref(),
+                (number("x-number"), name.as_deref()),
+                format,
             )?;
             return Ok(report.notices.iter().map(Notice::from).collect());
         }
@@ -1216,16 +1227,17 @@ fn set_folder(parent: &Path, time: &dyn phramer_overlay::TimeFormat) -> std::io:
     }
 }
 
-/// One image of Save All, as `<number> - <name>` in the set's folder; with
-/// no `name` that can name a file, the set's from the pattern.
+/// One image of Save All, as `<number> - <name>` in the set's folder, in
+/// its `format`; with no `name` that can name a file, the set's from the
+/// pattern.
 fn save_one<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
     settings: &Settings,
     image: &CapturedImage,
     geometry: PhysicalRect,
-    number: u32,
-    name: Option<&str>,
+    (number, name): (u32, Option<&str>),
+    format: Option<ImageFormat>,
 ) -> Result<ExportReport, String> {
     let editors = app.state::<Editors>();
     let (folder, fallback) = {
@@ -1244,8 +1256,8 @@ fn save_one<R: Runtime>(
         image,
         geometry,
         &folder,
-        number,
-        name.unwrap_or(&fallback),
+        (number, name.unwrap_or(&fallback)),
+        format,
     );
     if let Ok(mut windows) = editors.windows.lock()
         && let Some(batch) = windows
@@ -1263,15 +1275,16 @@ fn save_one<R: Runtime>(
     Ok(report)
 }
 
-/// Writes `<number> - <name>` into the set's `folder`, with the save
-/// extension and never replacing a file.
+/// Writes `<number> - <name>` into the set's `folder` as `format` (the
+/// image's own; the save extension without one), never replacing a file.
+/// A PDF is one file per image, as every format is.
 fn save_numbered(
     settings: &Settings,
     image: &CapturedImage,
     geometry: PhysicalRect,
     folder: &Path,
-    number: u32,
-    name: &str,
+    (number, name): (u32, &str),
+    format: Option<ImageFormat>,
 ) -> ExportReport {
     let tasks = Tasks {
         save: Some(SaveTo::Path(folder.to_owned())),
@@ -1284,7 +1297,7 @@ fn save_numbered(
         geometry,
         ExportAction::Accept,
         tasks,
-        Some(&file),
+        (Some(&file), format),
     )
 }
 
@@ -1337,29 +1350,59 @@ pub(crate) fn editor_save_all_end<R: Runtime>(
 }
 
 /// `name`: what a file saved into a folder is called, instead of the
-/// filename pattern's.
+/// filename pattern's; `format`: what a save writes, instead of the save
+/// extension.
 fn export(
     settings: &Settings,
     image: &CapturedImage,
     geometry: PhysicalRect,
     action: ExportAction,
     tasks: Tasks,
-    name: Option<&str>,
+    (name, format): (Option<&str>, Option<ImageFormat>),
 ) -> ExportReport {
-    match capture::run_export_named(settings, image, geometry, action, &tasks, name) {
+    match capture::run_export_named(settings, image, geometry, action, &tasks, name, format) {
         capture::Delivery::Exported(report) => report,
         _ => ExportReport::default(),
     }
 }
 
+/// The formats Save As offers, each with its extensions, `format`'s first
+/// (the dialog starts on the first).
+fn save_filters(format: ImageFormat) -> Vec<(&'static str, &'static [&'static str])> {
+    let all: [(ImageFormat, &'static str, &'static [&'static str]); 5] = [
+        (ImageFormat::Png, "PNG image", &["png"]),
+        (ImageFormat::Jpeg, "JPEG image", &["jpg", "jpeg"]),
+        (ImageFormat::Bmp, "BMP image", &["bmp"]),
+        (ImageFormat::WebP, "WebP image", &["webp"]),
+        (ImageFormat::Pdf, "PDF document", &["pdf"]),
+    ];
+    let (first, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|(each, ..)| *each == format);
+    first
+        .into_iter()
+        .chain(rest)
+        .map(|(_, label, extensions)| (label, extensions))
+        .collect()
+}
+
+/// What Save As writes: the format of the extension picked in the dialog,
+/// or the image's own when it is not one Phramer writes (its extension is
+/// then replaced).
+fn picked_format(path: &Path, format: ImageFormat) -> ImageFormat {
+    path.extension()
+        .and_then(|extension| ImageFormat::from_extension(&extension.to_string_lossy()))
+        .unwrap_or(format)
+}
+
 /// Save As: the system's save dialog, in the save folder, with the image's
-/// `name` as the file name, or the filename pattern's without one. `None`
-/// when it is cancelled.
+/// `name` as the file name, or the filename pattern's without one, and the
+/// extension and filter of the image's `format`. `None` when it is
+/// cancelled.
 fn ask_save_path<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
     settings: &Settings,
     name: Option<&str>,
+    format: ImageFormat,
 ) -> Option<PathBuf> {
     use tauri_plugin_dialog::DialogExt;
     let name = name.map_or_else(
@@ -1371,22 +1414,15 @@ fn ask_save_path<R: Runtime>(
         },
         str::to_owned,
     );
-    let extension = settings.save_as_file_extension();
-    let extension = extension.trim_start_matches('.');
-    let extension = if extension.is_empty() {
-        "png"
-    } else {
-        extension
-    };
     let mut dialog = app
         .dialog()
         .file()
         .set_parent(window)
         .set_title("Save As")
-        .set_file_name(format!("{name}.{extension}"))
-        .add_filter("PNG image", &["png"])
-        .add_filter("JPEG image", &["jpg", "jpeg"])
-        .add_filter("BMP image", &["bmp"]);
+        .set_file_name(format!("{name}.{}", format.extension()));
+    for (label, extensions) in save_filters(format) {
+        dialog = dialog.add_filter(label, extensions);
+    }
     if let Some(folder) = settings.save_path() {
         dialog = dialog.set_directory(folder);
     }
@@ -1583,6 +1619,23 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(editor_settings_of(&current).export_format, "png");
+        apply_change(
+            &mut current,
+            EditorChange::ExportFormat {
+                format: "webp".into(),
+            },
+        )
+        .unwrap();
+        assert!(
+            apply_change(
+                &mut current,
+                EditorChange::ExportFormat {
+                    format: "tif".into(),
+                },
+            )
+            .is_err()
+        );
         assert!(
             apply_change(
                 &mut current,
@@ -1600,6 +1653,7 @@ mod tests {
         assert!(read.reverse_arrow);
         assert_eq!(read.redact, RedactStyle::Insecure);
         assert_eq!(read.font_family, "Cambria");
+        assert_eq!(read.export_format, "webp");
         assert!(
             read.shortcuts
                 .get("TYPE_PENCIL")
@@ -1613,6 +1667,8 @@ mod tests {
             "reverseArrow",
             "insecurePixelate",
             "fontFamily",
+            "[Editor]",
+            "exportFormat=webp",
         ] {
             assert!(text.contains(key), "{key} missing from {text}");
         }
@@ -1728,8 +1784,8 @@ mod tests {
                 &image,
                 PhysicalRect::new(0, 0, 2, 2),
                 &folder,
-                number,
-                name,
+                (number, name),
+                None,
             );
             assert!(report.saved.is_some(), "{report:?}");
         }
@@ -1739,8 +1795,8 @@ mod tests {
             &image,
             PhysicalRect::new(0, 0, 2, 2),
             &folder,
-            3,
-            "b",
+            (3, "b"),
+            None,
         );
         let mut files: Vec<String> = std::fs::read_dir(&folder)
             .unwrap()
@@ -1752,6 +1808,93 @@ mod tests {
             ["1 - c.png", "2 - a v1.2.png", "3 - b.png", "3 - b_1.png"]
         );
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn save_all_writes_each_image_in_its_own_format() {
+        let folder =
+            std::env::temp_dir().join(format!("phramer-editor-formats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        // The settings say JPEG; each image says otherwise
+        let mut settings = Settings::default();
+        settings.set_save_as_file_extension("jpg").unwrap();
+        let image = CapturedImage {
+            width: 3,
+            height: 2,
+            bgra: [10, 20, 30, 255].repeat(6),
+        };
+        let formats = [
+            ImageFormat::Png,
+            ImageFormat::Jpeg,
+            ImageFormat::Bmp,
+            ImageFormat::WebP,
+            ImageFormat::Pdf,
+            ImageFormat::Pdf,
+        ];
+        for (number, format) in (1..).zip(formats) {
+            let report = save_numbered(
+                &settings,
+                &image,
+                PhysicalRect::new(0, 0, 3, 2),
+                &folder,
+                (number, "shot"),
+                Some(format),
+            );
+            assert!(report.saved.is_some(), "{report:?}");
+        }
+        let mut files: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+        // One PDF per image
+        assert_eq!(
+            files,
+            [
+                "1 - shot.png",
+                "2 - shot.jpg",
+                "3 - shot.bmp",
+                "4 - shot.webp",
+                "5 - shot.pdf",
+                "6 - shot.pdf"
+            ]
+        );
+        let signatures: [&[u8]; 6] = [b"\x89PNG", b"\xff\xd8", b"BM", b"RIFF", b"%PDF", b"%PDF"];
+        for (file, signature) in files.iter().zip(signatures) {
+            let bytes = std::fs::read(folder.join(file)).unwrap();
+            assert!(bytes.starts_with(signature), "{file}");
+        }
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn save_as_offers_the_images_format_first_and_writes_the_one_picked() {
+        let labels = |format| {
+            save_filters(format)
+                .into_iter()
+                .map(|(label, _)| label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(ImageFormat::Pdf),
+            [
+                "PDF document",
+                "PNG image",
+                "JPEG image",
+                "BMP image",
+                "WebP image"
+            ]
+        );
+        assert_eq!(labels(ImageFormat::Png)[0], "PNG image");
+        assert_eq!(save_filters(ImageFormat::Jpeg)[0].1, ["jpg", "jpeg"]);
+        let picked = |path: &str| picked_format(Path::new(path), ImageFormat::WebP);
+        assert_eq!(picked(r"C:\x\shot.webp"), ImageFormat::WebP);
+        assert_eq!(picked(r"C:\x\shot.JPEG"), ImageFormat::Jpeg);
+        assert_eq!(picked(r"C:\x\shot.pdf"), ImageFormat::Pdf);
+        // Not a format Phramer writes, or none: the image's own
+        assert_eq!(picked(r"C:\x\shot.tif"), ImageFormat::WebP);
+        assert_eq!(picked(r"C:\x\v1.2"), ImageFormat::WebP);
     }
 
     #[test]

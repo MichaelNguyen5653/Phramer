@@ -290,7 +290,7 @@ export const SETTINGS: readonly SettingDef[] = [
     key: "saveAsFileExtension",
     section: "saving",
     label: "File type",
-    keywords: "extension format png jpg",
+    keywords: "extension format png jpg jpeg bmp webp pdf",
     control: { kind: "extension" },
   },
   {

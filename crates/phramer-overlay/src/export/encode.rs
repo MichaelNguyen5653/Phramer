@@ -8,6 +8,10 @@ pub enum ImageFormat {
     Png,
     Jpeg,
     Bmp,
+    /// Lossless WebP.
+    WebP,
+    /// One page holding the image at 96 DPI, losslessly compressed.
+    Pdf,
 }
 
 impl ImageFormat {
@@ -18,7 +22,20 @@ impl ImageFormat {
             "png" => Some(Self::Png),
             "jpg" | "jpeg" => Some(Self::Jpeg),
             "bmp" => Some(Self::Bmp),
+            "webp" => Some(Self::WebP),
+            "pdf" => Some(Self::Pdf),
             _ => None,
+        }
+    }
+
+    /// The extension a file of this format gets (`jpg` for JPEG).
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Bmp => "bmp",
+            Self::WebP => "webp",
+            Self::Pdf => "pdf",
         }
     }
 }
@@ -59,6 +76,16 @@ impl CapturedImage {
         }
         rgba
     }
+
+    /// The image is opaque: RGB without the alpha bytes.
+    fn rgb(&self) -> Vec<u8> {
+        self.bgra
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|pixel| [pixel[2], pixel[1], pixel[0]])
+            .collect()
+    }
 }
 
 /// The image as a file of `format`. `jpeg_quality` is 0 to 100.
@@ -71,7 +98,114 @@ pub fn encode(
         ImageFormat::Png => encode_png(image),
         ImageFormat::Jpeg => encode_jpeg(image, jpeg_quality),
         ImageFormat::Bmp => Ok(encode_bmp(image)),
+        ImageFormat::WebP => encode_webp(image),
+        ImageFormat::Pdf => encode_pdf(image),
     }
+}
+
+/// Lossless WebP (VP8L). WebP holds at most 16384 pixels a side.
+fn encode_webp(image: &CapturedImage) -> Result<Vec<u8>, OverlayError> {
+    let mut bytes = Vec::new();
+    image_webp::WebPEncoder::new(&mut bytes)
+        .encode(
+            &image.rgb(),
+            image.width,
+            image.height,
+            image_webp::ColorType::Rgb8,
+        )
+        .map_err(|error| match error {
+            image_webp::EncodingError::InvalidDimensions => OverlayError::Encode(format!(
+                "{}x{} is too large for WebP",
+                image.width, image.height
+            )),
+            other => OverlayError::Encode(other.to_string()),
+        })?;
+    Ok(bytes)
+}
+
+/// `pixels` as PDF points at 96 DPI (0.75 pt each), written exactly:
+/// a quarter point is the finest step.
+fn points(pixels: u32) -> String {
+    let quarters = u64::from(pixels) * 3;
+    let whole = quarters / 4;
+    match quarters % 4 {
+        1 => format!("{whole}.25"),
+        2 => format!("{whole}.5"),
+        3 => format!("{whole}.75"),
+        _ => whole.to_string(),
+    }
+}
+
+/// A PDF of one page the size of the image at 96 DPI, which shows the image
+/// at full resolution: 8-bit RGB, Flate-compressed, so nothing is lost.
+///
+/// Written by hand: the document is always the same five objects, so a PDF
+/// library would add a dependency for what fits in this function.
+fn encode_pdf(image: &CapturedImage) -> Result<Vec<u8>, OverlayError> {
+    use std::io::Write as _;
+
+    let failed = |error: std::io::Error| OverlayError::Encode(error.to_string());
+    // Fast, as for PNG: the user waits for the save
+    let mut deflate = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    deflate.write_all(&image.rgb()).map_err(failed)?;
+    let pixels = deflate.finish().map_err(failed)?;
+    let (width, height) = (points(image.width), points(image.height));
+    let content = format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q\n");
+
+    // A binary comment after the header marks the file as binary
+    let mut pdf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut object = |pdf: &mut Vec<u8>, head: String, stream: Option<&[u8]>| {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{head}\n", offsets.len()).as_bytes());
+        if let Some(stream) = stream {
+            pdf.extend_from_slice(b"stream\n");
+            pdf.extend_from_slice(stream);
+            pdf.extend_from_slice(b"\nendstream\n");
+        }
+        pdf.extend_from_slice(b"endobj\n");
+    };
+    object(&mut pdf, "<< /Type /Catalog /Pages 2 0 R >>".into(), None);
+    object(
+        &mut pdf,
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        None,
+    );
+    object(
+        &mut pdf,
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+             /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        None,
+    );
+    object(
+        &mut pdf,
+        format!("<< /Length {} >>", content.len()),
+        Some(content.as_bytes()),
+    );
+    object(
+        &mut pdf,
+        format!(
+            "<< /Type /XObject /Subtype /Image /Width {} /Height {} \
+             /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>",
+            image.width,
+            image.height,
+            pixels.len()
+        ),
+        Some(&pixels),
+    );
+    let xref = pdf.len();
+    let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1);
+    for offset in &offsets {
+        table.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    table.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        offsets.len() + 1
+    ));
+    pdf.extend_from_slice(table.as_bytes());
+    Ok(pdf)
 }
 
 fn encode_png(image: &CapturedImage) -> Result<Vec<u8>, OverlayError> {
@@ -239,6 +373,169 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
         assert_eq!(&pixels[8..12], &[255, 0, 0, 255]);
+    }
+
+    /// 37x23 of varied colours (odd sizes catch row and stride mistakes).
+    fn varied() -> CapturedImage {
+        let (width, height) = (37u32, 23u32);
+        let bgra = (0..width * height)
+            .flat_map(|i| {
+                let (x, y) = (i % width, i / width);
+                [(x * 7) as u8, (y * 11) as u8, ((x ^ y) * 5) as u8, 255]
+            })
+            .collect();
+        CapturedImage {
+            width,
+            height,
+            bgra,
+        }
+    }
+
+    #[test]
+    fn extensions_name_each_format_and_back() {
+        for format in [
+            ImageFormat::Png,
+            ImageFormat::Jpeg,
+            ImageFormat::Bmp,
+            ImageFormat::WebP,
+            ImageFormat::Pdf,
+        ] {
+            assert_eq!(
+                ImageFormat::from_extension(format.extension()),
+                Some(format)
+            );
+        }
+        assert_eq!(ImageFormat::from_extension("JPEG"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_extension("WebP"), Some(ImageFormat::WebP));
+        for other in ["tif", "tiff", "gif", "ico", ""] {
+            assert_eq!(ImageFormat::from_extension(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn webp_is_lossless() {
+        let image = varied();
+        let bytes = encode(&image, ImageFormat::WebP, 75).unwrap();
+        assert_eq!(&bytes[..4], b"RIFF");
+        assert_eq!(&bytes[8..16], b"WEBPVP8L");
+        let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(decoder.dimensions(), (image.width, image.height));
+        assert!(!decoder.has_alpha());
+        let mut rgb = vec![0; decoder.output_buffer_size().unwrap()];
+        decoder.read_image(&mut rgb).unwrap();
+        assert_eq!(rgb, image.rgb());
+    }
+
+    #[test]
+    fn webp_refuses_what_it_cannot_hold() {
+        let image = CapturedImage {
+            width: 16385,
+            height: 1,
+            bgra: vec![255; 16385 * 4],
+        };
+        let error = encode(&image, ImageFormat::WebP, 75).unwrap_err();
+        assert!(
+            error.to_string().contains("16385x1 is too large for WebP"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn bmp_is_lossless() {
+        let image = varied();
+        let bytes = encode(&image, ImageFormat::Bmp, 75).unwrap();
+        let offset = u32::from_le_bytes(bytes[10..14].try_into().unwrap()) as usize;
+        let stride = image.width as usize * 4;
+        // Bottom-up BGRX rows: turned over, they are the image
+        let rows: Vec<&[u8]> = bytes[offset..].chunks_exact(stride).rev().collect();
+        assert_eq!(rows.len(), image.height as usize);
+        for (y, row) in rows.iter().enumerate() {
+            for x in 0..image.width as usize {
+                let at = y * stride + x * 4;
+                assert_eq!(&row[x * 4..x * 4 + 3], &image.bgra[at..at + 3], "{x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn jpeg_decodes_close_to_the_image() {
+        let image = varied();
+        let bytes = encode(&image, ImageFormat::Jpeg, 95).unwrap();
+        let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
+        let rgb = decoder.decode().unwrap();
+        let info = decoder.info().unwrap();
+        assert_eq!(
+            (u32::from(info.width), u32::from(info.height)),
+            (image.width, image.height)
+        );
+        let expected = image.rgb();
+        assert_eq!(rgb.len(), expected.len());
+        // Lossy: each channel within a tolerance, and close on average
+        let differences: Vec<u32> = rgb
+            .iter()
+            .zip(&expected)
+            .map(|(a, b)| u32::from(a.abs_diff(*b)))
+            .collect();
+        let worst = differences.iter().copied().max().unwrap_or(0);
+        let mean = differences.iter().sum::<u32>() as f64 / differences.len() as f64;
+        assert!(worst <= 48 && mean <= 4.0, "worst {worst}, mean {mean}");
+    }
+
+    #[test]
+    fn pdf_pages_are_the_image_at_96_dpi() {
+        assert_eq!(points(1920), "1440");
+        assert_eq!(points(1), "0.75");
+        assert_eq!(points(2), "1.5");
+        assert_eq!(points(3), "2.25");
+        let image = varied();
+        let bytes = encode(&image, ImageFormat::Pdf, 75).unwrap();
+        assert!(bytes.starts_with(b"%PDF-1.4\n"));
+        // Every cross-reference entry points at its object, and startxref
+        // at the table (a reader may otherwise rebuild it and hide a fault)
+        let marker = b"startxref\n";
+        let at = bytes
+            .windows(marker.len())
+            .rposition(|window| window == marker)
+            .unwrap();
+        let tail = String::from_utf8(bytes[at + marker.len()..].to_vec()).unwrap();
+        let xref: usize = tail.lines().next().unwrap().parse().unwrap();
+        let table = String::from_utf8(bytes[xref..].to_vec()).unwrap();
+        assert!(table.starts_with("xref\n0 6\n0000000000 65535 f \n"));
+        for (number, entry) in table.split_inclusive('\n').skip(3).take(5).enumerate() {
+            assert_eq!(entry.len(), 20, "{entry:?}");
+            let offset: usize = entry[..10].parse().unwrap();
+            let object = format!("{} 0 obj\n", number + 1);
+            assert!(bytes[offset..].starts_with(object.as_bytes()), "{entry:?}");
+        }
+        let document = lopdf::Document::load_mem(&bytes).unwrap();
+        let pages = document.get_pages();
+        assert_eq!(pages.len(), 1);
+        let page = document.get_dictionary(pages[&1]).unwrap();
+        let media: Vec<f32> = page
+            .get(b"MediaBox")
+            .and_then(lopdf::Object::as_array)
+            .unwrap()
+            .iter()
+            .map(|value| value.as_float().unwrap())
+            .collect();
+        // 37 x 23 pixels at 0.75 pt each
+        assert_eq!(media, [0.0, 0.0, 27.75, 17.25]);
+        let images = document.get_page_images(pages[&1]).unwrap();
+        assert_eq!(images.len(), 1);
+        let embedded = &images[0];
+        assert_eq!((embedded.width, embedded.height), (37, 23));
+        assert_eq!(embedded.bits_per_component, Some(8));
+        assert_eq!(embedded.color_space.as_deref(), Some("DeviceRGB"));
+        assert_eq!(
+            embedded.filters.as_deref(),
+            Some(&["FlateDecode".to_owned()][..])
+        );
+        // Full resolution and lossless: the stream inflates to the pixels
+        let stream = document
+            .get_object(embedded.id)
+            .and_then(lopdf::Object::as_stream)
+            .unwrap();
+        assert_eq!(stream.decompressed_content().unwrap(), image.rgb());
     }
 
     #[test]

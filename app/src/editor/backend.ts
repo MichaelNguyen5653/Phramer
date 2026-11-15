@@ -14,7 +14,8 @@ export interface Notice {
   error: boolean;
 }
 
-/** A setting the editor saves; each is an existing key the overlay uses. */
+/** A setting the editor saves; each is an existing key the overlay uses,
+ * but Export as, the editor's own (`Editor/exportFormat`). */
 export type SettingChange =
   | { key: "draw_color"; color: [number, number, number] }
   | { key: "tool_size"; tool: string; size: number }
@@ -23,7 +24,8 @@ export type SettingChange =
   | { key: "rectangle_style"; style: string }
   | { key: "highlight_outline"; width: number }
   | { key: "redact"; style: string }
-  | { key: "font_family"; family: string };
+  | { key: "font_family"; family: string }
+  | { key: "export_format"; format: string };
 
 export interface Image {
   width: number;
@@ -114,13 +116,15 @@ export const backend = {
     return invoke("editor_set", { change });
   },
   /** `number`: the image's place in Save All's folder. `name`: what Save,
-   * Save As and Save All call the file, without its extension. */
-  exportImage(action: ExportAction, image: Rendered, number?: number, name?: string): Promise<Notice[]> {
+   * Save As and Save All call the file, without its extension; `format`:
+   * what they write it as (its extension). */
+  exportImage(action: ExportAction, image: Rendered, number?: number, name?: string, format?: string): Promise<Notice[]> {
     const body = new Uint8Array(image.rgba.buffer, image.rgba.byteOffset, image.rgba.byteLength);
     const headers: Record<string, string> = { "x-action": action, "x-width": String(image.width), "x-height": String(image.height) };
     if (number !== undefined) headers["x-number"] = String(number);
     // Percent-encoded: a header carries only ASCII
     if (name !== undefined) headers["x-name"] = encodeURIComponent(name);
+    if (format !== undefined) headers["x-format"] = format;
     return invoke<Notice[]>("editor_export", body, { headers });
   },
   /** Save All: asks for a folder and makes one for the images inside it;

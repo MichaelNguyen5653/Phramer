@@ -564,12 +564,23 @@ textarea {
 }
 
 .thumb-name {
+  display: flex;
+  justify-content: center;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
-  text-align: center;
   color: var(--text-secondary);
   transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+/* The name gives way; the extension stays whole */
+.thumb-stem {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thumb-ext {
+  flex: none;
 }
 
 .thumb-name:hover {
@@ -645,6 +656,69 @@ textarea {
 
 .menu-item:disabled {
   opacity: 0.4;
+}
+
+/* A choice: the current one is checked; labels line up either way */
+.menu-item.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding-left: var(--space-6);
+}
+
+.menu-check {
+  display: grid;
+  place-items: center;
+  width: var(--icon);
+  height: var(--icon);
+  color: var(--accent);
+}
+
+.menu-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.menu-separator {
+  height: var(--hairline);
+  margin: var(--space-2) 0;
+  background: var(--border);
+}
+
+.menu-heading {
+  padding: var(--space-2) var(--space-8) 0;
+  font-size: var(--text-11);
+  color: var(--text-secondary);
+}
+
+/* --- Save and Export as ------------------------------------------------------------------ */
+
+/* One control: Save, and the narrow part that opens the format list */
+.split {
+  display: flex;
+}
+
+.split > .tool:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* A short divider between the two parts, unlike a group's full one; it
+   gives way to the hover and open backgrounds */
+.split-arrow {
+  width: calc(var(--button) / 2);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  background-image: linear-gradient(var(--border), var(--border));
+  background-size: var(--hairline) 50%;
+  background-position: left center;
+  background-repeat: no-repeat;
+}
+
+.split-arrow .icon {
+  width: calc(var(--icon) * 0.75);
+  height: calc(var(--icon) * 0.75);
 }
 
 /* --- Empty editor ----------------------------------------------------------------------- */

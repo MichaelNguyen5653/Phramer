@@ -4,9 +4,11 @@ import type { Engine, Shape } from "./engine";
 import {
   cleanName,
   closeQuestion,
+  fileName,
   FORBIDDEN_HINT,
   hasForbidden,
   ImageSet,
+  parseName,
   positionLabel,
   removeQuestion,
   withoutForbidden,
@@ -183,6 +185,69 @@ describe("the images of one window", () => {
     ]);
   });
 
+  it("gives new images the format they are added with, PNG by default", () => {
+    const set = new ImageSet(open(), "a", "webp");
+    set.add(open(), "b", "pdf");
+    set.add(open(), "c");
+    expect(set.list.map((page) => fileName(page))).toEqual(["a.webp", "b.pdf", "c.png"]);
+  });
+
+  it("converts an image: only its format changes, and that is a change to save", () => {
+    const set = abc();
+    const pixels = set.list[0].doc.session.width;
+    let calls = 0;
+    set.subscribe(() => calls++);
+    expect(set.setFormat(0, "pdf")).toBe(true);
+    expect(set.list[0].format).toBe("pdf");
+    expect(set.list[0].name).toBe("a");
+    expect(set.list[0].doc.session.width).toBe(pixels);
+    expect(set.list[0].doc.canUndo).toBe(false);
+    expect(set.unsaved()).toEqual([1]);
+    expect(calls).toBe(1);
+    // The format it has already, or no such image: nothing happens
+    expect(set.setFormat(0, "pdf")).toBe(false);
+    expect(set.setFormat(7, "png")).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it("saves all, each image in its own format", async () => {
+    const set = abc();
+    set.setFormat(0, "jpg");
+    set.setFormat(2, "pdf");
+    const saved: string[] = [];
+    await set.saveAll(async (_doc, number, name, format) => {
+      saved.push(`${number} - ${name}.${format}`);
+      return true;
+    });
+    expect(saved).toEqual(["1 - a.jpg", "2 - b.png", "3 - c.pdf"]);
+    expect(set.unsaved()).toEqual([]);
+  });
+
+  it("renames with a known extension to convert, and refuses another format's", () => {
+    const set = abc();
+    // The field shows the name with its extension
+    expect(set.rename(0, "Login bug.png")).toBe(true);
+    expect([set.list[0].name, set.list[0].format]).toEqual(["Login bug", "png"]);
+    expect(set.unsaved()).toEqual([]);
+    expect(set.rename(0, "Login bug.PDF")).toBe(true);
+    expect([set.list[0].name, set.list[0].format]).toEqual(["Login bug", "pdf"]);
+    expect(set.unsaved()).toEqual([1]);
+    expect(set.rename(1, "report.jpeg")).toBe(true);
+    expect(fileName(set.list[1])).toBe("report.jpg");
+    // Only the extension: the name stays, the format changes
+    expect(set.rename(2, ".webp")).toBe(true);
+    expect(fileName(set.list[2])).toBe("c.webp");
+    // Another image format: refused, nothing changes
+    expect(set.rename(1, "report.tif")).toBe(false);
+    expect(set.rename(1, "report.GIF")).toBe(false);
+    expect(fileName(set.list[1])).toBe("report.jpg");
+    // Other dots are part of the name; the format stays
+    expect(set.rename(1, "v1.2")).toBe(true);
+    expect(fileName(set.list[1])).toBe("v1.2.jpg");
+    expect(set.rename(1, "v1.2.bmp")).toBe(true);
+    expect(fileName(set.list[1])).toBe("v1.2.bmp");
+  });
+
   it("renames an image by the rename rules", () => {
     const set = abc();
     let calls = 0;
@@ -206,6 +271,23 @@ describe("image names", () => {
     expect(hasForbidden("Bug report v1.2 (été)")).toBe(false);
     expect(withoutForbidden('a/b:c*d?e"f<g>h|i\\j')).toBe("abcdefghij");
     expect(FORBIDDEN_HINT).toBe('A name cannot contain \\ / : * ? " < > |');
+  });
+
+  it("splits a typed name into the name and a format, or refuses another format", () => {
+    expect(parseName("shot.png")).toEqual({ name: "shot", format: "png" });
+    expect(parseName("shot.JPG")).toEqual({ name: "shot", format: "jpg" });
+    expect(parseName("shot.Jpeg")).toEqual({ name: "shot", format: "jpg" });
+    expect(parseName("shot.bmp")).toEqual({ name: "shot", format: "bmp" });
+    expect(parseName("shot.webp")).toEqual({ name: "shot", format: "webp" });
+    expect(parseName("shot.pdf. ")).toEqual({ name: "shot", format: "pdf" });
+    expect(parseName("a.b.pdf")).toEqual({ name: "a.b", format: "pdf" });
+    for (const other of ["tif", "TIFF", "gif", "heic", "ico", "svg"]) {
+      expect(parseName(`shot.${other}`)).toEqual({ refused: other });
+    }
+    // Not a format: a dot in the name
+    expect(parseName("v1.2")).toEqual({ name: "v1.2" });
+    expect(parseName("notes.final")).toEqual({ name: "notes.final" });
+    expect(parseName("plain")).toEqual({ name: "plain" });
   });
 
   it("trims trailing dots and spaces, and an empty name brings the previous one back", () => {

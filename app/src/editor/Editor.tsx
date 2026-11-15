@@ -15,6 +15,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
+import { FORMATS, formatLabel, formatOf, type Format } from "../formats";
 import { followShortcuts, type Backend, type ExportAction, type Image, type Notice } from "./backend";
 import { sameRgb, type Rgb } from "./color";
 import { ColorPicker } from "./ColorPicker";
@@ -23,6 +24,7 @@ import type { Engine, Point, Rect, Rendered } from "./engine";
 import { Filmstrip } from "./Filmstrip";
 import { Icon } from "./Icon";
 import { closeQuestion, ImageSet, positionLabel, removeQuestion } from "./images";
+import { Menu } from "./Menu";
 import { OptionsPanel } from "./OptionsPanel";
 import { initialState, reduce, toolSize, type EditorSettings } from "./state";
 import {
@@ -113,8 +115,17 @@ function thumbnailOf(source: HTMLCanvasElement): string {
 }
 
 export function Editor({ engine, image, settings, backend, onReady }: EditorProps) {
+  /** Export as: what a new image is saved as, remembered across sessions. */
+  const [exportFormat, setExportFormat] = useState<Format>(() => formatOf(settings.export_format) ?? "png");
+  const exportFormatRef = useRef(exportFormat);
+  exportFormatRef.current = exportFormat;
   const images = useMemo(
-    () => new ImageSet(EditorController.open(engine, image.width, image.height, image.rgba, settings.undo_limit), image.name),
+    () =>
+      new ImageSet(
+        EditorController.open(engine, image.width, image.height, image.rgba, settings.undo_limit),
+        image.name,
+        exportFormatRef.current,
+      ),
     [engine, image, settings.undo_limit],
   );
   useSyncExternalStore(images.subscribe, images.getVersion);
@@ -417,7 +428,11 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
   const addImage = useCallback(
     (next: Image) => {
       leaveImage();
-      images.add(EditorController.open(engine, next.width, next.height, next.rgba, settings.undo_limit), next.name);
+      images.add(
+        EditorController.open(engine, next.width, next.height, next.rgba, settings.undo_limit),
+        next.name,
+        exportFormatRef.current,
+      );
       announce.current = performance.now();
     },
     [engine, images, leaveImage, settings.undo_limit],
@@ -492,10 +507,13 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
   const exportAs = useCallback(
     async (action: ExportAction) => {
       const image = controller.flatten(workspace);
-      // Saved under the image's own name
-      const name = action === "save" || action === "save_as" ? images.current.name : undefined;
+      // Saved under the image's own name and in its own format; Copy and
+      // Copy as File keep the settings' format
+      const saving = action === "save" || action === "save_as";
+      const name = saving ? images.current.name : undefined;
+      const format = saving ? images.current.format : undefined;
       try {
-        const result = await backend.exportImage(action, image, undefined, name);
+        const result = await backend.exportImage(action, image, undefined, name, format);
         notify(result);
         if (["save", "save_as", "copy_file"].includes(action) && result.length > 0 && !result.some((notice) => notice.error)) {
           controller.markSaved();
@@ -511,8 +529,8 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
     setSavingAll(true);
     try {
       if ((await backend.saveAllBegin()) === null) return;
-      await images.saveAll(async (doc, number, name) => {
-        const result = await backend.exportImage("save_all", doc.flatten(workspace), number, name);
+      await images.saveAll(async (doc, number, name, format) => {
+        const result = await backend.exportImage("save_all", doc.flatten(workspace), number, name, format);
         return result.length > 0 && !result.some((notice) => notice.error);
       });
       notify(await backend.saveAllEnd());
@@ -522,6 +540,23 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
       setSavingAll(false);
     }
   }, [backend, images, notify, workspace]);
+
+  /** Export as: the image shown is converted, and new images take the
+   * format from now on, in this session and the next. */
+  const [exportMenu, setExportMenu] = useState<{ left: number; top: number } | null>(null);
+  const exportButton = useRef<HTMLButtonElement>(null);
+  const chooseExportFormat = useCallback(
+    (format: Format) => {
+      images.setFormat(images.position, format);
+      setExportFormat(format);
+      persist({ key: "export_format", format });
+    },
+    [images, persist],
+  );
+  const closeExportMenu = useCallback((restore: boolean) => {
+    setExportMenu(null);
+    if (restore) exportButton.current?.focus();
+  }, []);
 
   // --- Actions ----------------------------------------------------------------------
 
@@ -1053,7 +1088,7 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
               const disabled = (id === "undo" && !controller.canUndo) || (id === "redo" && !controller.canRedo);
               const active = pressed(id);
               const hint = shortcutHint(action.shortcut, shortcutSettings);
-              return (
+              const button = (
                 <button
                   key={id}
                   type="button"
@@ -1072,6 +1107,40 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
                     </span>
                   )}
                 </button>
+              );
+              if (id !== "save") return button;
+              // Save with its Export as list: the format the shown image is
+              // saved in, and new ones after it
+              return (
+                <span key={id} className="split">
+                  {button}
+                  <button
+                    ref={exportButton}
+                    type="button"
+                    className={`tool split-arrow${exportMenu ? " active" : ""}`}
+                    aria-label="Export as"
+                    aria-haspopup="menu"
+                    aria-expanded={exportMenu !== null}
+                    title={`Export as: the format Save writes (${formatLabel(page.format)})`}
+                    data-testid="export-as"
+                    onPointerDown={(event) => {
+                      // A press on it while open closes it (the menu's own
+                      // outside-press would open it again)
+                      if (exportMenu) event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      if (exportMenu) {
+                        setExportMenu(null);
+                        return;
+                      }
+                      commitText();
+                      const box = event.currentTarget.getBoundingClientRect();
+                      setExportMenu({ left: box.left, top: box.bottom + 4 });
+                    }}
+                  >
+                    <Icon name="chevron-down" />
+                  </button>
+                </span>
               );
             })}
           </div>
@@ -1176,6 +1245,7 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
         onRename={(index, typed) => images.rename(index, typed)}
         onMoveToFront={(index) => images.moveToFront(index)}
         onMoveToEnd={(index) => images.moveToEnd(index)}
+        onConvert={(index, format) => images.setFormat(index, format)}
       />
 
       <footer className="statusbar" data-testid="statusbar">
@@ -1193,6 +1263,21 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
           ))}
         </span>
       </footer>
+
+      {exportMenu && (
+        <Menu
+          label="Export as"
+          items={FORMATS.map((format) => ({ id: format.id, label: format.label, checked: format.id === page.format }))}
+          at={exportMenu}
+          onPick={(id) => {
+            setExportMenu(null);
+            exportButton.current?.focus();
+            const format = formatOf(id);
+            if (format) chooseExportFormat(format);
+          }}
+          onClose={closeExportMenu}
+        />
+      )}
 
       {state.picker.open && (
         <ColorPicker

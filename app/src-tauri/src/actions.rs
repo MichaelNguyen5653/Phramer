@@ -235,6 +235,9 @@ mod tests {
             ("corrupt-values.ini", "corrupt-values", 1),
             ("v14.1-style.ini", "v14.1-style", 1),
             ("v15.0-style.ini", "v15.0-style", 1),
+            // TIFF was among 15.0.0's formats, so it passed; this build
+            // saves it as PNG and the check must not start to flag it
+            ("check/legacy-format.ini", "valid", 0),
         ];
         for (file, expected, code) in cases {
             let settings = Settings::parse(&std::fs::read(fixtures.join(file)).unwrap());

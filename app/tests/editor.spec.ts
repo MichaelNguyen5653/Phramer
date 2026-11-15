@@ -1,8 +1,9 @@
 // The editor page in Edge with the Tauri runtime mocked: reference
 // screenshots (light, dark, a drawn shape, the colour picker, the toolbar's
 // keys, a narrow window, the filmstrip, a name being edited, the image
-// menu, the close prompt, the grid, the empty editor), no layout shift, and
-// a picker that applies on pointer move with no confirm step.
+// menu, the close prompt, the grid, the empty editor, a refused format, the
+// Export as list), no layout shift, and a picker that applies on pointer
+// move with no confirm step.
 
 import { expect, test, type Page } from "@playwright/test";
 import { installTauriMock, type MockOptions } from "./tauri-mock";
@@ -406,9 +407,9 @@ test("one image: the strip shows it with its name, and Save and Save As use the 
   await open(page);
   await expect(page.getByTestId("filmstrip")).toBeVisible();
   await expect(page.getByTestId("thumb-1")).toHaveAttribute("aria-current", "true");
-  await expect(page.getByTestId("name-1")).toHaveText("2026-11-14_09-05");
+  await expect(page.getByTestId("name-1")).toHaveText("2026-11-14_09-05.png");
   // The whole name is in the tooltip
-  await expect(page.getByTestId("name-1")).toHaveAttribute("title", "2026-11-14_09-05");
+  await expect(page.getByTestId("name-1")).toHaveAttribute("title", "2026-11-14_09-05.png");
   await expect(page.locator(".thumb img")).toHaveCount(1);
   await expect(page.getByTestId("save-all")).toBeVisible();
   await expect(page.getByTestId("remove-image")).toBeVisible();
@@ -431,9 +432,18 @@ test("a long name is cut short under its thumbnail", async ({ page }) => {
   await page.keyboard.type(long);
   await page.keyboard.press("Enter");
   const name = page.getByTestId("name-1");
-  await expect(name).toHaveText(long);
-  await expect(name).toHaveAttribute("title", long);
-  expect(await name.evaluate((el) => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow === "ellipsis")).toBe(true);
+  await expect(name).toHaveText(`${long}.png`);
+  await expect(name).toHaveAttribute("title", `${long}.png`);
+  // The name is cut short; the extension stays whole
+  const stem = name.locator(".thumb-stem");
+  expect(await stem.evaluate((el) => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow === "ellipsis")).toBe(true);
+  expect(
+    await name.evaluate((el) => {
+      const ext = el.querySelector(".thumb-ext")!.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      return ext.width > 0 && ext.left >= box.left && ext.right <= box.right + 0.5;
+    }),
+  ).toBe(true);
 });
 
 test("rename in place: Enter keeps, Esc cancels, refused characters, leaving keeps", async ({ page }) => {
@@ -443,11 +453,12 @@ test("rename in place: Enter keeps, Esc cancels, refused characters, leaving kee
   const field = page.getByTestId("name-input");
   await name.dblclick();
   await expect(field).toBeFocused();
-  await expect(field).toHaveValue("2026-11-14_09-05");
-  // All of it is selected: typing replaces it
+  await expect(field).toHaveValue("2026-11-14_09-05.png");
+  // The name is selected, not its extension: typing replaces the name
   await page.keyboard.type("Login bug");
+  await expect(field).toHaveValue("Login bug.png");
   await page.keyboard.press("Enter");
-  await expect(name).toHaveText("Login bug");
+  await expect(name).toHaveText("Login bug.png");
   await expect(page.getByTestId("thumb-1")).toBeFocused();
 
   // Esc puts the name back, and is not the editor's Esc (the tool stays)
@@ -457,14 +468,15 @@ test("rename in place: Enter keeps, Esc cancels, refused characters, leaving kee
   await page.keyboard.type("Other");
   await page.keyboard.press("Escape");
   await expect(field).toHaveCount(0);
-  await expect(name).toHaveText("Login bug");
+  await expect(name).toHaveText("Login bug.png");
   await expect(page.getByTestId("tool-pencil")).toHaveAttribute("aria-pressed", "true");
 
   // Characters a file name cannot hold are refused as typed, with a hint
   await name.dblclick();
-  await page.keyboard.press("End");
+  // To the end of the name, before its extension
+  await page.keyboard.press("ArrowRight");
   await page.keyboard.type(" v2: a/b?");
-  await expect(field).toHaveValue("Login bug v2 ab");
+  await expect(field).toHaveValue("Login bug v2 ab.png");
   await expect(page.getByTestId("name-hint")).toHaveText('A name cannot contain \\ / : * ? " < > |');
   // Nothing around it moved
   expect(await boxes(page)).toEqual(before);
@@ -476,12 +488,12 @@ test("rename in place: Enter keeps, Esc cancels, refused characters, leaving kee
   // Trailing dots and spaces go; leaving the field keeps the name
   await page.keyboard.type(". . ");
   await page.getByTestId("statusbar").click();
-  await expect(name).toHaveText("Login bug v2 ab");
+  await expect(name).toHaveText("Login bug v2 ab.png");
   // Emptied: the previous name comes back
   await name.dblclick();
   await page.keyboard.press("Backspace");
   await page.keyboard.press("Enter");
-  await expect(name).toHaveText("Login bug v2 ab");
+  await expect(name).toHaveText("Login bug v2 ab.png");
 
   // Saved under it
   await page.keyboard.press("Control+s");
@@ -499,7 +511,7 @@ test("the image menu: rename, move to front and to end, by pointer and keys", as
   await expect(page.getByTestId("thumb-3")).toHaveAttribute("aria-current", "true");
   // The shown image (the third) gets a change of its own
   await drawRectangle(page, [80, 90], [260, 200]);
-  expect(await stripNames(page)).toEqual(["2026-11-14_09-05", "2026-11-14_09-06", "2026-11-14_09-07"]);
+  expect(await stripNames(page)).toEqual(["2026-11-14_09-05.png", "2026-11-14_09-06.png", "2026-11-14_09-07.png"]);
 
   // Right-click: the menu, its first item focused; the first image cannot
   // move to the front
@@ -519,24 +531,29 @@ test("the image menu: rename, move to front and to end, by pointer and keys", as
   // own change and history
   await page.getByTestId("menu-end").click();
   await expect(menu).toHaveCount(0);
-  expect(await stripNames(page)).toEqual(["2026-11-14_09-06", "2026-11-14_09-07", "2026-11-14_09-05"]);
+  expect(await stripNames(page)).toEqual(["2026-11-14_09-06.png", "2026-11-14_09-07.png", "2026-11-14_09-05.png"]);
   await expect(page.getByTestId("thumb-2")).toHaveAttribute("aria-current", "true");
   await expect(page.getByTestId("position")).toHaveText("Image 2 of 3");
   await expect(page.getByTestId("thumb-2").getByTestId("unsaved")).toHaveCount(1);
   await expect(page.getByTestId("action-undo")).toBeEnabled();
 
-  // By keys: the arrows skip what cannot be picked, Enter picks, and the
-  // focus follows the moved image
+  // By keys: the arrows skip what cannot be picked (Move to end, and the
+  // image's own format under Convert to…), Enter picks, and the focus
+  // follows the moved image
   await page.getByTestId("thumb-3").click({ button: "right" });
   await expect(page.getByTestId("menu-end")).toBeDisabled();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByTestId("menu-front")).toBeFocused();
   await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("menu-convert-jpg")).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.getByTestId("menu-convert-pdf")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
   await expect(page.getByTestId("menu-rename")).toBeFocused();
-  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(menu).toHaveCount(0);
-  expect(await stripNames(page)).toEqual(["2026-11-14_09-05", "2026-11-14_09-06", "2026-11-14_09-07"]);
+  expect(await stripNames(page)).toEqual(["2026-11-14_09-05.png", "2026-11-14_09-06.png", "2026-11-14_09-07.png"]);
   await expect(page.getByTestId("thumb-1")).toBeFocused();
   await expect(page.getByTestId("thumb-3")).toHaveAttribute("aria-current", "true");
 
@@ -557,7 +574,7 @@ test("the image menu: rename, move to front and to end, by pointer and keys", as
   await expect(page.getByTestId("name-input")).toBeFocused();
   await page.keyboard.type("Second");
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("name-2")).toHaveText("Second");
+  await expect(page.getByTestId("name-2")).toHaveText("Second.png");
 
   // Save All numbers them in the strip's order, under their names
   await page.getByTestId("save-all").click();
@@ -567,4 +584,150 @@ test("the image menu: rename, move to front and to end, by pointer and keys", as
     ["2", "Second"],
     ["3", "2026-11-14_09-07"],
   ]);
+});
+
+test("Convert to…: the current format is marked, a pick converts, and Save writes it", async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => window.__addImage(1));
+  await page.getByTestId("thumb-1").click({ button: "right" });
+  await expect(page.getByRole("group", { name: "Convert to…" })).toBeVisible();
+  const png = page.getByTestId("menu-convert-png");
+  await expect(png).toBeDisabled();
+  await expect(png).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("menu-convert-pdf")).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("group", { name: "Convert to…" }).getByRole("menuitemradio")).toHaveText([
+    "PNG",
+    "JPEG",
+    "BMP",
+    "WebP",
+    "PDF",
+  ]);
+  await page.getByTestId("menu-convert-pdf").click();
+  await expect(page.getByTestId("menu")).toHaveCount(0);
+  // Only the format changed: a change to save, no undo step, same pixels
+  await expect(page.getByTestId("name-1")).toHaveText("2026-11-14_09-05.pdf");
+  await expect(page.getByTestId("thumb-1").getByTestId("unsaved")).toHaveCount(1);
+  await expect(page.getByTestId("thumb-2").getByTestId("unsaved")).toHaveCount(0);
+  await page.getByTestId("thumb-1").click();
+  await expect(page.getByTestId("action-undo")).toBeDisabled();
+  // The menu marks the new one
+  await page.getByTestId("thumb-1").click({ button: "right" });
+  await expect(page.getByTestId("menu-convert-pdf")).toBeDisabled();
+  await expect(page.getByTestId("menu-convert-png")).toBeEnabled();
+  await page.keyboard.press("Escape");
+
+  // Save and Save All write each image in its own format; Copy keeps the
+  // settings' format
+  await page.keyboard.press("Control+s");
+  await page.keyboard.press("Control+c");
+  await page.getByTestId("save-all").click();
+  await expect.poll(async () => (await exportHeaders(page)).length).toBe(4);
+  expect((await exportHeaders(page)).map((headers) => [headers["x-action"], headers["x-format"]])).toEqual([
+    ["save", "pdf"],
+    ["copy", undefined],
+    ["save_all", "pdf"],
+    ["save_all", "png"],
+  ]);
+  await expect(page.getByTestId("unsaved")).toHaveCount(0);
+});
+
+test("rename with an extension: .pdf converts, .tif is refused with a hint", async ({ page }) => {
+  await open(page);
+  const name = page.getByTestId("name-1");
+  const field = page.getByTestId("name-input");
+  await name.dblclick();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("Report.PDF");
+  await page.keyboard.press("Enter");
+  await expect(name).toHaveText("Report.pdf");
+  await expect(name).toHaveAttribute("title", "Report.pdf");
+  await expect(page.getByTestId("unsaved")).toHaveCount(1);
+
+  // A dot that is not a format stays in the name
+  await name.dblclick();
+  await page.keyboard.type("v1.2");
+  await page.keyboard.press("Enter");
+  await expect(name).toHaveText("v1.2.pdf");
+
+  // Another format: refused, the field stays open with the formats named
+  const before = await boxes(page);
+  await name.dblclick();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("Report.tif");
+  await page.keyboard.press("Enter");
+  await expect(field).toBeFocused();
+  await expect(page.getByTestId("name-hint")).toHaveText("Phramer saves PNG, JPEG, BMP, WebP or PDF");
+  expect(await boxes(page)).toEqual(before);
+  await expect(page).toHaveScreenshot("editor-format-refused-light.png");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page).toHaveScreenshot("editor-format-refused-dark.png");
+  await page.emulateMedia({ colorScheme: "light" });
+  // Esc, or leaving the field, keeps the name and format as they were
+  await page.keyboard.press("Escape");
+  await expect(name).toHaveText("v1.2.pdf");
+  await name.dblclick();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("shot.gif");
+  await page.getByTestId("statusbar").click();
+  await expect(name).toHaveText("v1.2.pdf");
+
+  await page.keyboard.press("Control+s");
+  await expect.poll(async () => (await exportHeaders(page)).map((headers) => [headers["x-name"], headers["x-format"]])).toEqual([
+    ["v1.2", "pdf"],
+  ]);
+});
+
+test("Export as: the list by Save converts the image and is remembered for new images and the next session", async ({ page }) => {
+  await open(page);
+  // Save keeps its key; the list sits beside it
+  await expect(hint(page, "action-save")).toHaveText("(Ctrl+S)");
+  const chevron = page.getByTestId("export-as");
+  await expect(chevron).toHaveAttribute("aria-expanded", "false");
+  await chevron.click();
+  const menu = page.getByRole("menu", { name: "Export as" });
+  await expect(menu).toBeVisible();
+  await expect(chevron).toHaveAttribute("aria-expanded", "true");
+  await expect(menu.getByRole("menuitemradio")).toHaveText(["PNG", "JPEG", "BMP", "WebP", "PDF"]);
+  await expect(page.getByTestId("menu-png")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("menu-png")).toBeFocused();
+  await expect(page).toHaveScreenshot("editor-export-as-light.png");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page).toHaveScreenshot("editor-export-as-dark.png");
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // By keys: WebP
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+  await expect(chevron).toBeFocused();
+  await expect(page.getByTestId("name-1")).toHaveText("2026-11-14_09-05.webp");
+  await expect.poll(async () => (await calls(page, "editor_set")).map((args) => JSON.stringify(args))).toContain(
+    JSON.stringify({ change: { key: "export_format", format: "webp" } }),
+  );
+  // Save writes it; Save As too, with the image's format for its dialog
+  await page.keyboard.press("Control+s");
+  await page.getByTestId("action-save_as").click();
+  await expect.poll(async () => (await exportHeaders(page)).length).toBe(2);
+  expect((await exportHeaders(page)).map((headers) => [headers["x-action"], headers["x-format"]])).toEqual([
+    ["save", "webp"],
+    ["save_as", "webp"],
+  ]);
+
+  // A new image takes the remembered format
+  await page.evaluate(() => window.__addImage(1));
+  await expect(page.getByTestId("name-2")).toHaveText("2026-11-14_09-06.webp");
+  // A press on the chevron while open closes the list
+  await chevron.click();
+  await expect(menu).toBeVisible();
+  await chevron.click();
+  await expect(menu).toHaveCount(0);
+
+  // The next session starts with it (the mock keeps it as the file would)
+  await page.reload();
+  await expect(page.getByTestId("editor")).toBeVisible();
+  await expect(page.getByTestId("name-1")).toHaveText("2026-11-14_09-05.webp");
+  await chevron.click();
+  await expect(page.getByTestId("menu-webp")).toHaveAttribute("aria-checked", "true");
 });

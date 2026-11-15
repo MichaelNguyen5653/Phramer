@@ -1,13 +1,20 @@
-// A small menu at a point (the filmstrip's right-click menu): one list of
-// items, the arrow keys move between those that can be picked, Enter picks,
-// Esc closes and gives the focus back. More items are more entries.
+// A small menu at a point (the filmstrip's right-click menu, Export as):
+// one list of items, the arrow keys move between those that can be picked,
+// Enter picks, Esc closes and gives the focus back. More items are more
+// entries; items of a `group` follow a separator under its heading, and
+// `checked` marks the current choice.
 
-import { useEffect, useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Icon } from "./Icon";
 
 export interface MenuItem {
   id: string;
   label: string;
   disabled?: boolean;
+  /** A choice among several: marked when it is the current one. */
+  checked?: boolean;
+  /** The heading of the items that follow, together. */
+  group?: string;
 }
 
 export interface MenuProps {
@@ -23,6 +30,17 @@ export interface MenuProps {
 
 /** Room kept between the menu and the window's edge, in CSS pixels. */
 const EDGE = 8;
+
+/** Consecutive items of the same group, in order. */
+function runs(items: readonly MenuItem[]): { group?: string; items: MenuItem[] }[] {
+  const out: { group?: string; items: MenuItem[] }[] = [];
+  for (const item of items) {
+    const last = out[out.length - 1];
+    if (last && last.group === item.group) last.items.push(item);
+    else out.push({ group: item.group, items: [item] });
+  }
+  return out;
+}
 
 export function Menu({ label, items, at, onPick, onClose }: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -80,21 +98,40 @@ export function Menu({ label, items, at, onPick, onClose }: MenuProps) {
     event.stopPropagation();
   };
 
+  const button = (item: MenuItem) => {
+    const choice = item.checked !== undefined;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        role={choice ? "menuitemradio" : "menuitem"}
+        aria-checked={choice ? item.checked : undefined}
+        className={`menu-item${choice ? " choice" : ""}`}
+        disabled={item.disabled}
+        data-testid={`menu-${item.id}`}
+        onClick={() => onPick(item.id)}
+      >
+        {choice && <span className="menu-check">{item.checked && <Icon name="check" />}</span>}
+        {item.label}
+      </button>
+    );
+  };
+
   return (
     <div ref={ref} className="menu" role="menu" aria-label={label} tabIndex={-1} data-testid="menu" onKeyDown={onKeyDown}>
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          role="menuitem"
-          className="menu-item"
-          disabled={item.disabled}
-          data-testid={`menu-${item.id}`}
-          onClick={() => onPick(item.id)}
-        >
-          {item.label}
-        </button>
-      ))}
+      {runs(items).map((run, index) =>
+        run.group === undefined ? (
+          <Fragment key={index}>{run.items.map(button)}</Fragment>
+        ) : (
+          <div key={run.group} className="menu-group" role="group" aria-label={run.group}>
+            {index > 0 && <div className="menu-separator" role="separator" />}
+            <div className="menu-heading" aria-hidden="true">
+              {run.group}
+            </div>
+            {run.items.map(button)}
+          </div>
+        ),
+      )}
     </div>
   );
 }

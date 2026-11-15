@@ -25,8 +25,9 @@ use phramer_capture::{
 use phramer_core::config::{CaptureRegionMode, Settings};
 use phramer_overlay::{
     BUNDLED_FONT, CaptureTasks, CapturedImage, DeferredAction, ExportAction, ExportContext,
-    ExportReport, LocalTime, Notice, OverlayConfig, OverlayError, OverlaySession, PinHandler,
-    PinOptions, PinRequest, SaveTarget, SystemClipboard, Theme, export, run_overlay, spawn_pin,
+    ExportReport, ImageFormat, LocalTime, Notice, OverlayConfig, OverlayError, OverlaySession,
+    PinHandler, PinOptions, PinRequest, SaveTarget, SystemClipboard, Theme, export, run_overlay,
+    spawn_pin,
 };
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -612,11 +613,12 @@ pub(crate) fn run_export(
     action: ExportAction,
     tasks: &Tasks,
 ) -> Delivery {
-    run_export_named(settings, image, geometry, action, tasks, None)
+    run_export_named(settings, image, geometry, action, tasks, None, None)
 }
 
 /// `run_export`, with `name` (no extension) for a file saved into a folder
-/// instead of the filename pattern's: the editor's image names.
+/// instead of the filename pattern's, and `format` for what a save writes
+/// instead of the configured one: the editor's image names and formats.
 pub(crate) fn run_export_named(
     settings: &Settings,
     image: &CapturedImage,
@@ -624,6 +626,7 @@ pub(crate) fn run_export_named(
     action: ExportAction,
     tasks: &Tasks,
     name: Option<&str>,
+    format: Option<ImageFormat>,
 ) -> Delivery {
     let time = LocalTime::now();
     let mut clipboard = SystemClipboard;
@@ -632,6 +635,7 @@ pub(crate) fn run_export_named(
         time: &time,
         handoff: &mut clipboard,
         name,
+        format,
     };
     Delivery::Exported(export(
         image,

@@ -16,6 +16,7 @@ const settings: EditorSettings = {
   undo_limit: 100,
   shortcuts: {},
   font_family: "",
+  export_format: "png",
 };
 
 describe("editor state", () => {

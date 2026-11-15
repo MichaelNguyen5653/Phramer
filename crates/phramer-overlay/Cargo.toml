@@ -22,6 +22,15 @@ ttf-parser = { version = "0.25", default-features = false, features = ["no-std-f
 # and JPEG (`jpg` saves and `useJpgForClipboard`).
 png = "0.18"
 jpeg-encoder = "0.7"
+# Lossless WebP saves.
+image-webp = "0.2"
+# The Flate compression of PDF saves; already built for `png`.
+flate2 = "1"
+
+# The encoders' round trips: JPEG decoded back, PDFs parsed.
+[dev-dependencies]
+jpeg-decoder = { version = "0.3", default-features = false }
+lopdf = { version = "0.47", default-features = false }
 
 # The overlay windows, the clipboard and Show in Folder.
 [target.'cfg(windows)'.dependencies]

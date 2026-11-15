@@ -97,6 +97,9 @@ pub struct ExportContext<'a> {
     /// The name (no extension) a capture saved into a folder gets instead
     /// of the filename pattern's: the editor's image names.
     pub name: Option<&'a str>,
+    /// The format a save writes instead of `saveAsFileExtension`'s: the
+    /// editor's per-image format.
+    pub format: Option<ImageFormat>,
 }
 
 /// Carries out `action` on `image`. `geometry` is where the image was on
@@ -168,7 +171,11 @@ fn save_to(
         || expand_pattern(&settings.filename_pattern(), context.time),
         str::to_owned,
     );
-    let mut target = screenshot_path(path, &settings.save_as_file_extension(), &name);
+    let extension = context.format.map_or_else(
+        || settings.save_as_file_extension(),
+        |format| format.extension().to_owned(),
+    );
+    let mut target = screenshot_path(path, &extension, &name);
     let extension = target
         .extension()
         .map(|extension| extension.to_string_lossy().into_owned())
@@ -176,8 +183,8 @@ fn save_to(
     let format = match ImageFormat::from_extension(&extension) {
         Some(format) => format,
         None => {
-            // 15.0.0 had every Qt image writer; this build writes PNG, JPEG
-            // and BMP, so other formats are saved as PNG
+            // 15.0.0 had every Qt image writer; this build writes PNG, JPEG,
+            // BMP, WebP and PDF, so other formats are saved as PNG
             log::warn!("cannot write .{extension} files; saving as PNG");
             target = screenshot_path(&target, "png", &name);
             ImageFormat::Png
