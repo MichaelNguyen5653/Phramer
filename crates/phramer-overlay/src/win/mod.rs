@@ -6,6 +6,7 @@ mod clipboard;
 mod folder;
 mod fonts;
 mod pin;
+mod prompt;
 mod window;
 
 pub use clipboard::SystemClipboard;

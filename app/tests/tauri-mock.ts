@@ -88,6 +88,8 @@ export function installTauriMock(options: MockOptions = {}): void {
     export_format: sessionStorage.getItem("mock-export-format") ?? "png",
   };
   window.__calls = [];
+  // Something was saved this session (`capture::last_saved`)
+  let lastSaved = false;
   let callbacks = 0;
   const handlers = new Map<number, (event: unknown) => void>();
   const listeners: { event: string; handler: number }[] = [];
@@ -142,9 +144,12 @@ export function installTauriMock(options: MockOptions = {}): void {
         case "editor_font_faces":
           return new ArrayBuffer(4);
         case "editor_export":
+          if (["save", "save_as"].includes(options?.headers?.["x-action"] ?? "")) lastSaved = true;
           return options?.headers?.["x-action"] === "save_all"
             ? [{ text: `Capture saved as C:\\Pictures\\Phramer set\\${options.headers["x-number"]} - ${decodeURIComponent(options.headers["x-name"] ?? "")}.${options.headers["x-format"] ?? "png"}`, error: false }]
             : [{ text: "Capture saved to clipboard.", error: false }];
+        case "editor_has_last_saved":
+          return lastSaved;
         case "editor_save_all_begin":
           return "C:\\Pictures\\Phramer set";
         case "editor_save_all_end":

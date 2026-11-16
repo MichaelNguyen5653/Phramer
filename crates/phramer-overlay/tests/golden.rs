@@ -220,10 +220,19 @@ fn pointer(state: &mut OverlayState, event: &str, x: i32, y: i32) {
     state.handle(event, 10);
 }
 
+/// The defaults without the editor hint, which `editor_hint.png` covers on
+/// its own so it does not change every other image.
+fn base() -> OverlayConfig {
+    OverlayConfig {
+        show_editor_hint: false,
+        ..OverlayConfig::default()
+    }
+}
+
 fn no_help() -> OverlayConfig {
     OverlayConfig {
         show_help: false,
-        ..OverlayConfig::default()
+        ..base()
     }
 }
 
@@ -240,13 +249,8 @@ fn idle_with_a_window_highlighted() {
 #[test]
 fn mid_drag() {
     let (width, height, bgra, windows) = desktop(1.0);
-    let mut state = OverlayState::new(
-        vec![monitor(width, height, 96)],
-        0,
-        windows,
-        OverlayConfig::default(),
-    )
-    .expect("state");
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, base()).expect("state");
     focused(&mut state);
     pointer(&mut state, "down", 120, 80);
     pointer(&mut state, "drag", 300, 200);
@@ -257,13 +261,8 @@ fn mid_drag() {
 #[test]
 fn selection_with_handles_and_size_label_at_150_percent() {
     let (width, height, bgra, windows) = desktop(1.5);
-    let mut state = OverlayState::new(
-        vec![monitor(width, height, 144)],
-        0,
-        windows,
-        OverlayConfig::default(),
-    )
-    .expect("state");
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 144)], 0, windows, base()).expect("state");
     focused(&mut state);
     pointer(&mut state, "down", 200, 100);
     pointer(&mut state, "drag", 400, 200);
@@ -276,13 +275,8 @@ fn selection_with_handles_and_size_label_at_150_percent() {
 #[test]
 fn help_message() {
     let (width, height, bgra, _) = desktop(1.0);
-    let mut state = OverlayState::new(
-        vec![monitor(width, height, 96)],
-        0,
-        Vec::new(),
-        OverlayConfig::default(),
-    )
-    .expect("state");
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, Vec::new(), base()).expect("state");
     focused(&mut state);
     check("help", &draw(&state, 0, width, height, &bgra));
 }
@@ -305,7 +299,7 @@ fn another_monitor_while_following_is_only_dimmed() {
         windows,
         OverlayConfig {
             follow_cursor: true,
-            ..OverlayConfig::default()
+            ..base()
         },
     )
     .expect("state");
@@ -341,13 +335,8 @@ fn a_whole_monitor_selection_keeps_its_frame_on_screen() {
 #[test]
 fn rendering_is_deterministic() {
     let (width, height, bgra, windows) = desktop(1.25);
-    let mut state = OverlayState::new(
-        vec![monitor(width, height, 120)],
-        0,
-        windows,
-        OverlayConfig::default(),
-    )
-    .expect("state");
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 120)], 0, windows, base()).expect("state");
     focused(&mut state);
     pointer(&mut state, "down", 50, 50);
     pointer(&mut state, "drag", 300, 200);
@@ -751,4 +740,22 @@ fn bold_italic_underlined_text_from_the_side_panel() {
     );
     assert!(state.side_panel().is_none());
     check("text_styled", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn editor_hint_above_the_selection() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let config = OverlayConfig {
+        show_editor_hint: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, config).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 180, 120);
+    pointer(&mut state, "drag", 300, 200);
+    pointer(&mut state, "drag", 460, 280);
+    pointer(&mut state, "up", 460, 280);
+    assert!(state.editor_hint().is_some());
+    check("editor_hint", &draw(&state, 0, width, height, &bgra));
 }

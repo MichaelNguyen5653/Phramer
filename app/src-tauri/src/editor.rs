@@ -1349,6 +1349,19 @@ pub(crate) fn editor_save_all_end<R: Runtime>(
     notices
 }
 
+/// The Save menu's Show in Folder can act: a file saved this session (by
+/// the overlay or an editor) is still there.
+#[tauri::command]
+pub(crate) fn editor_has_last_saved() -> bool {
+    capture::last_saved().is_some_and(|path| path.exists())
+}
+
+/// The Save menu's Show in Folder (`FileHandoff::showInFolder(lastSaved())`).
+#[tauri::command]
+pub(crate) fn editor_show_last_saved<R: Runtime>(app: AppHandle<R>) {
+    crate::actions::show_last_capture_in_folder(&app);
+}
+
 /// `name`: what a file saved into a folder is called, instead of the
 /// filename pattern's; `format`: what a save writes, instead of the save
 /// extension.

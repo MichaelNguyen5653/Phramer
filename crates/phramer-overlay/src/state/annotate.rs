@@ -785,6 +785,7 @@ impl OverlayState {
     ) {
         let point = self.image_point(self.snapped(at));
         self.tools.selected = None;
+        self.editing_started = true;
         if tool == ButtonType::Text {
             let size = self.object_size(ToolKind::Text, self.tools.size);
             let font = self.tools.text_font.clone();

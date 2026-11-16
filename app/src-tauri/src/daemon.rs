@@ -58,6 +58,8 @@ pub(crate) fn run(start: Option<Forwarded>) -> i32 {
             editor::editor_font_faces,
             editor::editor_save_all_begin,
             editor::editor_save_all_end,
+            editor::editor_has_last_saved,
+            editor::editor_show_last_saved,
             settings_ui::ui_ready,
             settings_ui::settings_snapshot,
             settings_ui::settings_set,

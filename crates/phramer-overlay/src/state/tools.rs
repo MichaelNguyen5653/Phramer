@@ -397,6 +397,8 @@ pub enum SettingChange {
     ToolSize { button: ButtonType, size: u32 },
     /// `shapeKind`, `shapeStyle`.
     Shape { kind: ShapeKind, style: ShapeStyle },
+    /// `showQuitPrompt`, from the prompt's "Do not show this again".
+    ShowQuitPrompt(bool),
 }
 
 impl SettingChange {
@@ -431,6 +433,10 @@ impl SettingChange {
                     ShapeKind::Circle => 1,
                 })?;
                 settings.set_shape_style(shape_style_value(style))
+            }
+            SettingChange::ShowQuitPrompt(show) => {
+                settings.set_show_quit_prompt(show);
+                Ok(())
             }
         }
     }

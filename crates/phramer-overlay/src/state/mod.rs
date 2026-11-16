@@ -107,6 +107,11 @@ pub struct OverlayConfig {
     /// `videoCaptureEnabled`: the Screenshot/Video mode bar shows until a
     /// selection is started.
     pub video_mode: bool,
+    /// `showEditorHint`: a tip naming the editor and side-panel keys once a
+    /// selection exists, until the first drawing.
+    pub show_editor_hint: bool,
+    /// `showQuitPrompt`: Esc asks before closing.
+    pub quit_prompt: bool,
 }
 
 impl OverlayConfig {
@@ -131,6 +136,8 @@ impl OverlayConfig {
             tool_labels: settings.show_tool_labels(),
             copy_on_double_click: settings.copy_on_double_click(),
             video_mode: settings.video_capture_enabled(),
+            show_editor_hint: settings.show_editor_hint(),
+            quit_prompt: settings.show_quit_prompt(),
         }
     }
 }
@@ -181,6 +188,12 @@ pub enum Event {
     Tick,
     /// The overlay gained or lost the keyboard.
     Focus(bool),
+    /// The answer to [`Effect::AskQuit`]; `stop_asking` is "Do not show this
+    /// again".
+    QuitAnswer {
+        quit: bool,
+        stop_asking: bool,
+    },
 }
 
 /// The pointer shape to show.
@@ -272,6 +285,9 @@ pub enum Effect {
     WakeAt(Millis),
     /// Write a choice back to the settings file now, as 15.0.0 did.
     Persist(SettingChange),
+    /// Ask "Are you sure you want to quit capture?" and send the answer back
+    /// as [`Event::QuitAnswer`].
+    AskQuit,
     /// Close every window; export when the outcome says so. Always the last
     /// effect, and never emitted twice.
     Close(Outcome),
@@ -347,6 +363,9 @@ pub struct OverlayState {
     mode_hover: Option<CaptureMode>,
     /// The toolbar's names, by button, with their sizes, when they show.
     labels: Vec<(String, (i32, i32))>,
+    /// Something was drawn: the editor hint has served its purpose. Never
+    /// reset, not even by undo, as in 15.0.0.
+    editing_started: bool,
 }
 
 /// Collects effects, one redraw per monitor.
@@ -411,6 +430,7 @@ impl OverlayState {
             mode_bar: config.video_mode && selection.is_none(),
             mode_hover: None,
             labels: Vec::new(),
+            editing_started: false,
             config,
         }
         .with_labels())
@@ -483,6 +503,15 @@ impl OverlayState {
                 if focused != self.focused {
                     self.focused = focused;
                     effects.redraw(self.active);
+                }
+            }
+            Event::QuitAnswer { quit, stop_asking } => {
+                if stop_asking {
+                    self.config.quit_prompt = false;
+                    effects.push(Effect::Persist(SettingChange::ShowQuitPrompt(false)));
+                }
+                if quit {
+                    self.close(Outcome::Cancelled, &mut effects);
                 }
             }
         }
@@ -562,6 +591,24 @@ impl OverlayState {
         }
         rows.push(("Esc".to_owned(), "Exit".to_owned()));
         rows
+    }
+
+    /// `drawEditorHint`'s text, while it shows. The keys are read from the
+    /// bindings: a cleared one is left out rather than naming a key that does
+    /// nothing, and with neither bound there is no hint.
+    pub fn editor_hint(&self) -> Option<String> {
+        if !self.config.show_editor_hint || self.editing_started || self.selection.is_none() {
+            return None;
+        }
+        let key = |action| self.config.bindings.shortcut(action).map(|s| s.label());
+        let mut tips = Vec::new();
+        if let Some(editor) = key(KeyAction::Button(ButtonType::OpenInEditor)) {
+            tips.push(format!("press {editor} to open the editor"));
+        }
+        if let Some(panel) = key(KeyAction::TogglePanel) {
+            tips.push(format!("{panel} to open tool settings"));
+        }
+        (!tips.is_empty()).then(|| format!("Tip: {}", tips.join("  ·  ")))
     }
 
     /// The `WxH+X+Y` label (physical pixels, relative to the monitor), when
@@ -899,7 +946,10 @@ impl OverlayState {
             return;
         }
         if key == Key::Escape {
-            if !self.escape_tools(effects) {
+            if self.escape_tools(effects) {
+            } else if self.config.quit_prompt {
+                effects.push(Effect::AskQuit);
+            } else {
                 self.close(Outcome::Cancelled, effects);
             }
             return;

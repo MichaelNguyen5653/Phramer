@@ -677,6 +677,24 @@ test("rename with an extension: .pdf converts, .tif is refused with a hint", asy
   ]);
 });
 
+test("Save menu: Show in Folder opens the last saved image, once there is one", async ({ page }) => {
+  await open(page);
+  const chevron = page.getByTestId("export-as");
+  await chevron.click();
+  const show = page.getByTestId("menu-show_in_folder");
+  await expect(show).toHaveText("Show in Folder");
+  await expect(show).toBeDisabled();
+  await page.keyboard.press("Escape");
+
+  await page.keyboard.press("Control+s");
+  await expect.poll(async () => (await exportHeaders(page)).length).toBe(1);
+  await chevron.click();
+  await expect(show).toBeEnabled();
+  await show.click();
+  await expect(page.getByRole("menu", { name: "Export as" })).toHaveCount(0);
+  await expect.poll(async () => (await calls(page, "editor_show_last_saved")).length).toBe(1);
+});
+
 test("Export as: the list by Save converts the image and is remembered for new images and the next session", async ({ page }) => {
   await open(page);
   // Save keeps its key; the list sits beside it

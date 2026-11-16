@@ -127,6 +127,14 @@ export const backend = {
     if (format !== undefined) headers["x-format"] = format;
     return invoke<Notice[]>("editor_export", body, { headers });
   },
+  /** Whether a file saved this session still exists (Show in Folder). */
+  hasLastSaved(): Promise<boolean> {
+    return invoke<boolean>("editor_has_last_saved");
+  },
+  /** Explorer, with the last file saved this session selected. */
+  showLastSaved(): Promise<void> {
+    return invoke("editor_show_last_saved");
+  },
   /** Save All: asks for a folder and makes one for the images inside it;
    * `null` when cancelled. Each image then goes as `save_all`. */
   saveAllBegin(): Promise<string | null> {

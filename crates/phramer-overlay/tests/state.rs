@@ -6,7 +6,7 @@ use phramer_capture::{LocalRect, LogicalPoint, LogicalRect, Monitor, MonitorId, 
 use phramer_core::config::Settings;
 use phramer_overlay::{
     CursorShape, Effect, Event, Export, ExportAction, GeometryLabel, Key, Modifiers, Outcome,
-    OverlayConfig, OverlayState, PointerButton,
+    OverlayConfig, OverlayState, PointerButton, SettingChange,
 };
 
 fn monitor(id: &str, (x, y, width, height): (i32, i32, i32, i32), dpi: u32) -> Monitor {
@@ -999,4 +999,145 @@ fn the_document_covers_the_active_monitor() {
     overlay.hover_at(2, p(10, 10));
     assert_eq!(overlay.state.document().image_size().width, 3840);
     assert!(overlay.state.document().objects().is_empty());
+}
+
+// --- Editor hint (`CaptureWidget::drawEditorHint`) ------------------------------
+
+fn with_settings(settings: &Settings) -> Overlay {
+    Overlay::new(
+        single(),
+        0,
+        Vec::new(),
+        OverlayConfig::from_settings(settings),
+    )
+}
+
+#[test]
+fn the_editor_hint_names_both_keys_once_a_selection_exists() {
+    let mut overlay = Overlay::on(single());
+    assert_eq!(overlay.state.editor_hint(), None);
+    overlay.select(p(100, 100), p(400, 300));
+    assert_eq!(
+        overlay.state.editor_hint().as_deref(),
+        Some("Tip: press E to open the editor  ·  Space to open tool settings")
+    );
+}
+
+#[test]
+fn the_editor_hint_setting_turns_it_off() {
+    let mut settings = Settings::default();
+    settings.set_show_editor_hint(false);
+    let mut overlay = with_settings(&settings);
+    overlay.select(p(100, 100), p(400, 300));
+    assert_eq!(overlay.state.editor_hint(), None);
+}
+
+#[test]
+fn the_editor_hint_leaves_out_a_cleared_key_and_goes_without_both() {
+    let mut settings = Settings::default();
+    settings.set_shortcut("TYPE_TOGGLE_PANEL", "").unwrap();
+    let mut overlay = with_settings(&settings);
+    overlay.select(p(100, 100), p(400, 300));
+    assert_eq!(
+        overlay.state.editor_hint().as_deref(),
+        Some("Tip: press E to open the editor")
+    );
+
+    settings.set_shortcut("TYPE_OPEN_IN_EDITOR", "").unwrap();
+    let mut overlay = with_settings(&settings);
+    overlay.select(p(100, 100), p(400, 300));
+    assert_eq!(overlay.state.editor_hint(), None);
+}
+
+#[test]
+fn drawing_dismisses_the_editor_hint_for_good() {
+    let mut overlay = Overlay::on(single());
+    overlay.select(p(100, 100), p(400, 300));
+    overlay.key(Key::Char('r'), Modifiers::NONE);
+    overlay.press(0, p(150, 150), PointerButton::Left);
+    assert_eq!(overlay.state.editor_hint(), None);
+    overlay.drag(0, p(200, 200), Modifiers::NONE);
+    overlay.release(0, p(200, 200), PointerButton::Left);
+    // Undone, the annotation is gone, but the hint stays away as in 15.0.0
+    overlay.key(Key::Char('z'), Modifiers::CTRL);
+    assert!(overlay.state.document().objects().is_empty());
+    assert_eq!(overlay.state.editor_hint(), None);
+}
+
+// --- Quit prompt (`showQuitPrompt`, `CaptureWidget::promptQuit`) ----------------
+
+fn asking_before_quit() -> Overlay {
+    let mut settings = Settings::default();
+    settings.set_show_quit_prompt(true);
+    with_settings(&settings)
+}
+
+#[test]
+fn esc_closes_at_once_without_the_quit_prompt() {
+    let mut overlay = Overlay::on(single());
+    overlay.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(overlay.closed_with(), Some(Outcome::Cancelled));
+}
+
+#[test]
+fn esc_asks_first_with_the_quit_prompt_on() {
+    let mut overlay = asking_before_quit();
+    assert_eq!(overlay.key(Key::Escape, Modifiers::NONE), [Effect::AskQuit]);
+    assert_eq!(overlay.closed_with(), None);
+    assert!(!overlay.state.is_closed());
+}
+
+#[test]
+fn answering_yes_closes_and_no_stays() {
+    let mut overlay = asking_before_quit();
+    overlay.key(Key::Escape, Modifiers::NONE);
+    overlay.send(Event::QuitAnswer {
+        quit: false,
+        stop_asking: false,
+    });
+    assert!(!overlay.state.is_closed());
+    overlay.key(Key::Escape, Modifiers::NONE);
+    overlay.send(Event::QuitAnswer {
+        quit: true,
+        stop_asking: false,
+    });
+    assert_eq!(overlay.closed_with(), Some(Outcome::Cancelled));
+}
+
+#[test]
+fn do_not_show_again_is_saved_and_takes_effect_at_once() {
+    let mut overlay = asking_before_quit();
+    overlay.key(Key::Escape, Modifiers::NONE);
+    let effects = overlay
+        .send(Event::QuitAnswer {
+            quit: false,
+            stop_asking: true,
+        })
+        .to_vec();
+    assert!(effects.contains(&Effect::Persist(SettingChange::ShowQuitPrompt(false))));
+    let mut settings = Settings::default();
+    settings.set_show_quit_prompt(true);
+    SettingChange::ShowQuitPrompt(false)
+        .apply(&mut settings)
+        .unwrap();
+    assert!(!settings.show_quit_prompt());
+    // The next Esc no longer asks
+    overlay.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(overlay.closed_with(), Some(Outcome::Cancelled));
+}
+
+#[test]
+fn esc_with_a_tool_selected_drops_the_tool_before_asking() {
+    let mut overlay = asking_before_quit();
+    overlay.select(p(100, 100), p(400, 300));
+    overlay.key(Key::Char('r'), Modifiers::NONE);
+    assert!(
+        !overlay
+            .key(Key::Escape, Modifiers::NONE)
+            .contains(&Effect::AskQuit)
+    );
+    assert_eq!(
+        overlay.key(Key::Escape, Modifiers::NONE).last(),
+        Some(&Effect::AskQuit)
+    );
 }

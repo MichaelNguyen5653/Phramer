@@ -339,6 +339,9 @@ impl Painter {
         ui.grid(&mut canvas, state, &mapping, selection, theme);
         ui.toolbar(&mut canvas, font, state, &mapping, theme);
         ui.tool_labels(&mut canvas, font, state, &mapping);
+        if let (Some(selection), Some(text)) = (selection, state.editor_hint()) {
+            ui.editor_hint(&mut canvas, font, state, &mapping, selection, &text);
+        }
         ui.wheel(&mut canvas, state, &mapping, theme);
         ui.size_notice(&mut canvas, font, state);
         if state.help_visible() {
@@ -354,6 +357,62 @@ impl Painter {
         }
         Ok(())
     }
+}
+
+/// An (x, y, w, h) rectangle in canvas pixels.
+type Area = (f32, f32, f32, f32);
+
+/// 15.0.0's `HintPlacement::place`: where a `hint`-sized pill goes for
+/// `selection` on a `screen`-sized canvas, `gap` from the selection edge.
+/// Above first (the toolbar defaults to below), then below; when both touch
+/// an obstacle they step outward past it; inside the selection's bottom
+/// edge is the last resort. `None`: nothing fits, draw no hint rather than
+/// cover something the user needs. Returns the top-left corner.
+fn place_hint(
+    hint: (f32, f32),
+    selection: Area,
+    screen: (f32, f32),
+    obstacles: &[Area],
+    gap: f32,
+) -> Option<(f32, f32)> {
+    let (w, h) = hint;
+    let (sx, sy, sw, sh) = selection;
+    // Centred on the selection, then pulled back inside the screen: clamped
+    // before the fit test, or a selection at the edge rejects every slot
+    let x = (sx + (sw - w) / 2.0).min(screen.0 - w).max(0.0);
+    let on_screen = |y: f32| y >= 0.0 && y + h <= screen.1 && w <= screen.0;
+    let first_hit = |y: f32| {
+        obstacles
+            .iter()
+            .find(|&&(ox, oy, ow, oh)| x < ox + ow && ox < x + w && y < oy + oh && oy < y + h)
+    };
+    let fits = |y: f32| on_screen(y) && first_hit(y).is_none();
+    // Each step clears one obstacle, so more steps than obstacles is a loop
+    let step_past = |mut y: f32, upward: bool| {
+        for _ in 0..=obstacles.len() {
+            if !on_screen(y) {
+                return None;
+            }
+            match first_hit(y) {
+                None => return Some(y),
+                Some(&(_, oy, _, oh)) => y = if upward { oy - gap - h } else { oy + oh + gap },
+            }
+        }
+        None
+    };
+    let above = sy - gap - h;
+    let below = sy + sh + gap;
+    let inside = sy + sh - gap - h;
+    let y = if fits(above) {
+        Some(above)
+    } else if fits(below) {
+        Some(below)
+    } else {
+        step_past(above, true)
+            .or_else(|| step_past(below, false))
+            .or_else(|| fits(inside).then_some(inside))
+    };
+    y.map(|y| (x, y))
 }
 
 /// Copies the undimmed screenshot (`source`, BGRA rows of `width`) back
@@ -549,6 +608,60 @@ impl Ui {
             y + pad_y + metrics.ascent,
             size,
             Weight::Medium,
+            &solid(bgra_color(FG, 1.0)),
+        );
+    }
+
+    /// `drawEditorHint`'s pill, off the toolbar and its labels; not drawn
+    /// where nothing fits.
+    fn editor_hint(
+        &self,
+        canvas: &mut PixmapMut<'_>,
+        font: &mut Font<'_>,
+        state: &OverlayState,
+        mapping: &Mapping<'_>,
+        selection: PixelRect,
+        text: &str,
+    ) {
+        let size = self.px(TEXT_13);
+        let metrics = font.metrics(size);
+        let pad_x = self.px(SPACE_12);
+        let pad_y = self.px(SPACE_4);
+        let hint = (
+            font.measure(text, size, Weight::Regular).ceil() + 2.0 * pad_x,
+            metrics.height + 2.0 * pad_y,
+        );
+        let obstacles: Vec<Area> = state
+            .toolbar()
+            .iter()
+            .map(|button| button.rect)
+            .chain(state.toolbar_labels().into_iter().map(|(rect, _)| rect))
+            .map(|rect| mapping.rect(rect))
+            .collect();
+        let area = (
+            selection.left as f32,
+            selection.top as f32,
+            selection.width(),
+            selection.height(),
+        );
+        let Some((x, y)) = place_hint(
+            hint,
+            area,
+            (self.width, self.height),
+            &obstacles,
+            self.px(SPACE_8),
+        ) else {
+            return;
+        };
+        let (x, y) = (x.round(), y.round());
+        self.panel(canvas, x, y, hint.0, hint.1, self.px(RADIUS_6));
+        font.draw(
+            canvas,
+            text,
+            x + pad_x,
+            y + pad_y + metrics.ascent,
+            size,
+            Weight::Regular,
             &solid(bgra_color(FG, 1.0)),
         );
     }
@@ -749,7 +862,7 @@ fn fill_rounded(
 
 #[cfg(test)]
 mod tests {
-    use super::dim;
+    use super::{dim, place_hint};
 
     #[test]
     fn dimming_matches_black_at_the_contrast_opacity() {
@@ -757,5 +870,59 @@ mod tests {
         assert_eq!(dim(&[255, 128, 0, 255], 190), [65, 33, 0, 255]);
         assert_eq!(dim(&[200, 100, 50, 255], 0), [200, 100, 50, 255]);
         assert_eq!(dim(&[200, 100, 50, 255], 255), [0, 0, 0, 255]);
+    }
+
+    // 15.0.0's `tst_hintplacement`, edges exclusive throughout
+    const PILL: (f32, f32) = (200.0, 24.0);
+    const SCREEN: (f32, f32) = (1920.0, 1080.0);
+    const GAP: f32 = 8.0;
+    const SELECTION: (f32, f32, f32, f32) = (700.0, 400.0, 400.0, 300.0);
+
+    #[test]
+    fn the_hint_sits_above_the_selection_centred_on_it() {
+        let (x, y) = place_hint(PILL, SELECTION, SCREEN, &[], GAP).unwrap();
+        assert_eq!(y + PILL.1, 400.0 - GAP);
+        assert_eq!(x + PILL.0 / 2.0, 700.0 + 400.0 / 2.0);
+    }
+
+    #[test]
+    fn the_hint_falls_below_without_room_above() {
+        let selection = (700.0, 0.0, 400.0, 300.0);
+        let (_, y) = place_hint(PILL, selection, SCREEN, &[], GAP).unwrap();
+        assert_eq!(y, 300.0 + GAP);
+    }
+
+    #[test]
+    fn the_hint_goes_inside_a_selection_that_fills_the_screen() {
+        let screen = (0.0, 0.0, SCREEN.0, SCREEN.1);
+        let (_, y) = place_hint(PILL, screen, SCREEN, &[], GAP).unwrap();
+        assert_eq!(y + PILL.1, SCREEN.1 - GAP);
+    }
+
+    #[test]
+    fn the_hint_avoids_an_obstacle_in_the_first_slot() {
+        let strip = [(600.0, 340.0, 600.0, 60.0)];
+        let (_, y) = place_hint(PILL, SELECTION, SCREEN, &strip, GAP).unwrap();
+        assert_eq!(y, 700.0 + GAP);
+    }
+
+    #[test]
+    fn no_hint_when_every_candidate_is_covered() {
+        let everything = [(0.0, 0.0, SCREEN.0, SCREEN.1)];
+        assert_eq!(place_hint(PILL, SELECTION, SCREEN, &everything, GAP), None);
+    }
+
+    #[test]
+    fn the_hint_steps_past_buttons_straddling_the_selection_edges() {
+        let strips = [(650.0, 370.0, 500.0, 70.0), (650.0, 670.0, 500.0, 70.0)];
+        let (_, y) = place_hint(PILL, SELECTION, SCREEN, &strips, GAP).unwrap();
+        assert_eq!(y + PILL.1, 370.0 - GAP);
+    }
+
+    #[test]
+    fn the_hint_is_clamped_to_the_screen_horizontally() {
+        let selection = (0.0, 400.0, 40.0, 300.0);
+        let (x, _) = place_hint(PILL, selection, SCREEN, &[], GAP).unwrap();
+        assert_eq!(x, 0.0);
     }
 }

@@ -160,6 +160,19 @@ test.describe("settings", () => {
     await expect(toggle).toHaveAttribute("aria-checked", "false");
   });
 
+  test("Print Screen: Don't ask again stops the question for good", async ({ page }) => {
+    await openSettings(page);
+    await page.getByTestId("nav-shortcuts").click();
+    const banner = page.getByTestId("print-screen-banner");
+    await banner.getByRole("button", { name: "Don't ask again" }).click();
+    await expect.poll(async () => (await calls(page, "settings_set")).at(-1)).toEqual({
+      key: "ignorePrntScrForcesSnipping",
+      value: true,
+    });
+    await expect(banner).toHaveCount(0);
+    expect(await calls(page, "settings_print_screen")).toEqual([]);
+  });
+
   test("the file name pattern previews as it is typed", async ({ page }) => {
     await openSettings(page);
     await page.getByTestId("nav-saving").click();

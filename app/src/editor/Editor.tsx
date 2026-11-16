@@ -543,7 +543,8 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
 
   /** Export as: the image shown is converted, and new images take the
    * format from now on, in this session and the next. */
-  const [exportMenu, setExportMenu] = useState<{ left: number; top: number } | null>(null);
+  // `saved`: Show in Folder has a file to show (15.0.0's Save menu)
+  const [exportMenu, setExportMenu] = useState<{ left: number; top: number; saved: boolean } | null>(null);
   const exportButton = useRef<HTMLButtonElement>(null);
   const chooseExportFormat = useCallback(
     (format: Format) => {
@@ -1135,7 +1136,10 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
                       }
                       commitText();
                       const box = event.currentTarget.getBoundingClientRect();
-                      setExportMenu({ left: box.left, top: box.bottom + 4 });
+                      setExportMenu({ left: box.left, top: box.bottom + 4, saved: false });
+                      void backend.hasLastSaved().then((saved) => {
+                        if (saved) setExportMenu((open) => open && { ...open, saved });
+                      });
                     }}
                   >
                     <Icon name="chevron-down" />
@@ -1267,11 +1271,18 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
       {exportMenu && (
         <Menu
           label="Export as"
-          items={FORMATS.map((format) => ({ id: format.id, label: format.label, checked: format.id === page.format }))}
+          items={[
+            ...FORMATS.map((format) => ({ id: format.id, label: format.label, checked: format.id === page.format })),
+            { id: "show_in_folder", label: "Show in Folder", group: "Last saved", disabled: !exportMenu.saved },
+          ]}
           at={exportMenu}
           onPick={(id) => {
             setExportMenu(null);
             exportButton.current?.focus();
+            if (id === "show_in_folder") {
+              void backend.showLastSaved();
+              return;
+            }
             const format = formatOf(id);
             if (format) chooseExportFormat(format);
           }}
