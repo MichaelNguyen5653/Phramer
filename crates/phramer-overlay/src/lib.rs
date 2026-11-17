@@ -47,10 +47,10 @@ pub use state::tools::{ButtonInfo, MAX_TOOL_SIZE, TOOLBAR_ORDER, button_info, is
 pub use state::{
     CaptureMode, CursorShape, Deferred, DeferredAction, Effect, Event, Export, ExportAction,
     GRAB_KEYS, GeometryLabel, GrabView, MagnifierShape, MagnifierView, Millis, ModeBarLayout,
-    ModeBarView, Outcome, OverlayConfig, OverlayState, PanelControl, PanelLayout, PanelRow,
-    Pixels, SettingChange, ShapeKind, ShapeOption, SidePanelView, TextStyle, ToolSettings,
-    ToolbarButton, WheelView, Zoom, disc_position, mode_bar_layout, side_panel_layout,
-    side_panel_tab,
+    ModeBarView, Outcome, OverlayConfig, OverlayState, PanelControl, PanelLayout, PanelRow, Pixels,
+    QuitControl, QuitPromptLayout, QuitPromptView, SettingChange, ShapeKind, ShapeOption,
+    SidePanelView, TextStyle, ToolSettings, ToolbarButton, WheelView, Zoom, disc_position,
+    mode_bar_layout, quit_prompt_layout, side_panel_layout, side_panel_tab,
 };
 #[cfg(windows)]
 pub use win::{

@@ -761,6 +761,26 @@ fn editor_hint_above_the_selection() {
 }
 
 #[test]
+fn quit_prompt_over_the_selection() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let config = OverlayConfig {
+        quit_prompt: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, config).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 180, 120);
+    pointer(&mut state, "drag", 460, 280);
+    pointer(&mut state, "up", 460, 280);
+    key(&mut state, Key::Escape, Modifiers::NONE);
+    key(&mut state, Key::Space, Modifiers::NONE);
+    let quit = state.quit_prompt().expect("prompt").layout.quit;
+    pointer(&mut state, "move", quit.x + 10, quit.y + 10);
+    check("quit_prompt", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
 fn monitor_picker_names_each_monitor_and_frames_the_highlighted_one() {
     let (width, height, bgra, windows) = desktop(1.0);
     let monitors = vec![

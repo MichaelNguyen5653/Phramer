@@ -14,6 +14,7 @@ mod annotate;
 mod grab;
 mod modebar;
 mod panel;
+mod quit;
 mod selection;
 pub(crate) mod toolbar;
 pub mod tools;
@@ -33,6 +34,7 @@ pub use panel::{
     PanelControl, PanelLayout, PanelRow, SidePanelView, TextStyle, disc_position,
     side_panel_layout, side_panel_tab,
 };
+pub use quit::{QuitControl, QuitPromptLayout, QuitPromptView, quit_prompt_layout};
 pub use selection::Side;
 use selection::{CLICK_DISTANCE, nudged, resize, side_at, spanned, translated};
 pub use tools::{SettingChange, ShapeKind, ToolSettings};
@@ -193,12 +195,6 @@ pub enum Event {
     Tick,
     /// The overlay gained or lost the keyboard.
     Focus(bool),
-    /// The answer to [`Effect::AskQuit`]; `stop_asking` is "Do not show this
-    /// again".
-    QuitAnswer {
-        quit: bool,
-        stop_asking: bool,
-    },
 }
 
 /// The pointer shape to show.
@@ -290,9 +286,6 @@ pub enum Effect {
     WakeAt(Millis),
     /// Write a choice back to the settings file now, as 15.0.0 did.
     Persist(SettingChange),
-    /// Ask "Are you sure you want to quit capture?" and send the answer back
-    /// as [`Event::QuitAnswer`].
-    AskQuit,
     /// Close every window; export when the outcome says so. Always the last
     /// effect, and never emitted twice.
     Close(Outcome),
@@ -374,6 +367,8 @@ pub struct OverlayState {
     /// The monitor is still to be chosen: every monitor has a window, the
     /// active one is the highlighted choice.
     picking: bool,
+    /// "Are you sure you want to quit capture?" is showing.
+    quit_prompt: Option<quit::QuitPrompt>,
 }
 
 /// Collects effects, one redraw per monitor.
@@ -441,6 +436,7 @@ impl OverlayState {
             labels: Vec::new(),
             editing_started: false,
             picking,
+            quit_prompt: None,
             config,
         }
         .with_labels())
@@ -468,6 +464,9 @@ impl OverlayState {
         }
         self.now = now;
         if self.picking && self.picker_event(event, &mut effects) {
+            return effects.0;
+        }
+        if self.quit_prompt.is_some() && self.quit_prompt_event(event, &mut effects) {
             return effects.0;
         }
         match event {
@@ -516,15 +515,6 @@ impl OverlayState {
                 if focused != self.focused {
                     self.focused = focused;
                     effects.redraw(self.active);
-                }
-            }
-            Event::QuitAnswer { quit, stop_asking } => {
-                if stop_asking {
-                    self.config.quit_prompt = false;
-                    effects.push(Effect::Persist(SettingChange::ShowQuitPrompt(false)));
-                }
-                if quit {
-                    self.close(Outcome::Cancelled, &mut effects);
                 }
             }
         }
@@ -696,7 +686,7 @@ impl OverlayState {
                 }
             }
             Event::Key { key, modifiers } => self.picker_key(key, modifiers, effects),
-            Event::Tick | Event::Focus(_) | Event::QuitAnswer { .. } => return false,
+            Event::Tick | Event::Focus(_) => return false,
             Event::PointerDown { .. }
             | Event::PointerUp { .. }
             | Event::Text(_)
@@ -1034,7 +1024,7 @@ impl OverlayState {
         if key == Key::Escape {
             if self.escape_tools(effects) {
             } else if self.config.quit_prompt {
-                effects.push(Effect::AskQuit);
+                self.open_quit_prompt(effects);
             } else {
                 self.close(Outcome::Cancelled, effects);
             }

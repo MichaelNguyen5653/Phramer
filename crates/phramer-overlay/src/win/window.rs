@@ -746,7 +746,6 @@ enum Work {
     Cursor(CursorShape),
     Hide(HWND),
     Timer(HWND, u32),
-    AskQuit(HWND),
 }
 
 /// Applies effects: bookkeeping inside the shell, window calls after.
@@ -789,12 +788,6 @@ fn run_effects(effects: Vec<Effect>) {
                     Some(path) => persist(path, change),
                     None => log::debug!("not saved: {change:?}"),
                 },
-                Effect::AskQuit => {
-                    let active = shell.state.as_ref().map(OverlayState::active_monitor);
-                    if let Some(Some(slot)) = active.and_then(|monitor| shell.slots.get(monitor)) {
-                        work.push(Work::AskQuit(slot.hwnd));
-                    }
-                }
                 Effect::Close(outcome) => shell.outcome = Some(outcome),
             }
         }
@@ -802,14 +795,6 @@ fn run_effects(effects: Vec<Effect>) {
     })
     .unwrap_or_default();
     for item in work {
-        if let Work::AskQuit(owner) = item {
-            // A modal loop: the answer comes back as an event of its own
-            let (quit, stop_asking) = super::prompt::ask_quit(owner);
-            let effects = with_shell(|shell| shell.feed(Event::QuitAnswer { quit, stop_asking }))
-                .unwrap_or_default();
-            run_effects(effects);
-            continue;
-        }
         // SAFETY: every handle is a window of this thread that is still
         // alive (windows are destroyed only after the loop ends); the calls
         // take plain values.
@@ -827,8 +812,6 @@ fn run_effects(effects: Vec<Effect>) {
                 Work::Timer(hwnd, delay) => {
                     SetTimer(hwnd, TIMER_ID, delay, None);
                 }
-                // Handled above, outside this block
-                Work::AskQuit(_) => {}
             }
         }
     }

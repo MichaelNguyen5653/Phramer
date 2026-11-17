@@ -14,6 +14,7 @@ pub(crate) mod layer;
 mod magnify;
 mod modebar;
 mod panel;
+mod quit;
 pub(crate) mod text;
 mod tools;
 
@@ -366,6 +367,7 @@ impl Painter {
         ui.side_panel(&mut canvas, font, state, &mapping, theme, &mut self.panel);
         ui.magnifier(&mut canvas, state, frame, theme);
         ui.color_grab(&mut canvas, font, state, frame);
+        ui.quit_prompt(&mut canvas, font, state, &mapping, theme);
         if !state.is_focused() {
             ui.focus_hint(&mut canvas, font);
         }

@@ -6,7 +6,7 @@ use phramer_capture::{LocalRect, LogicalPoint, LogicalRect, Monitor, MonitorId, 
 use phramer_core::config::Settings;
 use phramer_overlay::{
     CursorShape, Effect, Event, Export, ExportAction, GeometryLabel, Key, Modifiers, Outcome,
-    OverlayConfig, OverlayState, PointerButton, SettingChange,
+    OverlayConfig, OverlayState, PointerButton, QuitControl, SettingChange,
 };
 
 fn monitor(id: &str, (x, y, width, height): (i32, i32, i32, i32), dpi: u32) -> Monitor {
@@ -1065,6 +1065,8 @@ fn drawing_dismisses_the_editor_hint_for_good() {
 }
 
 // --- Quit prompt (`showQuitPrompt`, `CaptureWidget::promptQuit`) ----------------
+// Drawn inside the overlay, as a card over the capture: Enter quits, Esc goes
+// back, Space ticks "Do not show this again"; or the mouse, as a dialog.
 
 fn asking_before_quit() -> Overlay {
     let mut settings = Settings::default();
@@ -1072,48 +1074,127 @@ fn asking_before_quit() -> Overlay {
     with_settings(&settings)
 }
 
+fn centre(rect: LogicalRect) -> LogicalPoint {
+    p(rect.x + rect.width / 2, rect.y + rect.height / 2)
+}
+
+/// A press and release at `at`.
+fn click(overlay: &mut Overlay, at: LogicalPoint) -> Vec<Effect> {
+    let mut effects = overlay.press(0, at, PointerButton::Left).to_vec();
+    effects.extend_from_slice(overlay.release(0, at, PointerButton::Left));
+    overlay.effects = effects.clone();
+    effects
+}
+
 #[test]
 fn esc_closes_at_once_without_the_quit_prompt() {
     let mut overlay = Overlay::on(single());
     overlay.key(Key::Escape, Modifiers::NONE);
     assert_eq!(overlay.closed_with(), Some(Outcome::Cancelled));
+    assert_eq!(overlay.state.quit_prompt(), None);
 }
 
 #[test]
 fn esc_asks_first_with_the_quit_prompt_on() {
     let mut overlay = asking_before_quit();
-    assert_eq!(overlay.key(Key::Escape, Modifiers::NONE), [Effect::AskQuit]);
+    let effects = overlay.key(Key::Escape, Modifiers::NONE).to_vec();
     assert_eq!(overlay.closed_with(), None);
     assert!(!overlay.state.is_closed());
+    assert!(effects.contains(&Effect::Redraw { monitor: 0 }));
+    let view = overlay.state.quit_prompt().expect("the prompt shows");
+    assert!(!view.stop_asking);
+    assert_eq!(view.hovered, None);
+    // Centred on the monitor, with its parts inside the card
+    let card = view.layout.card;
+    assert_eq!(
+        (card.x * 2 + card.width, card.y * 2 + card.height),
+        (1920, 1080)
+    );
+    for part in [
+        view.layout.stop_asking,
+        view.layout.cancel,
+        view.layout.quit,
+    ] {
+        assert!(card.contains(p(part.x, part.y)));
+        assert!(card.contains(p(part.right() - 1, part.bottom() - 1)));
+    }
 }
 
 #[test]
-fn answering_yes_closes_and_no_stays() {
+fn enter_quits_and_esc_goes_back_to_the_capture() {
     let mut overlay = asking_before_quit();
     overlay.key(Key::Escape, Modifiers::NONE);
-    overlay.send(Event::QuitAnswer {
-        quit: false,
-        stop_asking: false,
-    });
+    overlay.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(overlay.state.quit_prompt(), None);
     assert!(!overlay.state.is_closed());
     overlay.key(Key::Escape, Modifiers::NONE);
-    overlay.send(Event::QuitAnswer {
-        quit: true,
-        stop_asking: false,
-    });
+    overlay.key(Key::Return, Modifiers::NONE);
     assert_eq!(overlay.closed_with(), Some(Outcome::Cancelled));
+}
+
+#[test]
+fn the_prompt_is_clicked_like_a_dialog() {
+    let mut overlay = asking_before_quit();
+    overlay.key(Key::Escape, Modifiers::NONE);
+    let layout = overlay.state.quit_prompt().expect("prompt").layout;
+    // Outside the card nothing happens: it is modal
+    click(&mut overlay, p(5, 5));
+    assert!(overlay.state.quit_prompt().is_some());
+    assert_eq!(overlay.state.selection(), None);
+    let effects = overlay.hover_at(0, centre(layout.quit)).to_vec();
+    assert_eq!(
+        overlay.state.quit_prompt().expect("prompt").hovered,
+        Some(QuitControl::Quit)
+    );
+    assert!(effects.contains(&Effect::SetCursor(CursorShape::Arrow)));
+    click(&mut overlay, centre(layout.cancel));
+    assert_eq!(overlay.state.quit_prompt(), None);
+    assert!(!overlay.state.is_closed());
+    overlay.key(Key::Escape, Modifiers::NONE);
+    click(&mut overlay, centre(layout.quit));
+    assert_eq!(overlay.closed_with(), Some(Outcome::Cancelled));
+}
+
+#[test]
+fn keys_and_tools_wait_while_the_prompt_shows() {
+    let mut overlay = asking_before_quit();
+    overlay.select(p(100, 100), p(400, 300));
+    overlay.key(Key::Escape, Modifiers::NONE);
+    assert!(overlay.state.quit_prompt().is_some());
+    overlay.key(Key::Char('c'), Modifiers::CTRL);
+    assert_eq!(overlay.closed_with(), None);
+    assert!(overlay.state.quit_prompt().is_some());
+    assert_eq!(
+        overlay.state.selection(),
+        Some(LogicalRect::new(100, 100, 300, 200))
+    );
+}
+
+#[test]
+fn an_unticked_box_saves_nothing() {
+    let mut overlay = asking_before_quit();
+    overlay.key(Key::Escape, Modifiers::NONE);
+    let effects = overlay.key(Key::Return, Modifiers::NONE).to_vec();
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Persist(_)))
+    );
 }
 
 #[test]
 fn do_not_show_again_is_saved_and_takes_effect_at_once() {
     let mut overlay = asking_before_quit();
     overlay.key(Key::Escape, Modifiers::NONE);
-    let effects = overlay
-        .send(Event::QuitAnswer {
-            quit: false,
-            stop_asking: true,
-        })
-        .to_vec();
+    let layout = overlay.state.quit_prompt().expect("prompt").layout;
+    click(&mut overlay, centre(layout.stop_asking));
+    assert!(overlay.state.quit_prompt().expect("prompt").stop_asking);
+    overlay.key(Key::Space, Modifiers::NONE);
+    assert!(!overlay.state.quit_prompt().expect("prompt").stop_asking);
+    overlay.key(Key::Space, Modifiers::NONE);
+    // Saved whichever way it is answered, as 15.0.0's check box was
+    let effects = overlay.key(Key::Escape, Modifiers::NONE).to_vec();
+    assert!(!overlay.state.is_closed());
     assert!(effects.contains(&Effect::Persist(SettingChange::ShowQuitPrompt(false))));
     let mut settings = Settings::default();
     settings.set_show_quit_prompt(true);
@@ -1131,15 +1212,10 @@ fn esc_with_a_tool_selected_drops_the_tool_before_asking() {
     let mut overlay = asking_before_quit();
     overlay.select(p(100, 100), p(400, 300));
     overlay.key(Key::Char('r'), Modifiers::NONE);
-    assert!(
-        !overlay
-            .key(Key::Escape, Modifiers::NONE)
-            .contains(&Effect::AskQuit)
-    );
-    assert_eq!(
-        overlay.key(Key::Escape, Modifiers::NONE).last(),
-        Some(&Effect::AskQuit)
-    );
+    overlay.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(overlay.state.quit_prompt(), None);
+    overlay.key(Key::Escape, Modifiers::NONE);
+    assert!(overlay.state.quit_prompt().is_some());
 }
 
 // --- Monitor picker (`captureRegionMode` 0, `ScreenGrabber::selectMonitorAndCrop`)
