@@ -47,9 +47,12 @@ pub(crate) fn apply_config_changes(changes: &ConfigChanges) -> Result<(), Settin
     }
     if let Some(pattern) = &changes.filename {
         settings.set_filename_pattern(pattern);
-        // 15.0.0 also printed an example of the parsed pattern; filename
-        // formatting is not ported yet
-        println!("The new pattern is '{pattern}'");
+        // The example from the stored pattern, as 15.0.0's parsedPattern()
+        let example = phramer_overlay::expand_pattern(
+            &settings.filename_pattern(),
+            &phramer_overlay::LocalTime::now(),
+        );
+        println!("{}", filename_message(pattern, &example));
     }
     if let Some(show) = changes.tray_icon {
         settings.set_disabled_tray_icon(!show);
@@ -62,6 +65,11 @@ pub(crate) fn apply_config_changes(changes: &ConfigChanges) -> Result<(), Settin
     }
     settings.save(&path)?;
     Ok(())
+}
+
+/// What `config --filename` prints: the pattern and a name it gives now.
+fn filename_message(pattern: &str, example: &str) -> String {
+    format!("The new pattern is '{pattern}'\nParsed pattern example: {example}")
 }
 
 /// What identifies one version of the file.
@@ -90,5 +98,19 @@ pub(crate) fn watch(path: PathBuf, mut on_change: impl FnMut() -> bool + Send + 
         });
     if let Err(error) = spawned {
         log::error!("cannot watch the settings file: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_pattern_is_echoed_with_an_example() {
+        // 15.0.0's two lines after `config --filename`
+        assert_eq!(
+            filename_message("%Y-%m-%d_%H-%M", "2026-11-16_09-05"),
+            "The new pattern is '%Y-%m-%d_%H-%M'\nParsed pattern example: 2026-11-16_09-05"
+        );
     }
 }

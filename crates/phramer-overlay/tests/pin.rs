@@ -8,10 +8,11 @@
 
 #![cfg(windows)]
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use phramer_capture::{PhysicalRect, enumerate_monitors};
-use phramer_overlay::{CapturedImage, PinOptions, open_pins, spawn_pin};
+use phramer_capture::{PhysicalRect, enumerate_monitors, grab_monitor};
+use phramer_overlay::{CapturedImage, PinOptions, PinRequest, open_pins, spawn_pin};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows_sys::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_READOBJECTS, GetUserObjectInformationW, OpenInputDesktop, UOI_NAME,
@@ -19,10 +20,14 @@ use windows_sys::Win32::System::StationsAndDesktops::{
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_DOWN, VK_ESCAPE,
+    VK_RETURN,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetWindowLongW, GetWindowRect, IsWindowVisible,
-    PostMessageW, WM_KEYDOWN, WM_MOUSEWHEEL, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    EnumWindows, FindWindowW, GWL_EXSTYLE, GetClassNameW, GetWindowLongW, GetWindowRect,
+    IsWindowVisible, PostMessageW, WM_CONTEXTMENU, WM_KEYDOWN, WM_MOUSEWHEEL, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
 const PIN_CLASS: &str = "PhramerPin";
@@ -180,5 +185,158 @@ fn pins_show_zoom_and_close() {
         wait_until(Duration::from_secs(5), || pins().is_empty()
             && open_pins() == 0),
         "Esc left pins open"
+    );
+}
+
+/// A popup menu is open (its window class is `#32768`).
+fn menu_open() -> bool {
+    let class: Vec<u16> = "#32768".encode_utf16().chain(Some(0)).collect();
+    // SAFETY: a NUL-terminated class name; no title.
+    let menu = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    // SAFETY: a read-only query; a null handle just gives 0.
+    !menu.is_null() && unsafe { IsWindowVisible(menu) } != 0
+}
+
+fn press(key: u16) {
+    let input = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = [input(0), input(KEYEVENTF_KEYUP)];
+    // SAFETY: two initialised keyboard inputs of the size given.
+    unsafe { SendInput(2, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+    std::thread::sleep(Duration::from_millis(50));
+}
+
+/// Picks the `n`th entry (from 1, separators not counted) of the pin's
+/// context menu with the keyboard, as Shift+F10 then the arrows would.
+fn choose_from_menu(pin: isize, n: usize) {
+    // -1, -1: from the keyboard, at the cursor
+    // SAFETY: posting to a window handle; a stale one just fails.
+    unsafe { PostMessageW(pin as HWND, WM_CONTEXTMENU, pin as usize, -1) };
+    assert!(
+        wait_until(Duration::from_secs(5), menu_open),
+        "the context menu did not open"
+    );
+    for _ in 0..n {
+        press(VK_DOWN);
+    }
+    press(VK_RETURN);
+    assert!(
+        wait_until(Duration::from_secs(5), || !menu_open()),
+        "the context menu stayed open"
+    );
+}
+
+/// The colour on screen at a physical point of the primary monitor.
+fn screen_pixel(monitor: &phramer_capture::Monitor, x: i32, y: i32) -> [u8; 3] {
+    let frame = grab_monitor(monitor).expect("grab");
+    let bounds = frame.bounds();
+    let at = (((y - bounds.y) * bounds.width + (x - bounds.x)) * 4) as usize;
+    let bgra = frame.bgra();
+    [bgra[at], bgra[at + 1], bgra[at + 2]]
+}
+
+#[test]
+#[ignore = "live: shows a pin and drives its context menu"]
+fn pin_menu_changes_opacity_and_asks_for_the_editor() {
+    if !desktop_is_unlocked() {
+        println!("skipped: the session is locked or another desktop has the input");
+        return;
+    }
+    // SAFETY: a constant context; failing only means it was already set.
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    let monitors = enumerate_monitors().expect("monitors");
+    let primary = monitors
+        .iter()
+        .find(|monitor| monitor.is_primary())
+        .expect("a primary monitor");
+    let bounds = primary.bounds();
+    let at = PhysicalRect::new(bounds.x + 100, bounds.y + 100, 200, 100);
+    let (x, y) = (at.x + 100, at.y + 50);
+    let below = screen_pixel(primary, x, y);
+    let pin_colour = [40u8, 160, 220];
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let heard = Arc::clone(&requests);
+    let options = PinOptions {
+        accent: (255, 0, 0),
+        hover_accent: (0, 0, 255),
+        smooth: true,
+    };
+    spawn_pin(
+        image(200, 100),
+        at,
+        options,
+        Box::new(move |request, _| heard.lock().unwrap().push(request)),
+    )
+    .expect("pin");
+    assert!(
+        wait_until(Duration::from_secs(5), || pins().len() == 1),
+        "no pin"
+    );
+    let (pin, _, _) = pins()[0];
+    std::thread::sleep(Duration::from_millis(300));
+    let shown = screen_pixel(primary, x, y);
+    println!("below {below:?}, pin {shown:?}");
+    assert_eq!(shown, pin_colour, "the pin is not opaque at first");
+
+    // Entries: Copy, Save, Load into editor, Rotate Right, Rotate Left,
+    // Increase Opacity, Decrease Opacity, Close
+    choose_from_menu(pin, 7);
+    // 90 %: SourceConstantAlpha 230 over what is below
+    let expected: Vec<i32> = (0..3)
+        .map(|c| (i32::from(pin_colour[c]) * 230 + i32::from(below[c]) * 25 + 127) / 255)
+        .collect();
+    let mut faded = [0u8; 3];
+    let matched = wait_until(Duration::from_secs(3), || {
+        faded = screen_pixel(primary, x, y);
+        (0..3).all(|c| (i32::from(faded[c]) - expected[c]).abs() <= 3)
+    });
+    println!("Decrease Opacity: {faded:?}, expected {expected:?}");
+    if below
+        .iter()
+        .zip(pin_colour)
+        .any(|(b, p)| b.abs_diff(p) > 30)
+    {
+        assert!(matched, "Decrease Opacity did not fade the pin");
+    } else {
+        println!("the desktop below is too close to the pin's colour to see the fade");
+    }
+
+    choose_from_menu(pin, 6);
+    let mut back = [0u8; 3];
+    assert!(
+        wait_until(Duration::from_secs(3), || {
+            back = screen_pixel(primary, x, y);
+            back == pin_colour
+        }),
+        "Increase Opacity did not bring the pin back: {back:?}"
+    );
+
+    choose_from_menu(pin, 3);
+    assert!(
+        wait_until(Duration::from_secs(3), || requests
+            .lock()
+            .unwrap()
+            .contains(&PinRequest::OpenInEditor)),
+        "Load into editor asked for nothing: {:?}",
+        requests.lock().unwrap()
+    );
+
+    // SAFETY: posting to a window handle; a stale one just fails.
+    unsafe { PostMessageW(pin as HWND, WM_KEYDOWN, usize::from(VK_ESCAPE), 0) };
+    assert!(
+        wait_until(Duration::from_secs(5), || pins().is_empty()
+            && open_pins() == 0),
+        "Esc left the pin open"
     );
 }

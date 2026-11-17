@@ -43,7 +43,11 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_DOWN, VK_ESCAPE,
+    VK_RETURN,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, WM_CONTEXTMENU};
 use windows_sys::Win32::UI::Shell::{NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ENDSESSION_CLOSEAPP, EnumWindows, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetSystemMetrics,
@@ -665,6 +669,137 @@ fn daemon_tray_forwarding_and_spawn() {
         "the settings file or startup registry entries changed"
     );
     println!("settings file and startup registry entries unchanged");
+    let _ = fs::remove_file(&log_path);
+}
+
+/// A popup menu is open (its window class is `#32768`).
+fn menu_open() -> bool {
+    let class = wide("#32768");
+    // SAFETY: a NUL-terminated class name; no title.
+    let menu = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    // SAFETY: a read-only query; a null handle just gives 0.
+    !menu.is_null() && unsafe { IsWindowVisible(menu) } != 0
+}
+
+fn press(key: u16) {
+    let input = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = [input(0), input(KEYEVENTF_KEYUP)];
+    // SAFETY: two initialised keyboard inputs of the size given.
+    unsafe { SendInput(2, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+    std::thread::sleep(Duration::from_millis(50));
+}
+
+#[test]
+#[ignore = "live: starts the daemon, pins a screenshot and opens it in the editor"]
+fn pin_load_into_editor_opens_the_editor() {
+    let _live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    per_monitor_dpi_aware();
+    let exe = exe();
+    println!("binary: {}", exe.display());
+    assert!(
+        processes_of(&exe).is_empty(),
+        "{} is already running",
+        exe.display()
+    );
+    assert!(!lock_exists(), "another Phramer 16 daemon holds the lock");
+    let mut cleanup = Cleanup {
+        exe: exe.clone(),
+        pids: Vec::new(),
+        before: user_state(),
+    };
+    let log_path =
+        std::env::temp_dir().join(format!("phramer-pin-smoke-{}.log", std::process::id()));
+    let log = fs::File::create(&log_path).expect("log file");
+    let daemon = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log)
+        .spawn()
+        .expect("start the daemon");
+    let daemon_pid = daemon.id();
+    cleanup.pids.push(daemon_pid);
+    assert!(
+        wait_until(Duration::from_secs(20), || {
+            lock_exists()
+                && windows_of(daemon_pid)
+                    .iter()
+                    .any(|w| w.class == "tray_icon_app")
+        }),
+        "the daemon did not come up"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    let tray = check_daemon(&exe, daemon_pid);
+
+    // A pin of the screen, as `phramer screen --pin`
+    let status = Command::new(cli_exe())
+        .env("PHRAMER_NO_WELCOME", "1")
+        .args(["screen", "--pin"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run phramer-cli");
+    assert!(status.success(), "phramer-cli screen --pin: {status}");
+    let pins = || {
+        windows_of(daemon_pid)
+            .into_iter()
+            .filter(|w| w.class == "PhramerPin" && w.visible)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        wait_until(Duration::from_secs(10), || pins().len() == 1),
+        "no pin appeared; windows: {:?}",
+        windows_of(daemon_pid)
+    );
+    let pin = pins()[0].clone();
+
+    // Its context menu from the keyboard: Copy, Save, Load into editor
+    // SAFETY: posting to a window handle; a stale one just fails.
+    unsafe { PostMessageW(pin.hwnd as HWND, WM_CONTEXTMENU, pin.hwnd as usize, -1) };
+    assert!(
+        wait_until(Duration::from_secs(5), menu_open),
+        "the pin's menu did not open"
+    );
+    for _ in 0..3 {
+        press(VK_DOWN);
+    }
+    press(VK_RETURN);
+    let (editor, seen) = wait_for_editor(daemon_pid, &log_path);
+    println!(
+        "editor {:#x} seen {} ms after Load into editor",
+        editor.hwnd,
+        seen.as_millis()
+    );
+    close_editor(daemon_pid, &editor, &[]);
+
+    // SAFETY: posting to a window handle; a stale one just fails.
+    unsafe { PostMessageW(pin.hwnd as HWND, WM_KEYDOWN, usize::from(VK_ESCAPE), 0) };
+    assert!(
+        wait_until(Duration::from_secs(5), || pins().is_empty()),
+        "Esc left the pin open"
+    );
+    stop(daemon_pid, &tray);
+    drop(daemon);
+    println!(
+        "--- daemon log ---\n{}",
+        fs::read_to_string(&log_path).unwrap_or_default()
+    );
+    assert!(
+        user_state() == cleanup.before,
+        "the settings file or startup registry entries changed"
+    );
     let _ = fs::remove_file(&log_path);
 }
 
