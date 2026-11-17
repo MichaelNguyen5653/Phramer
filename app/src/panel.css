@@ -38,6 +38,14 @@ textarea {
   color: inherit;
 }
 
+/* WebView2 draws an open list on its own background, whatever the colour
+   scheme, while the options inherit the select's text colour: white on
+   white in dark. They get the page's colours instead */
+option {
+  background-color: var(--bg);
+  color: var(--text-primary);
+}
+
 .icon {
   width: var(--space-16);
   height: var(--space-16);

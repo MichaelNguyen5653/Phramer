@@ -212,6 +212,25 @@ test.describe("settings", () => {
     expect((await calls(page, "settings_set")).some((args) => (args as { value: string }).value === "bad*name")).toBe(false);
   });
 
+  for (const scheme of ["light", "dark"] as const) {
+    test(`an open list reads in ${scheme}: options carry the page's colours`, async ({ page }) => {
+      // WebView2 draws the open list on its own background; options that
+      // only inherit the select's text colour were white on white in dark
+      await page.emulateMedia({ colorScheme: scheme });
+      await openSettings(page);
+      const colours = await page.evaluate(() => {
+        const option = document.querySelector("select option");
+        if (!option) return null;
+        const style = getComputedStyle(option);
+        const page = getComputedStyle(document.body);
+        return { background: style.backgroundColor, text: style.color, pageBackground: page.backgroundColor, pageText: page.color };
+      });
+      expect(colours).not.toBeNull();
+      expect(colours?.background).toBe(colours?.pageBackground);
+      expect(colours?.text).toBe(colours?.pageText);
+    });
+  }
+
   test("the file type offers the five formats and writes only when one is picked", async ({ page }) => {
     await openSettings(page);
     await page.getByTestId("nav-saving").click();
