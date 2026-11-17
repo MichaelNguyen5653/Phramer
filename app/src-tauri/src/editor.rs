@@ -186,6 +186,53 @@ struct Fit {
     origin: (i32, i32),
     work: (u32, u32),
     size: (f64, f64),
+    /// The monitor's scale factor.
+    scale: f64,
+}
+
+/// Where a window shown while it is built starts, in the logical units the
+/// builder takes: centred as [`center`] places it once built (frameless,
+/// so the outer size is the inner one).
+fn start_position(fit: &Fit) -> (f64, f64) {
+    let outer = (
+        (fit.size.0 * fit.scale).round() as u32,
+        (fit.size.1 * fit.scale).round() as u32,
+    );
+    let at = centered_in(fit.origin, fit.work, outer);
+    (f64::from(at.0) / fit.scale, f64::from(at.1) / fit.scale)
+}
+
+/// tokens.css `--bg`, for the window before its page has drawn.
+fn page_background(dark: bool) -> tauri::window::Color {
+    if dark {
+        tauri::window::Color(0x18, 0x19, 0x1b, 0xff)
+    } else {
+        tauri::window::Color(0xf7, 0xf7, 0xf8, 0xff)
+    }
+}
+
+/// Windows' app colour mode (`AppsUseLightTheme` 0), which the page's
+/// `prefers-color-scheme` follows.
+fn system_dark() -> bool {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };
+    let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    let value = wide("AppsUseLightTheme");
+    let mut light = 1u32;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: NUL-terminated names; `light` is a DWORD of `size` bytes.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&raw mut light).cast(),
+            &mut size,
+        )
+    };
+    status == 0 && light == 0
 }
 
 fn fit_for<R: Runtime>(app: &AppHandle<R>, image: (u32, u32)) -> Fit {
@@ -206,6 +253,7 @@ fn fit_for<R: Runtime>(app: &AppHandle<R>, image: (u32, u32)) -> Fit {
         origin,
         work,
         size: initial_size(image, work, scale),
+        scale,
     }
 }
 
@@ -230,13 +278,14 @@ enum Purpose {
     Empty,
 }
 
-/// A new hidden editor window of logical inner `size`. Blocks the main
-/// thread while WebView2 starts.
+/// A new editor window of logical inner `size`: hidden, or shown at once at
+/// `shown_at` (logical). Blocks the main thread while WebView2 starts.
 fn build<R: Runtime>(
     app: &AppHandle<R>,
     purpose: Purpose,
     requested: Instant,
     size: (f64, f64),
+    shown_at: Option<(f64, f64)>,
 ) -> Option<WebviewWindow<R>> {
     let editors = app.state::<Editors>();
     let number = editors.next.fetch_add(1, Ordering::Relaxed) + 1;
@@ -259,13 +308,19 @@ fn build<R: Runtime>(
         );
     }
     let held = session_end::hold();
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("editor.html".into()))
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("editor.html".into()))
         .title(TITLE)
         .inner_size(size.0, size.1)
         .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
         .decorations(false)
-        .visible(false)
-        .build();
+        .background_color(page_background(system_dark()))
+        // Shown while WebView2 starts, which can take seconds cold: the
+        // click is answered at once and the page says it is loading
+        .visible(shown_at.is_some());
+    if let Some((x, y)) = shown_at {
+        builder = builder.position(x, y);
+    }
+    let built = builder.build();
     drop(held);
     let window = match built {
         Ok(window) => window,
@@ -305,7 +360,13 @@ pub(crate) fn open<R: Runtime>(app: &AppHandle<R>, path: PathBuf) {
     let requested = Instant::now();
     let image = png_size(&path).unwrap_or((800, 600));
     let fit = fit_for(app, image);
-    let Some(window) = build(app, Purpose::Image(path.clone()), requested, fit.size) else {
+    let Some(window) = build(
+        app,
+        Purpose::Image(path.clone()),
+        requested,
+        fit.size,
+        Some(start_position(&fit)),
+    ) else {
         return;
     };
     center(&window, &fit);
@@ -366,7 +427,7 @@ pub(crate) fn open_empty<R: Runtime>(app: &AppHandle<R>) {
     }
     let requested = Instant::now();
     let fit = fit_for(app, (0, 0));
-    let Some(window) = build(app, Purpose::Empty, requested, fit.size) else {
+    let Some(window) = build(app, Purpose::Empty, requested, fit.size, None) else {
         return;
     };
     center(&window, &fit);
@@ -393,7 +454,7 @@ pub(crate) fn prewarm<R: Runtime>(app: &AppHandle<R>) {
         return;
     }
     let started = Instant::now();
-    let Some(window) = build(app, Purpose::Warm, started, (MIN_WIDTH, MIN_HEIGHT)) else {
+    let Some(window) = build(app, Purpose::Warm, started, (MIN_WIDTH, MIN_HEIGHT), None) else {
         return;
     };
     let label = window.label().to_owned();
@@ -1570,6 +1631,40 @@ mod tests {
         );
         // Larger than the area: its top-left corner
         assert_eq!(centered_in((0, 0), (800, 600), (1000, 700)), (0, 0));
+    }
+
+    #[test]
+    fn a_window_shown_at_once_starts_centred() {
+        // 1000x600 logical at 150 %: 1500x900 physical, centred in the
+        // 1920x1040 work area left of the primary, in logical units
+        let fit = Fit {
+            origin: (-1920, 0),
+            work: (1920, 1040),
+            size: (1000.0, 600.0),
+            scale: 1.5,
+        };
+        // Physical (-1710, 70): 210 and 70 of slack on each side
+        assert_eq!(start_position(&fit), (-1710.0 / 1.5, 70.0 / 1.5));
+        let plain = Fit {
+            origin: (0, 0),
+            work: (1920, 1040),
+            size: (800.0, 600.0),
+            scale: 1.0,
+        };
+        assert_eq!(start_position(&plain), (560.0, 220.0));
+    }
+
+    #[test]
+    fn the_window_starts_in_the_pages_background() {
+        // tokens.css --bg, so nothing flashes white before the page draws
+        assert_eq!(
+            page_background(false),
+            tauri::window::Color(0xf7, 0xf7, 0xf8, 0xff)
+        );
+        assert_eq!(
+            page_background(true),
+            tauri::window::Color(0x18, 0x19, 0x1b, 0xff)
+        );
     }
 
     #[test]

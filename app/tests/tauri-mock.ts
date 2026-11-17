@@ -16,6 +16,8 @@ export interface MockCall {
 export interface MockOptions {
   /** Opened with no image (the tray's Open Editor). */
   empty?: boolean;
+  /** The first image never arrives, as while WebView2 or the file is slow. */
+  pendingImage?: boolean;
 }
 
 declare global {
@@ -64,6 +66,8 @@ export function installTauriMock(options: MockOptions = {}): void {
   // The default pattern (%F_%H-%M), a minute apart
   const nameAt = (index: number) => `2026-11-14_09-${String(5 + index).padStart(2, "0")}`;
   const images: Uint8Array[] = options.empty ? [] : [makeImage(0, nameAt(0))];
+  // Read here: `invoke` has an `options` parameter of its own
+  const pendingImage = options.pendingImage === true;
   const settings = {
     color: [229, 72, 77],
     palette: [null, [255, 255, 255], [0, 0, 0], [128, 0, 0], [255, 0, 0], [255, 255, 0], [0, 255, 0], [0, 128, 0], [0, 255, 255], [0, 0, 255], [255, 0, 255], [128, 0, 128]],
@@ -124,6 +128,9 @@ export function installTauriMock(options: MockOptions = {}): void {
       switch (cmd) {
         case "editor_image": {
           const index = (args as { index?: number } | undefined)?.index ?? 0;
+          if (pendingImage && index === 0) {
+            return new Promise(() => {});
+          }
           const image = images[index];
           return image ? image.buffer.slice(0) : new ArrayBuffer(0);
         }

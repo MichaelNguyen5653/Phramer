@@ -10,6 +10,7 @@ import wasmUrl from "./phramer_annotate.wasm?url";
 import { backend, type Image } from "./backend";
 import { Editor } from "./Editor";
 import { EmptyEditor } from "./Empty";
+import { LoadingEditor } from "./Loading";
 import { Engine } from "./engine";
 
 async function start() {
@@ -42,6 +43,9 @@ async function start() {
       </React.StrictMode>,
     );
   };
+  // Until the image and the engine are here; replaced by the editor or the
+  // empty hint
+  root.render(<LoadingEditor backend={backend} />);
   try {
     const first = backend.imageAt(0);
     if ((await first) !== null) {

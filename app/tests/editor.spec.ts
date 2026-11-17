@@ -36,6 +36,19 @@ const boxes = (page: Page) =>
     }),
   );
 
+test("a window shown before its image says it is opening, and can be closed", async ({ page }) => {
+  await page.addInitScript(installTauriMock, { pendingImage: true });
+  await page.goto("/editor.html");
+  const loading = page.getByTestId("editor-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText("Opening the image");
+  await expect(page).toHaveScreenshot("editor-loading.png");
+  // Nothing is ready yet, so the daemon is not told to show anything
+  expect(await calls(page, "editor_ready")).toHaveLength(0);
+  await loading.getByRole("button", { name: "Close" }).click();
+  await expect.poll(async () => (await calls(page, "plugin:window|destroy")).length).toBe(1);
+});
+
 test("idle, light", async ({ page }) => {
   await open(page);
   await expect(page.getByTestId("zoom")).toHaveText("100%");
