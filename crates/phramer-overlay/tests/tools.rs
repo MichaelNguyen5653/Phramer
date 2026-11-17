@@ -953,6 +953,13 @@ fn actions_without_a_backend_close_with_a_deferred_outcome() {
         overlay.closed_with(),
         Some(Outcome::Deferred(deferred)) if deferred.action == DeferredAction::Ocr
     ));
+    // Straight after the drag that made the selection, no other click
+    let mut overlay = Overlay::selected();
+    overlay.char('e');
+    assert!(matches!(
+        overlay.closed_with(),
+        Some(Outcome::Deferred(deferred)) if deferred.action == DeferredAction::OpenInEditor
+    ));
 }
 
 #[test]

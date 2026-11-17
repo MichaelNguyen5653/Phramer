@@ -316,7 +316,10 @@ fn build<R: Runtime>(
         .background_color(page_background(system_dark()))
         // Shown while WebView2 starts, which can take seconds cold: the
         // click is answered at once and the page says it is loading
-        .visible(shown_at.is_some());
+        .visible(shown_at.is_some())
+        // A hidden one is built while the overlay is open: it must not take
+        // the keyboard from it. A shown one is focused when it shows
+        .focused(shown_at.is_some());
     if let Some((x, y)) = shown_at {
         builder = builder.position(x, y);
     }
@@ -453,8 +456,22 @@ pub(crate) fn prewarm<R: Runtime>(app: &AppHandle<R>) {
         log::info!("editor: {label} is pre-warmed already");
         return;
     }
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
     let started = Instant::now();
-    let Some(window) = build(app, Purpose::Warm, started, (MIN_WIDTH, MIN_HEIGHT), None) else {
+    // SAFETY: a plain query.
+    let foreground = unsafe { GetForegroundWindow() };
+    let built = build(app, Purpose::Warm, started, (MIN_WIDTH, MIN_HEIGHT), None);
+    // WebView2 starting up can take the foreground even for a hidden
+    // window; the overlay's keys (E for the editor) would then go nowhere
+    // until it is clicked again
+    // SAFETY: plain calls on window handles; a stale one just fails.
+    unsafe {
+        if !foreground.is_null() && GetForegroundWindow() != foreground {
+            log::warn!("editor: the pre-warm took the keyboard; handing it back");
+            SetForegroundWindow(foreground);
+        }
+    }
+    let Some(window) = built else {
         return;
     };
     let label = window.label().to_owned();
