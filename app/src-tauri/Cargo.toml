@@ -1,0 +1,109 @@
+[package]
+name = "phramer"
+version.workspace = true
+description = "Phramer screenshot tool"
+edition.workspace = true
+license.workspace = true
+# `src/bin/phramer-cli.rs` is the console companion
+default-run = "phramer"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "phramer_lib"
+# No cdylib: Tauri's MSI bundles every DLL beside the exe, and nothing
+# loads phramer_lib.dll
+crate-type = ["staticlib", "rlib"]
+
+[features]
+# Microsoft Store build: launch at sign-in comes from the package manifest's
+# startup task, so the HKCU Run value is never written.
+store = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# tray-icon: the daemon's notification-area icon and menu.
+tauri = { version = "2", features = ["tray-icon"] }
+# One daemon per user; later invocations hand their arguments to it.
+tauri-plugin-single-instance = "2"
+# Global hotkeys (RegisterHotKey underneath; covers Print Screen and Win combos).
+tauri-plugin-global-shortcut = "2"
+thiserror = "2"
+log = "0.4"
+# The C++ region syntax is a PCRE search; same leftmost-first captures.
+regex = "1"
+# The update check's release document (already in the tree through Tauri).
+serde_json = "1"
+# The update installer's checksum (already in the tree through Tauri).
+sha2 = "0.10"
+# The editor's commands: its settings and exports (already in the tree
+# through Tauri).
+serde = { version = "1", features = ["derive"] }
+# The editor's Save As dialog.
+tauri-plugin-dialog = "2"
+# The capture's save dialog, shown from the capture thread without an app
+# handle (already in the tree through tauri-plugin-dialog).
+rfd = { version = "0.17", default-features = false, features = ["common-controls-v6"] }
+# The editor reads the capture's PNG (already in the tree through the overlay).
+png = "0.18"
+
+phramer-core = { path = "../../crates/phramer-core" }
+phramer-capture = { path = "../../crates/phramer-capture" }
+# The capture overlay and the export.
+phramer-overlay = { path = "../../crates/phramer-overlay" }
+# OCR of the overlay's selection.
+phramer-ocr = { path = "../../crates/phramer-ocr" }
+# The editor's tool settings use the engine's types.
+phramer-annotate = { path = "../../crates/phramer-annotate" }
+
+# Run value, single-instance lock check, tray balloons, the Open with
+# dialog, phramer-cli's reply pipe, the update check (WinHTTP) and whether
+# Snipping Tool is installed. App Launcher: the Start Menu folders, the
+# image "Open with" lists, the programs' icons (GDI) and starting them.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Networking_WinHttp",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Snipping Tool's recorder: Launcher with a target package (WinRT), and
+# the app activation manager as the fallback. App Launcher reads Start Menu
+# shortcuts through IShellLinkW (its GetPath needs Storage_FileSystem).
+windows = { version = "0.62", features = [
+    "Foundation",
+    "System",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+
+# tests/smoke.rs lists processes by image path, finds the overlay's monitor
+# in physical pixels, sends the overlay keys and skips a locked session.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Graphics_Gdi",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_StationsAndDesktops",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

@@ -1,0 +1,809 @@
+//! Golden images of the overlay renderer, compared byte for byte with the
+//! PNGs under `tests/golden/`. `PHRAMER_UPDATE_GOLDEN=1` rewrites them; a
+//! mismatch writes the actual image and a diff under `target/overlay-golden/`
+//! and names them in the failure.
+
+use std::path::{Path, PathBuf};
+
+use phramer_capture::{LogicalPoint, Monitor, MonitorId, PhysicalRect};
+use std::sync::Arc;
+
+use phramer_overlay::{
+    BUNDLED_FONT, Event, FrameView, Key, Modifiers, OverlayConfig, OverlayState, Pixels,
+    PointerButton, RgbaImage, Theme, render,
+};
+
+const UPDATE_ENV: &str = "PHRAMER_UPDATE_GOLDEN";
+
+/// A made-up desktop at `scale`: a gradient wallpaper, two windows with
+/// title bars and text-like lines, a taskbar. Returns BGRA pixels and the
+/// windows' rectangles (physical).
+fn desktop(scale: f64) -> (u32, u32, Vec<u8>, Vec<PhysicalRect>) {
+    desktop_of_height(scale, 400)
+}
+
+/// [`desktop`], `logical_height` tall (the taskbar stays at the bottom).
+fn desktop_of_height(scale: f64, logical_height: i32) -> (u32, u32, Vec<u8>, Vec<PhysicalRect>) {
+    let s = |v: i32| (f64::from(v) * scale).round() as i32;
+    let (width, height) = (s(640) as u32, s(logical_height) as u32);
+    let taskbar = logical_height - 30;
+    let mut bgra = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let t = y as f64 / height as f64;
+            let wave = (((x as f64 / scale) * 0.05).sin() * 8.0) as i32;
+            let r = (40.0 + 60.0 * t) as i32 + wave;
+            let g = (70.0 - 30.0 * t) as i32;
+            let b = (120.0 + 20.0 * t) as i32 - wave;
+            bgra.extend_from_slice(&[b as u8, g as u8, r as u8, 255]);
+        }
+    }
+    let mut fill = |x: i32, y: i32, w: i32, h: i32, (r, g, b): (u8, u8, u8)| {
+        for row in s(y)..s(y + h) {
+            for column in s(x)..s(x + w) {
+                let at = (row as usize * width as usize + column as usize) * 4;
+                bgra[at..at + 4].copy_from_slice(&[b, g, r, 255]);
+            }
+        }
+    };
+    // Window A: a document
+    fill(60, 50, 260, 170, (238, 238, 242));
+    fill(60, 50, 260, 24, (214, 214, 224));
+    for line in 0..6 {
+        fill(
+            76,
+            90 + line * 18,
+            180 + (line % 3) * 30,
+            6,
+            (150, 150, 160),
+        );
+    }
+    // Window B: a chat, above A
+    fill(280, 140, 230, 190, (255, 255, 255));
+    fill(280, 140, 230, 28, (70, 110, 220));
+    for line in 0..5 {
+        fill(
+            296,
+            184 + line * 26,
+            120 + (line % 2) * 60,
+            14,
+            (225, 232, 250),
+        );
+    }
+    // Taskbar
+    fill(0, taskbar, 640, 30, (24, 26, 32));
+    for icon in 0..5 {
+        fill(240 + icon * 34, taskbar + 6, 18, 18, (120, 160, 230));
+    }
+    let windows = vec![
+        PhysicalRect::new(s(280), s(140), s(230), s(190)),
+        PhysicalRect::new(s(60), s(50), s(260), s(170)),
+        PhysicalRect::new(0, s(taskbar), s(640), s(30)),
+    ];
+    (width, height, bgra, windows)
+}
+
+fn monitor(width: u32, height: u32, dpi: u32) -> Monitor {
+    Monitor::new(
+        MonitorId::new("golden"),
+        PhysicalRect::new(0, 0, width as i32, height as i32),
+        dpi,
+        true,
+    )
+}
+
+fn draw(state: &OverlayState, monitor: usize, width: u32, height: u32, bgra: &[u8]) -> RgbaImage {
+    let frame = FrameView::new(width, height, bgra).expect("frame size");
+    render(state, monitor, frame, &Theme::default(), BUNDLED_FONT).expect("render")
+}
+
+fn golden_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden")
+}
+
+fn failure_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("target")
+        .join("overlay-golden")
+}
+
+fn write_png(path: &Path, image: &RgbaImage) {
+    let file = std::fs::File::create(path).expect("create png");
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), image.width, image.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("png header");
+    writer.write_image_data(&image.pixels).expect("png data");
+}
+
+fn read_png(path: &Path) -> Option<RgbaImage> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = png::Decoder::new(std::io::BufReader::new(file))
+        .read_info()
+        .ok()?;
+    let mut pixels = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut pixels).ok()?;
+    pixels.truncate(info.buffer_size());
+    Some(RgbaImage {
+        width: info.width,
+        height: info.height,
+        pixels,
+    })
+}
+
+fn check(name: &str, actual: &RgbaImage) {
+    let golden = golden_dir().join(format!("{name}.png"));
+    if std::env::var_os(UPDATE_ENV).is_some_and(|value| value == "1") {
+        std::fs::create_dir_all(golden_dir()).expect("golden dir");
+        write_png(&golden, actual);
+        return;
+    }
+    let expected = read_png(&golden);
+    if expected.as_ref() == Some(actual) {
+        return;
+    }
+    let out = failure_dir();
+    std::fs::create_dir_all(&out).expect("failure dir");
+    let actual_path = out.join(format!("{name}.actual.png"));
+    write_png(&actual_path, actual);
+    let mut message = format!(
+        "{name} differs from {}; actual written to {}",
+        golden.display(),
+        actual_path.display()
+    );
+    if let Some(expected) = expected
+        && (expected.width, expected.height) == (actual.width, actual.height)
+    {
+        let mut diff = actual.clone();
+        let mut differing = 0usize;
+        for (pixel, other) in diff
+            .pixels
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(expected.pixels.as_chunks::<4>().0)
+        {
+            let same = *pixel == *other;
+            differing += usize::from(!same);
+            *pixel = if same {
+                [0, 0, 0, 255]
+            } else {
+                [255, 0, 255, 255]
+            };
+        }
+        let diff_path = out.join(format!("{name}.diff.png"));
+        write_png(&diff_path, &diff);
+        message.push_str(&format!(
+            ", {differing} pixels differ (diff: {})",
+            diff_path.display()
+        ));
+    }
+    panic!("{message}");
+}
+
+fn focused(state: &mut OverlayState) {
+    state.handle(Event::Focus(true), 0);
+}
+
+fn pointer(state: &mut OverlayState, event: &str, x: i32, y: i32) {
+    let at = LogicalPoint::new(x, y);
+    let event = match event {
+        "move" => Event::PointerMove {
+            monitor: state.active_monitor(),
+            at,
+            left_down: false,
+            modifiers: Modifiers::NONE,
+        },
+        "drag" => Event::PointerMove {
+            monitor: state.active_monitor(),
+            at,
+            left_down: true,
+            modifiers: Modifiers::NONE,
+        },
+        "down" => Event::PointerDown {
+            monitor: state.active_monitor(),
+            at,
+            button: PointerButton::Left,
+            modifiers: Modifiers::NONE,
+        },
+        _ => Event::PointerUp {
+            monitor: state.active_monitor(),
+            at,
+            button: PointerButton::Left,
+            modifiers: Modifiers::NONE,
+        },
+    };
+    state.handle(event, 10);
+}
+
+/// The defaults without the editor hint, which `editor_hint.png` covers on
+/// its own so it does not change every other image.
+fn base() -> OverlayConfig {
+    OverlayConfig {
+        show_editor_hint: false,
+        ..OverlayConfig::default()
+    }
+}
+
+fn no_help() -> OverlayConfig {
+    OverlayConfig {
+        show_help: false,
+        ..base()
+    }
+}
+
+#[test]
+fn idle_with_a_window_highlighted() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, no_help()).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "move", 400, 250);
+    check("idle_snap", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn mid_drag() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, base()).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 120, 80);
+    pointer(&mut state, "drag", 300, 200);
+    pointer(&mut state, "drag", 452, 286);
+    check("drag", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn selection_with_handles_and_size_label_at_150_percent() {
+    let (width, height, bgra, windows) = desktop(1.5);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 144)], 0, windows, base()).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 200, 100);
+    pointer(&mut state, "drag", 400, 200);
+    pointer(&mut state, "drag", 520, 300);
+    pointer(&mut state, "up", 520, 300);
+    pointer(&mut state, "move", 600, 360);
+    check("selection", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn help_message() {
+    let (width, height, bgra, _) = desktop(1.0);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, Vec::new(), base()).expect("state");
+    focused(&mut state);
+    check("help", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn another_monitor_while_following_is_only_dimmed() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let monitors = vec![
+        Monitor::new(
+            MonitorId::new("active"),
+            PhysicalRect::new(-(width as i32), 0, width as i32, height as i32),
+            96,
+            false,
+        ),
+        monitor(width, height, 96),
+    ];
+    let mut state = OverlayState::new(
+        monitors,
+        0,
+        windows,
+        OverlayConfig {
+            follow_cursor: true,
+            ..base()
+        },
+    )
+    .expect("state");
+    focused(&mut state);
+    assert!(state.is_following());
+    check("dim_follow", &draw(&state, 1, width, height, &bgra));
+}
+
+#[test]
+fn lost_focus_notice() {
+    let (width, height, bgra, _) = desktop(1.0);
+    let state = OverlayState::new(vec![monitor(width, height, 96)], 0, Vec::new(), no_help())
+        .expect("state");
+    check("lost_focus", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn a_whole_monitor_selection_keeps_its_frame_on_screen() {
+    let (width, height, bgra, _) = desktop(1.0);
+    let mut state = OverlayState::new(vec![monitor(width, height, 96)], 0, Vec::new(), no_help())
+        .expect("state");
+    focused(&mut state);
+    state.handle(
+        Event::Key {
+            key: Key::Char('a'),
+            modifiers: Modifiers::CTRL,
+        },
+        0,
+    );
+    check("select_all", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn rendering_is_deterministic() {
+    let (width, height, bgra, windows) = desktop(1.25);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 120)], 0, windows, base()).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 50, 50);
+    pointer(&mut state, "drag", 300, 200);
+    let first = draw(&state, 0, width, height, &bgra);
+    let second = draw(&state, 0, width, height, &bgra);
+    assert_eq!(first, second);
+    assert_eq!((first.width, first.height), (800, 500));
+}
+
+// --- Tools ------------------------------------------------------------------
+
+fn key(state: &mut OverlayState, key: Key, modifiers: Modifiers) {
+    state.handle(Event::Key { key, modifiers }, 10);
+}
+
+fn right(state: &mut OverlayState, down: bool, x: i32, y: i32) {
+    let at = LogicalPoint::new(x, y);
+    let button = PointerButton::Right;
+    let modifiers = Modifiers::NONE;
+    let monitor = state.active_monitor();
+    let event = if down {
+        Event::PointerDown {
+            monitor,
+            at,
+            button,
+            modifiers,
+        }
+    } else {
+        Event::PointerUp {
+            monitor,
+            at,
+            button,
+            modifiers,
+        }
+    };
+    state.handle(event, 10);
+}
+
+fn drag(state: &mut OverlayState, from: (i32, i32), to: (i32, i32)) {
+    pointer(state, "down", from.0, from.1);
+    pointer(state, "drag", (from.0 + to.0) / 2, (from.1 + to.1) / 2);
+    pointer(state, "drag", to.0, to.1);
+    pointer(state, "up", to.0, to.1);
+}
+
+/// A focused overlay at `scale` with (120,60)-(420,300) selected and the
+/// pointer parked inside it.
+fn with_toolbar(scale: f64, dpi: u32) -> (u32, u32, Vec<u8>, OverlayState) {
+    let (width, height, bgra, windows) = desktop(scale);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, dpi)], 0, windows, no_help()).expect("state");
+    focused(&mut state);
+    drag(&mut state, (120, 60), (420, 300));
+    pointer(&mut state, "move", 300, 200);
+    // Past the size label's timeout and any fade
+    state.handle(Event::Tick, 10_000);
+    (width, height, bgra, state)
+}
+
+#[test]
+fn toolbar_idle() {
+    let (width, height, bgra, state) = with_toolbar(1.0, 96);
+    check("toolbar", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn toolbar_icons_stay_sharp_at_200_percent() {
+    let (width, height, bgra, state) = with_toolbar(2.0, 192);
+    check("toolbar_200", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn toolbar_hover_with_tooltip_and_active_tool() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    key(&mut state, Key::Char('a'), Modifiers::NONE);
+    let text = state
+        .toolbar()
+        .into_iter()
+        .find(|button| button.button == phramer_core::config::ButtonType::Text)
+        .expect("text button")
+        .rect;
+    state.handle(
+        Event::PointerMove {
+            monitor: 0,
+            at: LogicalPoint::new(text.x + 10, text.y + 10),
+            left_down: false,
+            modifiers: Modifiers::NONE,
+        },
+        20_000,
+    );
+    state.handle(Event::Tick, 20_200);
+    check("toolbar_hover", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn colour_wheel_open() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    right(&mut state, true, 300, 190);
+    let swatch = state.wheel().expect("wheel").swatches[9].0;
+    pointer(&mut state, "move", swatch.x, swatch.y);
+    check("color_wheel", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn drawn_shapes_with_one_selected() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    let tool = |state: &mut OverlayState, c: char| key(state, Key::Char(c), Modifiers::NONE);
+    tool(&mut state, 'p');
+    pointer(&mut state, "down", 140, 80);
+    for (x, y) in [(150, 95), (165, 100), (180, 90), (195, 110), (210, 100)] {
+        pointer(&mut state, "drag", x, y);
+    }
+    pointer(&mut state, "up", 210, 100);
+    tool(&mut state, 'a');
+    drag(&mut state, (240, 90), (330, 130));
+    tool(&mut state, 'r');
+    drag(&mut state, (140, 140), (200, 190));
+    tool(&mut state, 'c');
+    drag(&mut state, (220, 140), (300, 200));
+    tool(&mut state, 'm');
+    drag(&mut state, (320, 170), (400, 170));
+    tool(&mut state, 'b');
+    drag(&mut state, (300, 220), (400, 280));
+    tool(&mut state, 'i');
+    drag(&mut state, (140, 215), (190, 265));
+    // The counter has no default shortcut: from its button
+    let counter = state
+        .toolbar()
+        .into_iter()
+        .find(|button| button.button == phramer_core::config::ButtonType::CircleCount)
+        .expect("counter")
+        .rect;
+    pointer(&mut state, "down", counter.x + 5, counter.y + 5);
+    pointer(&mut state, "up", counter.x + 5, counter.y + 5);
+    pointer(&mut state, "down", 240, 250);
+    pointer(&mut state, "up", 240, 250);
+    pointer(&mut state, "down", 380, 110);
+    pointer(&mut state, "drag", 400, 70);
+    pointer(&mut state, "up", 400, 70);
+    // Off with the tool, then pick the ellipse
+    key(&mut state, Key::Escape, Modifiers::NONE);
+    pointer(&mut state, "down", 260, 141);
+    pointer(&mut state, "up", 260, 141);
+    assert!(state.selected_object().is_some());
+    pointer(&mut state, "move", 600, 360);
+    check("shapes", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn text_entry_with_caret() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    key(&mut state, Key::Char('t'), Modifiers::NONE);
+    pointer(&mut state, "down", 150, 100);
+    pointer(&mut state, "up", 150, 100);
+    for c in "Phramer".chars() {
+        state.handle(Event::Text(c), 10);
+    }
+    key(&mut state, Key::Return, Modifiers::NONE);
+    for c in "16".chars() {
+        state.handle(Event::Text(c), 10);
+    }
+    pointer(&mut state, "move", 600, 360);
+    check("text_entry", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn shape_menu_open() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    let shape = state
+        .toolbar()
+        .into_iter()
+        .find(|button| button.button == phramer_core::config::ButtonType::Shape)
+        .expect("shape")
+        .rect;
+    for _ in 0..2 {
+        pointer(&mut state, "down", shape.x + 5, shape.y + 5);
+        pointer(&mut state, "up", shape.x + 5, shape.y + 5);
+    }
+    assert_eq!(state.shape_menu().len(), 6);
+    pointer(&mut state, "move", 600, 360);
+    check("shape_menu", &draw(&state, 0, width, height, &bgra));
+}
+
+// --- Side panel, magnifier, colour grab --------------------------------------
+
+/// [`with_toolbar`] on a desktop 600 logical pixels tall, so the side panel
+/// fits with its list, with the screenshot given for colour grab.
+fn tall_with_toolbar(
+    scale: f64,
+    dpi: u32,
+    config: OverlayConfig,
+) -> (u32, u32, Vec<u8>, OverlayState) {
+    let (width, height, bgra, windows) = desktop_of_height(scale, 600);
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, dpi)], 0, windows, config).expect("state");
+    state.set_pixels(
+        0,
+        Pixels::new(width, height, Arc::new(bgra.clone())).expect("pixels"),
+    );
+    focused(&mut state);
+    drag(&mut state, (120, 60), (420, 300));
+    pointer(&mut state, "move", 300, 200);
+    state.handle(Event::Tick, 10_000);
+    (width, height, bgra, state)
+}
+
+#[test]
+fn side_panel_open() {
+    let (width, height, bgra, mut state) = tall_with_toolbar(1.0, 96, no_help());
+    key(&mut state, Key::Char('r'), Modifiers::NONE);
+    drag(&mut state, (300, 120), (380, 180));
+    key(&mut state, Key::Char('t'), Modifiers::NONE);
+    pointer(&mut state, "down", 150, 230);
+    pointer(&mut state, "up", 150, 230);
+    for c in "Phramer 16".chars() {
+        state.handle(Event::Text(c), 10);
+    }
+    key(&mut state, Key::Escape, Modifiers::NONE);
+    key(&mut state, Key::Escape, Modifiers::NONE);
+    // Select the rectangle, open the panel, let it fade in
+    pointer(&mut state, "down", 340, 150);
+    pointer(&mut state, "up", 340, 150);
+    assert!(state.selected_object().is_some());
+    state.handle(
+        Event::Key {
+            key: Key::Space,
+            modifiers: Modifiers::NONE,
+        },
+        20_000,
+    );
+    pointer(&mut state, "move", 600, 560);
+    state.handle(Event::Tick, 21_000);
+    assert!(
+        state
+            .side_panel()
+            .is_some_and(|panel| panel.progress >= 1.0)
+    );
+    check("side_panel", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn magnifier_round_while_selecting() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let config = OverlayConfig {
+        show_magnifier: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, config).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 120, 80);
+    pointer(&mut state, "drag", 250, 150);
+    pointer(&mut state, "drag", 281, 141);
+    assert!(state.magnifier().is_some());
+    check("magnifier_round", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn magnifier_square_at_150_percent_by_the_edge() {
+    let (width, height, bgra, windows) = desktop(1.5);
+    let config = OverlayConfig {
+        show_magnifier: true,
+        square_magnifier: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 144)], 0, windows, config).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 300, 200);
+    pointer(&mut state, "drag", 500, 300);
+    // By the bottom right corner: the magnifier goes above and to the left
+    pointer(&mut state, "drag", 636, 378);
+    assert!(state.magnifier().is_some());
+    check("magnifier_square", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn colour_grab_preview() {
+    let (width, height, bgra, mut state) = tall_with_toolbar(1.0, 96, no_help());
+    key(
+        &mut state,
+        Key::Char('g'),
+        Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        },
+    );
+    assert!(state.is_grabbing_color());
+    pointer(&mut state, "move", 455, 158);
+    check("color_grab", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn colour_grab_held_click_at_150_percent() {
+    let (width, height, bgra, mut state) = tall_with_toolbar(1.5, 144, no_help());
+    key(
+        &mut state,
+        Key::Char('g'),
+        Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        },
+    );
+    pointer(&mut state, "move", 300, 141);
+    state.handle(
+        Event::PointerDown {
+            monitor: 0,
+            at: phramer_capture::LogicalPoint::new(300, 141),
+            button: PointerButton::Left,
+            modifiers: Modifiers::NONE,
+        },
+        30_000,
+    );
+    state.handle(Event::Tick, 30_300);
+    assert!(state.color_grab().is_some_and(|grab| grab.precise));
+    check("color_grab_precise", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn mode_bar_with_video_hovered() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let config = OverlayConfig {
+        video_mode: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, config).expect("state");
+    focused(&mut state);
+    let video = state.mode_bar().expect("mode bar").layout.video;
+    pointer(&mut state, "move", video.x + 10, video.y + 10);
+    check("mode_bar", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn bold_italic_underlined_text_from_the_side_panel() {
+    let (width, height, bgra, mut state) = with_toolbar(1.0, 96);
+    key(&mut state, Key::Char('t'), Modifiers::NONE);
+    key(&mut state, Key::Space, Modifiers::NONE);
+    let styles = state.side_panel().expect("panel").layout.text_styles;
+    for rect in &styles[..3] {
+        // Apart in time, so no two presses make a double-click
+        state.handle(
+            Event::PointerDown {
+                monitor: 0,
+                at: LogicalPoint::new(rect.x + 5, rect.y + 5),
+                button: PointerButton::Left,
+                modifiers: Modifiers::NONE,
+            },
+            1_000 * (rect.x as u64),
+        );
+        state.handle(
+            Event::PointerUp {
+                monitor: 0,
+                at: LogicalPoint::new(rect.x + 5, rect.y + 5),
+                button: PointerButton::Left,
+                modifiers: Modifiers::NONE,
+            },
+            1_000 * (rect.x as u64),
+        );
+    }
+    let at = |t: u64| 2_000_000 + t;
+    state.handle(
+        Event::Key {
+            key: Key::Space,
+            modifiers: Modifiers::NONE,
+        },
+        at(0),
+    );
+    // Past the panel's fade
+    state.handle(Event::Tick, at(1_000));
+    for (index, event) in [
+        Event::PointerDown {
+            monitor: 0,
+            at: LogicalPoint::new(150, 100),
+            button: PointerButton::Left,
+            modifiers: Modifiers::NONE,
+        },
+        Event::PointerUp {
+            monitor: 0,
+            at: LogicalPoint::new(150, 100),
+            button: PointerButton::Left,
+            modifiers: Modifiers::NONE,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        state.handle(event, at(2_000 + index as u64));
+    }
+    for c in "Styled 16".chars() {
+        state.handle(Event::Text(c), at(3_000));
+    }
+    state.handle(
+        Event::PointerMove {
+            monitor: 0,
+            at: LogicalPoint::new(600, 360),
+            left_down: false,
+            modifiers: Modifiers::NONE,
+        },
+        at(4_000),
+    );
+    assert!(state.side_panel().is_none());
+    check("text_styled", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn editor_hint_above_the_selection() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let config = OverlayConfig {
+        show_editor_hint: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, config).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 180, 120);
+    pointer(&mut state, "drag", 300, 200);
+    pointer(&mut state, "drag", 460, 280);
+    pointer(&mut state, "up", 460, 280);
+    assert!(state.editor_hint().is_some());
+    check("editor_hint", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn quit_prompt_over_the_selection() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let config = OverlayConfig {
+        quit_prompt: true,
+        ..no_help()
+    };
+    let mut state =
+        OverlayState::new(vec![monitor(width, height, 96)], 0, windows, config).expect("state");
+    focused(&mut state);
+    pointer(&mut state, "down", 180, 120);
+    pointer(&mut state, "drag", 460, 280);
+    pointer(&mut state, "up", 460, 280);
+    key(&mut state, Key::Escape, Modifiers::NONE);
+    key(&mut state, Key::Space, Modifiers::NONE);
+    let quit = state.quit_prompt().expect("prompt").layout.quit;
+    pointer(&mut state, "move", quit.x + 10, quit.y + 10);
+    check("quit_prompt", &draw(&state, 0, width, height, &bgra));
+}
+
+#[test]
+fn monitor_picker_names_each_monitor_and_frames_the_highlighted_one() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let monitors = vec![
+        monitor(width, height, 96),
+        Monitor::new(
+            MonitorId::new("right"),
+            PhysicalRect::new(width as i32, 0, width as i32, height as i32),
+            96,
+            false,
+        ),
+    ];
+    let mut state = OverlayState::new(
+        monitors,
+        0,
+        windows,
+        OverlayConfig {
+            pick_monitor: true,
+            ..base()
+        },
+    )
+    .expect("state");
+    focused(&mut state);
+    assert!(state.is_picking());
+    check("picker_highlighted", &draw(&state, 0, width, height, &bgra));
+    check("picker_other", &draw(&state, 1, width, height, &bgra));
+}

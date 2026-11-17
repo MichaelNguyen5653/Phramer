@@ -1,0 +1,4 @@
+phramer: error: Shortcut conflict: 'TYPE_ARROW' and 'TYPE_PENCIL' have the same shortcut: Ctrl+K
+
+phramer: error: Shortcut conflict: 'TYPE_REDO' and 'TYPE_UNDO' have the same shortcut: x
+

@@ -17,7 +17,7 @@ developer or to anyone else.
 Everything Phramer does with your data happens on your own computer:
 
 - **Screenshots** are taken when you ask for one, and stay in memory until
-  you save, copy, pin or discard them. Saved files go to the folder you
+  you save, copy or discard them. Saved files go to the folder you
   choose.
 - **Text recognition (OCR)** uses the text recognition built into Windows
   (Windows.Media.Ocr). It runs on your device.
