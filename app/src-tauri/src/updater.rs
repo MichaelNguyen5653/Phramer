@@ -1,4 +1,4 @@
-//! The update check, 15.0.0's `FlameshotDaemon::getLatestAvailableVersion`
+//! The update check, 15.0.0's `getLatestAvailableVersion`
 //! and `checkForUpdates`: the latest GitHub release at startup and every
 //! 24 hours while `checkForUpdates` is on, or when asked from the tray.
 //!

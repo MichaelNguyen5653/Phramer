@@ -16,7 +16,7 @@ pub(crate) const REPLY_ARGUMENT: &str = "--phramer-reply-pipe=";
 /// Every reply pipe's name starts so; nothing else is ever opened.
 pub(crate) const PIPE_PREFIX: &str = r"\\.\pipe\phramer-cli-";
 
-/// `ErrCode` of 15.0.0's `flameshot.h`.
+/// 15.0.0's `ErrCode`.
 pub(crate) const EXIT_OK: i32 = 0;
 pub(crate) const EXIT_GENERAL: i32 = 1;
 pub(crate) const EXIT_ABORTED: i32 = 2;

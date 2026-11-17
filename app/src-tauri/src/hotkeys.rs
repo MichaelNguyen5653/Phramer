@@ -1,7 +1,7 @@
 //! Global hotkeys, the ones 15.0.0's daemon registered on Windows:
 //!
 //! - `[Shortcuts] TAKE_SCREENSHOT` (default `Meta+Shift+x`, Win+Shift+X):
-//!   capture. A `QHotkey` in `Flameshot::Flameshot()`.
+//!   capture. A `QHotkey` in 15.0.0's start-up.
 //! - `[Shortcuts] RECORD_VIDEO` (no default): hand off to Snipping Tool's
 //!   recorder. Also a `QHotkey`.
 //! - Print Screen, fixed: capture. Raw `RegisterHotKey` in

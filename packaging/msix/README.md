@@ -98,4 +98,4 @@ hidden from Start (`AppListEntry="none"`) unless Microsoft grants a
 `HeadlessAppBypass` waiver, so the console alias is an extension of the main
 application rather than an application of its own.
 
-The reasons are in `docs/store/` and in `CLAUDE.md`.
+The reasons are in `CLAUDE.md`.

@@ -55,7 +55,7 @@ enum CaptureFailure {
     NoSuchScreen,
 }
 
-/// `Flameshot::exportCapture`'s notice for `screen --pin` and `full --pin`.
+/// 15.0.0's `exportCapture`'s notice for `screen --pin` and `full --pin`.
 const PINNED: &str = "Full screen screenshot pinned to screen";
 
 /// How a capture ended, for the main thread.
@@ -139,7 +139,7 @@ impl Drop for OverlayOpen {
     }
 }
 
-/// `Flameshot::screen` without `--edit`: one monitor, straight to export.
+/// 15.0.0's `screen` without `--edit`: one monitor, straight to export.
 pub(crate) fn screen<R: Runtime>(
     app: &AppHandle<R>,
     delay_ms: u32,
@@ -179,7 +179,7 @@ pub(crate) fn screen<R: Runtime>(
     );
 }
 
-/// `Flameshot::full`: every monitor in one image the size of the virtual
+/// 15.0.0's `full`: every monitor in one image the size of the virtual
 /// desktop.
 pub(crate) fn full<R: Runtime>(
     app: &AppHandle<R>,

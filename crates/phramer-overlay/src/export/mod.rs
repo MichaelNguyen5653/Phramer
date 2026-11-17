@@ -1,5 +1,5 @@
 //! What happens to a capture once the overlay has closed (or for `full` and
-//! `screen`, once it is grabbed): `Flameshot::exportCapture` and the savers
+//! `screen`, once it is grabbed): 15.0.0's `exportCapture` and the savers
 //! of `screenshotsaver.cpp`.
 //!
 //! The export runs once per capture, after every window is gone. It never

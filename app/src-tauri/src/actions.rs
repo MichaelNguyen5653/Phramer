@@ -11,7 +11,7 @@ use crate::daemon::DaemonState;
 use crate::reply::Reply;
 use crate::{editor, notify, settings, settings_ui, snipping, updater, welcome};
 
-/// `Flameshot::gui` / `requestCapture` in graphical mode: the capture
+/// 15.0.0's `gui` / `requestCapture` in graphical mode: the capture
 /// overlay.
 pub(crate) fn capture_gui<R: Runtime>(app: &AppHandle<R>, request: GuiRequest) {
     capture_gui_replying(app, request, None);
@@ -35,7 +35,7 @@ pub(crate) fn capture_gui_replying<R: Runtime>(
     );
 }
 
-/// `Flameshot::screen`: one monitor without the overlay, or the overlay
+/// 15.0.0's `screen`: one monitor without the overlay, or the overlay
 /// limited to it with `--edit`.
 pub(crate) fn capture_screen<R: Runtime>(
     app: &AppHandle<R>,
@@ -68,7 +68,7 @@ pub(crate) fn capture_screen<R: Runtime>(
     }
 }
 
-/// `Flameshot::full`: every monitor.
+/// 15.0.0's `full`: every monitor.
 pub(crate) fn capture_full<R: Runtime>(
     app: &AppHandle<R>,
     request: FullRequest,
@@ -77,12 +77,12 @@ pub(crate) fn capture_full<R: Runtime>(
     capture::full(app, request.delay_ms, request.tasks, reply);
 }
 
-/// `Flameshot::launcher`.
+/// 15.0.0's `launcher`.
 pub(crate) fn open_launcher<R: Runtime>(app: &AppHandle<R>) {
     crate::capture_launcher_ui::open(app);
 }
 
-/// `Flameshot::config`: the settings window.
+/// 15.0.0's `config`: the settings window.
 pub(crate) fn open_configuration<R: Runtime>(app: &AppHandle<R>) {
     settings_ui::open(app);
 }
@@ -117,7 +117,7 @@ pub(crate) fn open_editor<R: Runtime>(app: &AppHandle<R>) {
     editor::open_empty(app);
 }
 
-/// `FlameshotDaemon::checkForUpdates`.
+/// 15.0.0's daemon `checkForUpdates`.
 pub(crate) fn check_for_updates<R: Runtime>(app: &AppHandle<R>) {
     updater::check_now(app);
 }
@@ -127,7 +127,7 @@ pub(crate) fn show_whats_new<R: Runtime>(app: &AppHandle<R>) {
     welcome::open(app, false);
 }
 
-/// `Flameshot::info`.
+/// 15.0.0's `info`.
 pub(crate) fn show_about<R: Runtime>(_app: &AppHandle<R>) {
     crate::about::show();
 }
@@ -147,7 +147,7 @@ pub(crate) fn show_last_capture_in_folder<R: Runtime>(_app: &AppHandle<R>) {
     }
 }
 
-/// `Flameshot::recordVideo`: only once the user opted in to video.
+/// 15.0.0's `recordVideo`: only once the user opted in to video.
 pub(crate) fn record_video<R: Runtime>(app: &AppHandle<R>) {
     let current = settings::load(&app.state::<DaemonState>().settings_path);
     if !current.video_capture_enabled() {
@@ -195,7 +195,7 @@ pub(crate) fn start_recording_from_link() -> i32 {
     if snipping::start_recording() { 0 } else { 1 }
 }
 
-/// `Flameshot::openSavePath`.
+/// 15.0.0's `openSavePath`.
 pub(crate) fn open_save_path<R: Runtime>(app: &AppHandle<R>) {
     let current = settings::load(&app.state::<DaemonState>().settings_path);
     let Some(folder) = current.save_path() else {
