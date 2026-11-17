@@ -835,13 +835,34 @@ fn the_custom_slot_opens_a_disc_of_colours() {
 }
 
 #[test]
-fn a_right_click_without_a_pick_closes_the_wheel_and_counts_as_a_click() {
+fn a_right_click_without_a_pick_keeps_the_wheel_open() {
     let mut overlay = Overlay::selected();
     overlay.press(p(1500, 900), PointerButton::Right);
     overlay.release(p(1500, 900), PointerButton::Right);
+    let wheel = overlay.state.wheel().expect("still open");
+    // The release is no click: the selection stays
+    assert!(overlay.state.selection().is_some());
+    // Picked after the release, with the button up
+    let (black, _) = wheel.swatches[2];
+    overlay.hover(black);
+    let effects = overlay.click(black);
+    assert_eq!(
+        persisted(&effects),
+        [SettingChange::DrawColor(Color::rgb(0, 0, 0))]
+    );
     assert!(overlay.state.wheel().is_none());
-    // Outside the selection: it clears, as before the tools
-    assert_eq!(overlay.state.selection(), None);
+}
+
+#[test]
+fn a_click_away_closes_the_open_wheel_unchanged() {
+    let mut overlay = Overlay::selected();
+    overlay.press(p(600, 450), PointerButton::Right);
+    overlay.release(p(600, 450), PointerButton::Right);
+    let effects = overlay.click(p(600, 450));
+    assert!(overlay.state.wheel().is_none());
+    assert!(persisted(&effects).is_empty());
+    assert_eq!(overlay.state.draw_color(), Color::rgb(255, 0, 0));
+    assert!(overlay.state.selection().is_some());
 }
 
 // --- Text ------------------------------------------------------------------

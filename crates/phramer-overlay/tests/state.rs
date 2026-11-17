@@ -558,15 +558,13 @@ fn a_click_outside_the_selection_clears_it_and_brings_the_help_back() {
 }
 
 #[test]
-fn a_right_click_clears_outside_the_selection_and_keeps_inside() {
+fn a_right_click_opens_the_wheel_and_keeps_the_selection() {
     let mut overlay = Overlay::on(single());
     overlay.select(p(100, 100), p(300, 300));
-    overlay.press(0, p(200, 200), PointerButton::Right);
-    overlay.release(0, p(200, 200), PointerButton::Right);
-    assert!(overlay.state.selection().is_some());
     overlay.press(0, p(900, 900), PointerButton::Right);
     overlay.release(0, p(900, 900), PointerButton::Right);
-    assert_eq!(overlay.state.selection(), None);
+    assert!(overlay.state.wheel().is_some());
+    assert!(overlay.state.selection().is_some());
 }
 
 #[test]

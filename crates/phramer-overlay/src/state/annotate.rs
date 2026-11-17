@@ -1213,8 +1213,8 @@ impl OverlayState {
         effects.redraw(self.active);
     }
 
-    /// The right button released over the wheel. Returns false when nothing
-    /// was picked, so the release counts as a plain click.
+    /// The right button released over the wheel. Returns false when no
+    /// wheel is open, so the release counts as a plain click.
     pub(crate) fn wheel_release(&mut self, at: LogicalPoint, effects: &mut Effects) -> bool {
         let Some(wheel) = self.tools.wheel else {
             return false;
@@ -1236,12 +1236,16 @@ impl OverlayState {
             // The disc is open: the release that opened it is not a pick
             return true;
         }
-        let picked = self
+        if self
             .tools
             .wheel
-            .is_some_and(|wheel| wheel.hovered.is_some());
+            .is_some_and(|wheel| wheel.hovered.is_none())
+        {
+            // Nothing picked yet: the wheel stays for a click (v15's picker)
+            return true;
+        }
         self.wheel_commit(effects);
-        picked
+        true
     }
 
     /// Keeps the colour the wheel shows, saves it and recolours the selected
