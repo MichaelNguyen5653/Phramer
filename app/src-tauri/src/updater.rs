@@ -2,13 +2,18 @@
 //! and `checkForUpdates`: the latest GitHub release at startup and every
 //! 24 hours while `checkForUpdates` is on, or when asked from the tray.
 //!
-//! Check only. A newer version badges the tray icon and adds "Download
-//! version X" to its menu, which opens the release page; nothing is ever
-//! downloaded or installed. The Store build has no updater at all (the
+//! A newer version badges the tray icon and adds "Update to version X and
+//! restart" to its menu. That, as 15.0.0's `startUpdateAndRestart`, asks
+//! first (Update now, Later, Skip this version), then downloads the
+//! release's checksum and MSI, verifies it, and hands it to msiexec through
+//! a script that starts Phramer again afterwards. A release without both
+//! assets only opens its page. The Store build has no updater at all (the
 //! Store updates it), as 15.0.0's Store edition had none.
 
 use std::cmp::Ordering;
-use std::sync::Mutex;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -16,14 +21,19 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::daemon::DaemonState;
 use crate::{notify, settings, tray};
 
-/// `GIT_API_URL` of 15.0.0, split for WinHTTP.
-const RELEASES_HOST: &str = "api.github.com";
-const RELEASES_PATH: &str = "/repos/MichaelNguyen5653/Phramer/releases/latest";
+/// `GIT_API_URL` of 15.0.0.
+const RELEASES_URL: &str = "https://api.github.com/repos/MichaelNguyen5653/Phramer/releases/latest";
+const GITHUB_JSON: &str = "application/vnd.github+json";
 /// Only release pages of the project are opened from the menu.
 const RELEASE_PAGE_PREFIX: &str = "https://github.com/MichaelNguyen5653/Phramer/";
+/// The installer runs elevated: only the project's own release assets.
+const DOWNLOAD_PREFIX: &str = "https://github.com/MichaelNguyen5653/Phramer/releases/download/";
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-/// A release document is a few kilobytes; anything far larger is not one.
+/// A release document or checksum is a few kilobytes; anything far larger
+/// is not one.
 const MAX_RESPONSE: usize = 4 * 1024 * 1024;
+/// The MSI is tens of megabytes.
+const MAX_INSTALLER: usize = 512 * 1024 * 1024;
 
 const LATEST: &str = "You have the latest version";
 const FAILED: &str = "Failed to get information about the latest version.";
@@ -115,9 +125,14 @@ pub(crate) struct Release {
     /// `tag_name` without its `v`.
     pub(crate) version: String,
     pub(crate) html_url: String,
+    /// The `.msi` asset and its `.msi.sha256sum`, when both are the
+    /// project's own downloads.
+    pub(crate) msi_url: Option<String>,
+    pub(crate) sha_url: Option<String>,
 }
 
-/// Reads `tag_name` and `html_url` from the releases API's answer.
+/// Reads `tag_name`, `html_url` and the installer assets from the releases
+/// API's answer.
 pub(crate) fn parse_release(json: &str) -> Result<Release, String> {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|error| format!("not a release: {error}"))?;
@@ -135,10 +150,79 @@ pub(crate) fn parse_release(json: &str) -> Result<Release, String> {
         .or_else(|| tag.trim().strip_prefix('V'))
         .unwrap_or(tag.trim())
         .to_owned();
+    let (mut msi_url, mut sha_url) = (None, None);
+    let assets = value.get("assets").and_then(serde_json::Value::as_array);
+    for asset in assets.into_iter().flatten() {
+        let text = |name: &str| asset.get(name).and_then(serde_json::Value::as_str);
+        let (Some(name), Some(url)) = (text("name"), text("browser_download_url")) else {
+            continue;
+        };
+        if !url.starts_with(DOWNLOAD_PREFIX) {
+            continue;
+        }
+        let name = name.to_ascii_lowercase();
+        if name.ends_with(".msi") {
+            msi_url = Some(url.to_owned());
+        } else if name.ends_with(".msi.sha256sum") {
+            sha_url = Some(url.to_owned());
+        }
+    }
     Ok(Release {
         version,
         html_url: field("html_url")?,
+        msi_url,
+        sha_url,
     })
+}
+
+/// The hash in a `sha256sum` file: its first word, lowercase, when it is
+/// 64 hexadecimal digits.
+pub(crate) fn parse_checksum(text: &str) -> Option<String> {
+    let word = text.split_whitespace().next()?.to_ascii_lowercase();
+    (word.len() == 64 && word.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(word)
+}
+
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// `Phramer-<version>-win64.msi`, for a version of letters, digits, dots
+/// and dashes only: it came from the network and goes into a script.
+pub(crate) fn installer_name(version: &str) -> Option<String> {
+    let plain = !version.is_empty()
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
+    plain.then(|| format!("Phramer-{version}-win64.msi"))
+}
+
+/// 15.0.0's `phramer-update.cmd`: cmd waits for msiexec, then starts the
+/// app from its (unchanged) install path. Run with no `&&`, so a decline at
+/// the UAC prompt still brings the old version back instead of leaving
+/// nothing running.
+pub(crate) fn update_script(msi: &Path, exe: &Path) -> String {
+    format!(
+        "@echo off\r\n\
+         msiexec /i \"{}\" /passive /norestart\r\n\
+         start \"\" \"{}\"\r\n\
+         del \"%~f0\"\r\n",
+        msi.display(),
+        exe.display()
+    )
+}
+
+/// Host and path of an `https://` address.
+fn split_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("https://")?;
+    let (host, path) = match rest.find('/') {
+        Some(at) => rest.split_at(at),
+        None => (rest, "/"),
+    };
+    (!host.is_empty()).then_some((host, path))
 }
 
 /// `release` when it is newer than `current` and than the version the user
@@ -191,7 +275,7 @@ pub(crate) fn start<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// The tray's "Check for updates" or "Download version X".
+/// The tray's "Check for updates" or "Update to version X and restart".
 pub(crate) fn check_now<R: Runtime>(app: &AppHandle<R>) {
     if cfg!(feature = "store") {
         return;
@@ -201,7 +285,7 @@ pub(crate) fn check_now<R: Runtime>(app: &AppHandle<R>) {
         .ok()
         .and_then(|available| available.clone());
     if let Some(release) = known {
-        open_release_page(&release.html_url);
+        start_update(app, release);
         return;
     }
     // No update seen yet: check, and say how it went
@@ -216,7 +300,7 @@ pub(crate) fn check_now<R: Runtime>(app: &AppHandle<R>) {
 
 /// One check, off the main thread; `manual` reports every outcome.
 fn check<R: Runtime>(app: &AppHandle<R>, manual: bool) {
-    let found = fetch(RELEASES_HOST, RELEASES_PATH).and_then(|json| parse_release(&json));
+    let found = fetch_text(RELEASES_URL, Some(GITHUB_JSON)).and_then(|json| parse_release(&json));
     let main = app.clone();
     let posted = app.run_on_main_thread(move || {
         let current = settings::load(&main.state::<DaemonState>().settings_path);
@@ -235,14 +319,14 @@ fn check<R: Runtime>(app: &AppHandle<R>, manual: bool) {
                 match newer {
                     Some(release) => {
                         log::info!("version {} is available", release.version);
-                        if manual {
-                            open_release_page(&release.html_url);
-                        }
                         if let Ok(mut available) = AVAILABLE.lock() {
-                            *available = Some(release);
+                            *available = Some(release.clone());
                         }
                         if let Err(error) = tray::refresh(&main, &current) {
                             log::error!("cannot update the tray icon: {error}");
+                        }
+                        if manual {
+                            start_update(&main, release);
                         }
                     }
                     None if manual => notify::tray_message(&main, "Phramer", LATEST),
@@ -260,6 +344,335 @@ fn check<R: Runtime>(app: &AppHandle<R>, manual: bool) {
     if let Err(error) = posted {
         log::error!("cannot report the update check: {error}");
     }
+}
+
+/// An update is being asked about, downloaded or started.
+static UPDATING: AtomicBool = AtomicBool::new(false);
+
+/// Button ids of the update prompt; the common buttons use the low ones.
+const UPDATE_NOW: i32 = 1001;
+const LATER: i32 = 1002;
+const SKIP: i32 = 1003;
+
+/// 15.0.0's `startUpdateAndRestart`: asks, then installs, on a thread of its
+/// own so the tray stays responsive.
+fn start_update<R: Runtime>(app: &AppHandle<R>, release: Release) {
+    use std::sync::atomic::Ordering::AcqRel;
+
+    // Without a verifiable installer there is nothing safe to apply
+    let (Some(msi_url), Some(sha_url)) = (release.msi_url.clone(), release.sha_url.clone()) else {
+        open_release_page(&release.html_url);
+        return;
+    };
+    if UPDATING.swap(true, AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("update".to_owned())
+        .spawn(move || {
+            match ask(&release) {
+                UPDATE_NOW => match install(&release.version, &msi_url, &sha_url) {
+                    // msiexec closes this copy anyway; the script reopens it
+                    Ok(()) => app.exit(0),
+                    Err(reason) => notify::tray_message(&app, "Phramer", reason),
+                },
+                SKIP => skip(&app, release.version),
+                _ => {}
+            }
+            UPDATING.store(false, std::sync::atomic::Ordering::Release);
+        });
+    if let Err(error) = spawned {
+        UPDATING.store(false, std::sync::atomic::Ordering::Release);
+        log::error!("cannot start the update: {error}");
+    }
+}
+
+/// Skip this version: `ignoreUpdateToVersion`, and the badge goes.
+fn skip<R: Runtime>(app: &AppHandle<R>, version: String) {
+    let main = app.clone();
+    let posted = app.run_on_main_thread(move || {
+        if let Ok(mut available) = AVAILABLE.lock() {
+            *available = None;
+        }
+        let path = main.state::<DaemonState>().settings_path.clone();
+        let mut current = settings::load(&path);
+        current.set_ignore_update_to_version(&version);
+        if let Err(error) = current.save(&path) {
+            log::error!("cannot skip version {version}: {error}");
+        }
+        if let Err(error) = tray::refresh(&main, &current) {
+            log::error!("cannot update the tray icon: {error}");
+        }
+    });
+    if let Err(error) = posted {
+        log::error!("cannot skip the update: {error}");
+    }
+}
+
+/// The question 15.0.0 asked; the button chosen (Esc and the close box
+/// count as Later).
+fn ask(release: &Release) -> i32 {
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Controls::{
+        TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TDF_ALLOW_DIALOG_CANCELLATION,
+        TDF_USE_HICON_MAIN,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::LoadIconW;
+
+    let Some(task_dialog) = crate::about::task_dialog_indirect() else {
+        log::error!("cannot ask about the update: no TaskDialogIndirect");
+        return LATER;
+    };
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };
+    let title = wide("Phramer");
+    let heading = wide(&format!(
+        "Update to version {} and restart?",
+        release.version
+    ));
+    let content = wide(&format!(
+        "Phramer will close while the update installs and reopen when it is done. \
+         Windows will ask for administrator approval; if this account has no \
+         administrator rights, administrator credentials can be entered at that \
+         prompt.\n\nRelease notes: {}",
+        release.html_url
+    ));
+    let labels = [
+        (UPDATE_NOW, wide("Update now")),
+        (LATER, wide("Later")),
+        (SKIP, wide("Skip this version")),
+    ];
+    let buttons = labels.each_ref().map(|(id, text)| TASKDIALOG_BUTTON {
+        nButtonID: *id,
+        pszButtonText: text.as_ptr(),
+    });
+    // SAFETY: the module of this process and a resource id; a missing icon
+    // gives null, and the dialog then shows none.
+    let icon = unsafe {
+        LoadIconW(
+            GetModuleHandleW(std::ptr::null()),
+            crate::about::APP_ICON as usize as _,
+        )
+    };
+    let config = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION
+            | if icon.is_null() {
+                0
+            } else {
+                TDF_USE_HICON_MAIN
+            },
+        pszWindowTitle: title.as_ptr(),
+        Anonymous1: TASKDIALOGCONFIG_0 { hMainIcon: icon },
+        pszMainInstruction: heading.as_ptr(),
+        pszContent: content.as_ptr(),
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
+        nDefaultButton: UPDATE_NOW,
+        ..Default::default()
+    };
+    let mut chosen = LATER;
+    // SAFETY: `config`, its strings and buttons outlive the modal call;
+    // `chosen` is a valid out-parameter, the others may be null.
+    let result = unsafe {
+        task_dialog(
+            &config,
+            &mut chosen,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if result < 0 {
+        log::error!("cannot ask about the update ({result:#x})");
+        return LATER;
+    }
+    chosen
+}
+
+/// Checksum, installer, verification, script: 15.0.0's
+/// `downloadUpdateInstaller` and `applyUpdate`. The error is the tray
+/// message 15.0.0 showed.
+fn install(version: &str, msi_url: &str, sha_url: &str) -> Result<(), &'static str> {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    // The checksum first: it is tiny, and there is no point downloading an
+    // installer that could never be verified
+    let text = fetch_text(sha_url, None).map_err(|error| {
+        log::warn!("update checksum: {error}");
+        "Could not download the update checksum."
+    })?;
+    let expected = parse_checksum(&text).ok_or("The update checksum file is malformed.")?;
+    let name = installer_name(version).ok_or("Could not save the installer to disk.")?;
+    let installer = download_with_progress(msi_url).map_err(|error| match error {
+        FetchError::Canceled => "Update canceled.",
+        FetchError::Failed(error) => {
+            log::warn!("update installer: {error}");
+            "Could not download the update installer."
+        }
+    })?;
+    // A mismatched installer must never be offered for execution
+    if sha256_hex(&installer) != expected {
+        return Err("The downloaded installer failed verification and was discarded.");
+    }
+    let temp = std::env::temp_dir();
+    let msi = temp.join(name);
+    std::fs::write(&msi, &installer).map_err(|error| {
+        log::error!("cannot write {}: {error}", msi.display());
+        "Could not save the installer to disk."
+    })?;
+    let prepare = |error: std::io::Error| {
+        log::error!("update script: {error}");
+        "Could not prepare the update script."
+    };
+    let exe = std::env::current_exe().map_err(prepare)?;
+    let script = temp.join("phramer-update.cmd");
+    std::fs::write(&script, update_script(&msi, &exe)).map_err(prepare)?;
+    std::process::Command::new("cmd.exe")
+        .arg("/C")
+        .arg(&script)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(prepare)?;
+    log::info!("installing version {version} from {}", msi.display());
+    Ok(())
+}
+
+/// How far the installer download is, shared with its progress dialog.
+#[derive(Default)]
+struct Progress {
+    received: AtomicUsize,
+    /// 0 while unknown.
+    total: AtomicUsize,
+    /// The download ended, either way.
+    done: AtomicBool,
+    /// The dialog closed itself because of `done`, not Cancel.
+    finished: AtomicBool,
+    canceled: AtomicBool,
+}
+
+/// The MSI, under 15.0.0's "Downloading Phramer update…" with Cancel.
+fn download_with_progress(url: &str) -> Result<Vec<u8>, FetchError> {
+    use std::sync::atomic::Ordering::{Acquire, Release};
+
+    let progress = Arc::new(Progress::default());
+    let shared = Arc::clone(&progress);
+    let url = url.to_owned();
+    let worker = std::thread::Builder::new()
+        .name("update-download".to_owned())
+        .spawn(move || {
+            let result = fetch(&url, None, MAX_INSTALLER, &mut |received, total| {
+                shared.received.store(received, Release);
+                shared.total.store(total.unwrap_or(0), Release);
+                !shared.canceled.load(Acquire)
+            });
+            shared.done.store(true, Release);
+            result
+        })
+        .map_err(|error| FetchError::Failed(error.to_string()))?;
+    show_progress(&progress);
+    if !progress.finished.load(Acquire) {
+        progress.canceled.store(true, Release);
+    }
+    let result = worker
+        .join()
+        .unwrap_or_else(|_| Err(FetchError::Failed("the download stopped".to_owned())));
+    if progress.canceled.load(Acquire) {
+        return Err(FetchError::Canceled);
+    }
+    result
+}
+
+/// Modal until the download ends or Cancel is pressed. Without task
+/// dialogs it only waits.
+fn show_progress(progress: &Progress) {
+    use std::sync::atomic::Ordering::Acquire;
+    use windows_sys::Win32::UI::Controls::{
+        TASKDIALOGCONFIG, TDCBF_CANCEL_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TDF_CALLBACK_TIMER,
+        TDF_SHOW_PROGRESS_BAR,
+    };
+
+    let Some(task_dialog) = crate::about::task_dialog_indirect() else {
+        while !progress.done.load(Acquire) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        progress
+            .finished
+            .store(true, std::sync::atomic::Ordering::Release);
+        return;
+    };
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };
+    let title = wide("Phramer");
+    let heading = wide("Downloading Phramer update…");
+    let config = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_SHOW_PROGRESS_BAR | TDF_CALLBACK_TIMER,
+        dwCommonButtons: TDCBF_CANCEL_BUTTON,
+        pszWindowTitle: title.as_ptr(),
+        pszMainInstruction: heading.as_ptr(),
+        pfCallback: Some(progress_callback),
+        lpCallbackData: std::ptr::from_ref(progress) as isize,
+        ..Default::default()
+    };
+    // SAFETY: `config`, its strings and `progress` (the callback's data)
+    // outlive the modal call; the out-parameters may be null.
+    let result = unsafe {
+        task_dialog(
+            &config,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if result < 0 {
+        log::error!("cannot show the download progress ({result:#x})");
+        while !progress.done.load(Acquire) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        progress
+            .finished
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Moves the bar on the dialog's timer and closes it once the download
+/// ends.
+unsafe extern "system" fn progress_callback(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    notification: u32,
+    _wparam: windows_sys::Win32::Foundation::WPARAM,
+    _lparam: windows_sys::Win32::Foundation::LPARAM,
+    data: isize,
+) -> windows_sys::core::HRESULT {
+    use std::sync::atomic::Ordering::{Acquire, Release};
+    use windows_sys::Win32::Foundation::S_OK;
+    use windows_sys::Win32::UI::Controls::{
+        TDM_CLICK_BUTTON, TDM_SET_PROGRESS_BAR_POS, TDN_CREATED, TDN_TIMER,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{IDCANCEL, SendMessageW};
+
+    // TASKDIALOG_NOTIFICATIONS are i32, the callback's parameter u32
+    if !matches!(notification as i32, TDN_CREATED | TDN_TIMER) {
+        return S_OK;
+    }
+    // SAFETY: `data` is the `Progress` that `show_progress` borrows for the
+    // whole dialog.
+    let progress = unsafe { &*(data as *const Progress) };
+    if progress.done.load(Acquire) {
+        progress.finished.store(true, Release);
+        // SAFETY: the dialog's own window; Cancel is its one button.
+        unsafe { SendMessageW(hwnd, TDM_CLICK_BUTTON as u32, IDCANCEL as usize, 0) };
+        return S_OK;
+    }
+    let (received, total) = (
+        progress.received.load(Acquire),
+        progress.total.load(Acquire),
+    );
+    if let Some(percent) = received.saturating_mul(100).checked_div(total) {
+        // SAFETY: the dialog's own window; the range is 0 to 100.
+        unsafe { SendMessageW(hwnd, TDM_SET_PROGRESS_BAR_POS as u32, percent.min(100), 0) };
+    }
+    S_OK
 }
 
 /// Opens a release page in the browser.
@@ -292,13 +705,43 @@ fn open_release_page(url: &str) {
     }
 }
 
-/// An HTTPS GET with WinHTTP (system proxy and certificates); the body.
-fn fetch(host: &str, path: &str) -> Result<String, String> {
+#[derive(Debug)]
+enum FetchError {
+    Canceled,
+    Failed(String),
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Canceled => f.write_str("canceled"),
+            Self::Failed(error) => f.write_str(error),
+        }
+    }
+}
+
+/// A small text answer: a release document or a checksum file.
+fn fetch_text(url: &str, accept: Option<&str>) -> Result<String, String> {
+    let body = fetch(url, accept, MAX_RESPONSE, &mut |_, _| true).map_err(|e| e.to_string())?;
+    String::from_utf8(body).map_err(|_| "the answer is not text".to_owned())
+}
+
+/// An HTTPS GET with WinHTTP (system proxy and certificates), following
+/// redirects (release assets live on a CDN host); the body, at most `limit`
+/// bytes. `progress` hears bytes so far and the total, if known, and stops
+/// the download by returning false.
+fn fetch(
+    url: &str,
+    accept: Option<&str>,
+    limit: usize,
+    progress: &mut dyn FnMut(usize, Option<usize>) -> bool,
+) -> Result<Vec<u8>, FetchError> {
     use windows_sys::Win32::Networking::WinHttp::{
         INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
-        WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE, WinHttpCloseHandle, WinHttpConnect,
-        WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable, WinHttpQueryHeaders,
-        WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
+        WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+        WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest,
+        WinHttpQueryDataAvailable, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
+        WinHttpSendRequest, WinHttpSetTimeouts,
     };
 
     /// A WinHTTP handle, closed when dropped.
@@ -312,7 +755,14 @@ fn fetch(host: &str, path: &str) -> Result<String, String> {
         }
     }
     let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };
-    let failed = |call: &str| format!("{call} failed: {}", std::io::Error::last_os_error());
+    let failed = |call: &str| {
+        FetchError::Failed(format!(
+            "{call} failed: {}",
+            std::io::Error::last_os_error()
+        ))
+    };
+    let (host, path) =
+        split_url(url).ok_or_else(|| FetchError::Failed(format!("not an https address: {url}")))?;
 
     let agent = wide(&format!("Phramer/{}", phramer_core::VERSION));
     // SAFETY: `agent` is NUL-terminated and outlives the call.
@@ -354,14 +804,16 @@ fn fetch(host: &str, path: &str) -> Result<String, String> {
     if request.0.is_null() {
         return Err(failed("WinHttpOpenRequest"));
     }
-    let headers = wide("Accept: application/vnd.github+json");
-    // SAFETY: an open request; `headers` is NUL-terminated (length -1 says
-    // so); no body.
+    let headers = accept.map(|accept| wide(&format!("Accept: {accept}")));
+    // SAFETY: an open request; `headers` is null or NUL-terminated (length
+    // -1 says so); no body.
     let sent = unsafe {
         WinHttpSendRequest(
             request.0,
-            headers.as_ptr(),
-            u32::MAX,
+            headers
+                .as_ref()
+                .map_or(std::ptr::null(), |headers| headers.as_ptr()),
+            if headers.is_some() { u32::MAX } else { 0 },
             std::ptr::null(),
             0,
             0,
@@ -389,8 +841,22 @@ fn fetch(host: &str, path: &str) -> Result<String, String> {
         return Err(failed("WinHttpQueryHeaders"));
     }
     if status != 200 {
-        return Err(format!("HTTP status {status}"));
+        return Err(FetchError::Failed(format!("HTTP status {status}")));
     }
+    let mut length = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: as above; a chunked answer has no length, and the call fails.
+    let total = (unsafe {
+        WinHttpQueryHeaders(
+            request.0,
+            WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+            std::ptr::null(),
+            (&raw mut length).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+        )
+    } != 0)
+        .then_some(length as usize);
     let mut body = Vec::new();
     loop {
         let mut available = 0u32;
@@ -417,11 +883,14 @@ fn fetch(host: &str, path: &str) -> Result<String, String> {
             return Err(failed("WinHttpReadData"));
         }
         body.truncate(start + read as usize);
-        if body.len() > MAX_RESPONSE {
-            return Err("the answer is too large".to_owned());
+        if body.len() > limit {
+            return Err(FetchError::Failed("the answer is too large".to_owned()));
+        }
+        if !progress(body.len(), total) {
+            return Err(FetchError::Canceled);
         }
     }
-    String::from_utf8(body).map_err(|_| "the answer is not text".to_owned())
+    Ok(body)
 }
 
 /// The tray icon with 15.0.0's update badge: an amber dot, outlined in
@@ -511,12 +980,17 @@ mod tests {
         "draft": false,
         "prerelease": false,
         "assets": [
+            {"name": "phramer-16.0.1-win64.zip",
+             "browser_download_url": "https://github.com/MichaelNguyen5653/Phramer/releases/download/v16.0.1/phramer-16.0.1-win64.zip"},
             {"name": "Phramer-16.0.1-win64.msi",
-             "browser_download_url": "https://github.com/x/y/releases/download/v16.0.1/Phramer-16.0.1-win64.msi"},
+             "browser_download_url": "https://github.com/MichaelNguyen5653/Phramer/releases/download/v16.0.1/Phramer-16.0.1-win64.msi"},
             {"name": "Phramer-16.0.1-win64.msi.sha256sum",
-             "browser_download_url": "https://github.com/x/y/releases/download/v16.0.1/Phramer-16.0.1-win64.msi.sha256sum"}
+             "browser_download_url": "https://github.com/MichaelNguyen5653/Phramer/releases/download/v16.0.1/Phramer-16.0.1-win64.msi.sha256sum"}
         ]
     }"#;
+
+    const MSI_URL: &str = "https://github.com/MichaelNguyen5653/Phramer/releases/download/v16.0.1/Phramer-16.0.1-win64.msi";
+    const SHA_URL: &str = "https://github.com/MichaelNguyen5653/Phramer/releases/download/v16.0.1/Phramer-16.0.1-win64.msi.sha256sum";
 
     #[test]
     fn the_release_document_is_read() {
@@ -526,6 +1000,8 @@ mod tests {
                 version: "16.0.1".into(),
                 html_url: "https://github.com/MichaelNguyen5653/Phramer/releases/tag/v16.0.1"
                     .into(),
+                msi_url: Some(MSI_URL.into()),
+                sha_url: Some(SHA_URL.into()),
             })
         );
         // The 14.1.3 mirror was tagged without a `v`
@@ -534,6 +1010,100 @@ mod tests {
         assert!(parse_release("{}").is_err());
         assert!(parse_release("<html>rate limited</html>").is_err());
         assert!(parse_release(r#"{"tag_name": 5, "html_url": "x"}"#).is_err());
+    }
+
+    #[test]
+    fn installers_are_taken_only_from_the_projects_downloads() {
+        // No assets: the release page is all there is
+        let bare = parse_release(
+            r#"{"tag_name": "v16.0.1", "html_url": "https://github.com/MichaelNguyen5653/Phramer/releases/tag/v16.0.1"}"#,
+        )
+        .unwrap();
+        assert_eq!((bare.msi_url, bare.sha_url), (None, None));
+        // An installer hosted anywhere else is never downloaded
+        let elsewhere = RELEASE.replace(
+            "https://github.com/MichaelNguyen5653/Phramer/releases/download/",
+            "https://example.com/MichaelNguyen5653/Phramer/releases/download/",
+        );
+        let release = parse_release(&elsewhere).unwrap();
+        assert_eq!((release.msi_url, release.sha_url), (None, None));
+        // Matched by suffix, in any case, as 15.0.0 did
+        let upper = RELEASE.replace("-win64.msi\",", "-win64.MSI\",");
+        assert_eq!(
+            parse_release(&upper).unwrap().msi_url.as_deref(),
+            Some(MSI_URL)
+        );
+    }
+
+    #[test]
+    fn the_checksum_file_gives_its_first_word() {
+        let hash = "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";
+        assert_eq!(
+            parse_checksum(&format!("{hash} *Phramer-16.0.1-win64.msi\n")),
+            Some(hash.to_lowercase())
+        );
+        assert_eq!(
+            parse_checksum(&format!("  {hash}\r\n")),
+            Some(hash.to_lowercase())
+        );
+        // "The update checksum file is malformed."
+        for text in ["", "abc", &hash[1..], &format!("{}g", &hash[1..])] {
+            assert_eq!(parse_checksum(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_installer_hash_is_lowercase_hex() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn the_installer_is_named_after_a_plain_version() {
+        assert_eq!(
+            installer_name("16.0.1").as_deref(),
+            Some("Phramer-16.0.1-win64.msi")
+        );
+        assert_eq!(
+            installer_name("16.0.0-beta.2").as_deref(),
+            Some("Phramer-16.0.0-beta.2-win64.msi")
+        );
+        // The version came from the network and ends up in a script
+        for version in ["", "16.0.1\"&calc", "..\\16", "16/0", "16 0", "16%TEMP%"] {
+            assert_eq!(installer_name(version), None, "{version}");
+        }
+    }
+
+    #[test]
+    fn the_script_installs_then_starts_phramer_again() {
+        let script = update_script(
+            Path::new(r"C:\Temp\Phramer-16.0.1-win64.msi"),
+            Path::new(r"C:\Program Files\Phramer\phramer.exe"),
+        );
+        assert_eq!(
+            script,
+            "@echo off\r\n\
+             msiexec /i \"C:\\Temp\\Phramer-16.0.1-win64.msi\" /passive /norestart\r\n\
+             start \"\" \"C:\\Program Files\\Phramer\\phramer.exe\"\r\n\
+             del \"%~f0\"\r\n"
+        );
+    }
+
+    #[test]
+    fn only_https_addresses_are_fetched() {
+        assert_eq!(
+            split_url("https://github.com/a/b.msi?x=1"),
+            Some(("github.com", "/a/b.msi?x=1"))
+        );
+        assert_eq!(
+            split_url("https://api.github.com"),
+            Some(("api.github.com", "/"))
+        );
+        assert_eq!(split_url("http://github.com/a"), None);
+        assert_eq!(split_url("https:///a"), None);
+        assert_eq!(split_url("github.com/a"), None);
     }
 
     #[test]
@@ -573,10 +1143,23 @@ mod tests {
     #[test]
     #[ignore = "live: queries the GitHub releases API"]
     fn the_latest_release_is_fetched() {
-        let json = fetch(RELEASES_HOST, RELEASES_PATH).unwrap();
+        let json = fetch_text(RELEASES_URL, Some(GITHUB_JSON)).unwrap();
         let release = parse_release(&json).unwrap();
         println!("latest release: {release:?}");
         assert!(Version::parse(&release.version).is_some());
         assert!(release.html_url.starts_with(RELEASE_PAGE_PREFIX));
+    }
+
+    #[test]
+    #[ignore = "live: downloads the latest release's checksum through its CDN redirect"]
+    fn the_checksum_asset_is_fetched() {
+        let json = fetch_text(RELEASES_URL, Some(GITHUB_JSON)).unwrap();
+        let release = parse_release(&json).unwrap();
+        let Some(url) = release.sha_url else {
+            println!("the latest release has no checksum asset");
+            return;
+        };
+        let text = fetch_text(&url, None).unwrap();
+        assert!(parse_checksum(&text).is_some(), "{text}");
     }
 }

@@ -669,6 +669,97 @@ fn daemon_tray_forwarding_and_spawn() {
 }
 
 #[test]
+#[ignore = "live: starts the daemon and opens the Capture Launcher"]
+fn capture_launcher_asked_for_twice_opens_once() {
+    let _live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    per_monitor_dpi_aware();
+    let exe = exe();
+    println!("binary: {}", exe.display());
+    assert!(
+        processes_of(&exe).is_empty(),
+        "{} is already running",
+        exe.display()
+    );
+    assert!(!lock_exists(), "another Phramer 16 daemon holds the lock");
+    let mut cleanup = Cleanup {
+        exe: exe.clone(),
+        pids: Vec::new(),
+        before: user_state(),
+    };
+    let log_path =
+        std::env::temp_dir().join(format!("phramer-launcher-smoke-{}.log", std::process::id()));
+    let log = fs::File::create(&log_path).expect("log file");
+    let daemon = Command::new(&exe)
+        .env("PHRAMER_NO_WELCOME", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log)
+        .spawn()
+        .expect("start the daemon");
+    let daemon_pid = daemon.id();
+    cleanup.pids.push(daemon_pid);
+    assert!(
+        wait_until(Duration::from_secs(20), || {
+            lock_exists()
+                && windows_of(daemon_pid)
+                    .iter()
+                    .any(|w| w.class == "tray_icon_app")
+        }),
+        "the daemon did not come up"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    let tray = check_daemon(&exe, daemon_pid);
+
+    // Back to back, as a double click on the tray entry: the second arrives
+    // while WebView2 is still starting the first window
+    for _ in 0..2 {
+        let status = Command::new(cli_exe())
+            .env("PHRAMER_NO_WELCOME", "1")
+            .arg("launcher")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("run phramer-cli");
+        assert!(status.success(), "phramer-cli launcher: {status}");
+    }
+    // The daemon still answers, and there is one launcher
+    let answered = round_trip_meanwhile();
+    assert!(
+        wait_until(Duration::from_secs(15), || answered.is_finished()),
+        "the daemon stopped answering\n--- log ---\n{}",
+        fs::read_to_string(&log_path).unwrap_or_default()
+    );
+    println!(
+        "event loop answered in {} ms",
+        answered.join().expect("round trip").as_millis()
+    );
+    let launchers = || {
+        windows_of(daemon_pid)
+            .into_iter()
+            .filter(|window| window_title(window.hwnd) == "Capture Launcher")
+            .count()
+    };
+    assert!(
+        wait_until(Duration::from_secs(15), || launchers() == 1),
+        "launcher windows: {}",
+        launchers()
+    );
+
+    stop(daemon_pid, &tray);
+    drop(daemon);
+    println!(
+        "--- daemon log ---\n{}",
+        fs::read_to_string(&log_path).unwrap_or_default()
+    );
+    assert!(
+        user_state() == cleanup.before,
+        "the settings file or startup registry entries changed"
+    );
+    let _ = fs::remove_file(&log_path);
+}
+
+#[test]
 #[ignore = "live: starts the daemon, shows the capture overlay"]
 fn overlay_opens_closes_and_full_capture_saves() {
     let _live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1065,20 +1156,21 @@ fn logged_window_created(log: &str) -> Option<u128> {
         .find_map(|rest| rest.split(' ').next()?.parse().ok())
 }
 
-/// How long the daemon's event loop takes to answer a forwarded command
-/// (`phramer-cli launcher`, answered from the main thread): what a tray
-/// click waits for too.
+/// How long the daemon's event loop takes to answer a second plain start
+/// (handed over by the single-instance lock and answered from the main
+/// thread, which ignores it): what a tray click waits for too, plus the
+/// second process's own start. Every command opens a window now that
+/// `launcher` is the Capture Launcher, so none of them can be the probe.
 fn round_trip() -> Duration {
     let start = Instant::now();
-    let status = Command::new(cli_exe())
+    let status = Command::new(exe())
         .env("PHRAMER_NO_WELCOME", "1")
-        .arg("launcher")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .expect("run phramer-cli");
-    assert!(status.success(), "phramer-cli launcher: {status}");
+        .expect("start phramer again");
+    assert!(status.success(), "a second phramer start: {status}");
     start.elapsed()
 }
 

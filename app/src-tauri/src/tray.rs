@@ -109,10 +109,10 @@ fn menu_entries(flags: &MenuFlags) -> Vec<Entry> {
         .as_ref()
         .filter(|_| cfg!(not(feature = "store")))
     {
-        // Check only: the release page, where 15.0.0 installed in place
+        // 15.0.0's Windows wording: it asks, then installs in place
         entries.push(item(
             "check_for_updates",
-            &format!("Download version {version}"),
+            &format!("Update to version {version} and restart"),
         ));
     }
     entries.push(item("about", "&About"));
@@ -394,7 +394,7 @@ mod tests {
             let entries = layout(&menu_entries(&flags));
             let at = |text: &str| entries.iter().position(|entry| entry == text);
             assert_eq!(at("Check for updates"), None);
-            let update = at("Download version 16.0.1").expect("update entry");
+            let update = at("Update to version 16.0.1 and restart").expect("update entry");
             assert_eq!(entries[update - 1], "&What's New");
             assert_eq!(entries[update + 1], "&About");
         }

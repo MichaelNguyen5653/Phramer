@@ -21,7 +21,7 @@ const LICENSE: &str = "GPLv3+";
 const COPY_INFO: i32 = 1000;
 /// `tauri_utils::platform::WINDOWS_APP_ICON_RESOURCE_ID`: the app icon
 /// tauri-build puts in the executable.
-const APP_ICON: u16 = 32512;
+pub(crate) const APP_ICON: u16 = 32512;
 
 /// An About is open or opening.
 static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -166,12 +166,12 @@ unsafe extern "system" fn callback(
     S_OK
 }
 
-type TaskDialogIndirect =
+pub(crate) type TaskDialogIndirect =
     unsafe extern "system" fn(*const TASKDIALOGCONFIG, *mut i32, *mut i32, *mut BOOL) -> HRESULT;
 
 /// Looked up rather than imported: only Common Controls 6, which the app's
 /// manifest selects, has it, and the test binaries carry no manifest.
-fn task_dialog_indirect() -> Option<TaskDialogIndirect> {
+pub(crate) fn task_dialog_indirect() -> Option<TaskDialogIndirect> {
     let library: Vec<u16> = "comctl32.dll".encode_utf16().chain(Some(0)).collect();
     // SAFETY: a NUL-terminated name; comctl32 stays loaded for the process.
     let module = unsafe { LoadLibraryW(library.as_ptr()) };

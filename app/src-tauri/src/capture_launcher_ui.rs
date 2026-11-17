@@ -94,6 +94,12 @@ pub(crate) fn open<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.set_focus();
         return;
     }
+    // WebView2 starts the window in a nested message loop, which can carry
+    // out another request for it: a second build of the same window there
+    // never returns, and the daemon stops answering
+    if BUILDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
     let page = WebviewUrl::App("capture-launcher.html".into());
     let built = WebviewWindowBuilder::new(app, LABEL, page)
         .title(TITLE)
@@ -104,11 +110,15 @@ pub(crate) fn open<R: Runtime>(app: &AppHandle<R>) {
         .center()
         .visible(false)
         .build();
+    BUILDING.store(false, Ordering::Release);
     match built {
         Ok(_) => log::info!("{LABEL}: window created"),
         Err(error) => log::error!("cannot create the capture launcher: {error}"),
     }
 }
+
+/// The window is being built.
+static BUILDING: AtomicBool = AtomicBool::new(false);
 
 /// One entry of the Monitor list (`Monitor %1: %2 (%3x%4)`).
 #[derive(Debug, Serialize)]

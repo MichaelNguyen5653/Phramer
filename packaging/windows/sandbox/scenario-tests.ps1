@@ -120,7 +120,12 @@ foreach ($t in $manifest.tests) {
     # Exit code 0 without "1 passed" means the filter matched nothing
     $ran = $stdout -match '(?m)^test result: ok\. 1 passed'
     $status = if (-not $finished) { 'TIMEOUT' } elseif ($p.ExitCode -eq 0 -and $ran) { 'PASS' } else { 'FAIL' }
-    if ($status -ne 'PASS') { try { Save-Screenshot "tests\$n" } catch { } }
+    if ($status -ne 'PASS') {
+        try { Save-Screenshot "tests\$n" } catch { }
+        # The smoke tests' daemon logs, which they print only on success
+        Get-ChildItem $env:TEMP -Filter 'phramer-*.log' -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName (Join-Path $logs "$n.$($_.Name)") }
+    }
     $leftovers = Get-Leftovers
     if ($leftovers.Count -gt 0) {
         Get-Process -Name 'phramer', 'phramer-cli', 'SnippingTool', 'ScreenClippingHost', 'msedgewebview2' -ErrorAction SilentlyContinue | Stop-Process -Force
