@@ -1,6 +1,4 @@
-//! What the tray, the hotkeys and forwarded commands do. Everything that
-//! needs a feature not built yet is a stub here that logs
-//! "not implemented yet", for the later phases to fill in.
+//! What the tray, the hotkeys and forwarded commands do.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -12,10 +10,6 @@ use crate::cli::{FullRequest, GuiRequest, ScreenRequest};
 use crate::daemon::DaemonState;
 use crate::reply::Reply;
 use crate::{editor, notify, settings, settings_ui, snipping, updater, welcome};
-
-fn not_implemented(feature: &str, detail: &dyn std::fmt::Debug) {
-    log::info!("{feature}: not implemented yet ({detail:?})");
-}
 
 /// `Flameshot::gui` / `requestCapture` in graphical mode: the capture
 /// overlay.
@@ -84,8 +78,8 @@ pub(crate) fn capture_full<R: Runtime>(
 }
 
 /// `Flameshot::launcher`.
-pub(crate) fn open_launcher<R: Runtime>(_app: &AppHandle<R>) {
-    not_implemented("capture launcher", &());
+pub(crate) fn open_launcher<R: Runtime>(app: &AppHandle<R>) {
+    crate::capture_launcher_ui::open(app);
 }
 
 /// `Flameshot::config`: the settings window.
@@ -135,7 +129,7 @@ pub(crate) fn show_whats_new<R: Runtime>(app: &AppHandle<R>) {
 
 /// `Flameshot::info`.
 pub(crate) fn show_about<R: Runtime>(_app: &AppHandle<R>) {
-    not_implemented("about window", &());
+    crate::about::show();
 }
 
 /// The last file saved this session; kept in memory only, by design.

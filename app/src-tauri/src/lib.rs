@@ -2,8 +2,10 @@
 //! (no arguments) or a command-line invocation that hands its command to the
 //! daemon and exits, as 15.0.0's `main.cpp` decided by argument count.
 
+mod about;
 mod actions;
 mod capture;
+mod capture_launcher_ui;
 mod cli;
 mod console;
 mod daemon;
@@ -19,6 +21,7 @@ mod ocr_ui;
 mod printscreen;
 mod reply;
 mod restart;
+mod screenclip;
 mod settings;
 mod settings_ui;
 mod snipping;
@@ -58,6 +61,8 @@ pub fn run() -> i32 {
     match cli::classify(&plain) {
         Role::Daemon => daemon::run(start_command),
         Role::Recording => actions::start_recording_from_link(),
+        Role::RegisterScreenclip => screenclip::register_here(),
+        Role::UnregisterScreenclip => screenclip::unregister_here(),
         Role::Command(command) => {
             let forwarded = if relayed { args } else { command.clone() };
             run_command(command, move |_, cwd| {

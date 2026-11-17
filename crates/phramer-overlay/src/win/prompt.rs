@@ -79,13 +79,3 @@ fn task_dialog_indirect() -> Option<TaskDialogIndirect> {
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    #[ignore = "live: shows the quit prompt and waits for an answer"]
-    fn the_quit_prompt_answers() {
-        let (quit, stop) = super::ask_quit(std::ptr::null_mut());
-        println!("quit: {quit}, stop asking: {stop}");
-    }
-}

@@ -10,6 +10,8 @@ export interface MockOptions {
   snapshot: unknown;
   label: string;
   mandatory?: boolean;
+  /** How screenclip_toggle's trip through UAC ends. */
+  screenClipOutcome?: "succeeded" | "cancelled" | "failed";
 }
 
 declare global {
@@ -29,6 +31,8 @@ export function installSettingsMock(options: MockOptions): void {
     hotkey_failures: string[];
   };
   const state = JSON.parse(JSON.stringify(options.snapshot)) as State;
+  // screenclip.rs's status: nothing listed, nothing chosen
+  const screenClip = { registered: false, registered_by_phramer: false, chosen: false, store: false };
   const copy = () => JSON.parse(JSON.stringify(state));
   const canonical = (text: string) => {
     const parts = text.trim().endsWith("++")
@@ -86,6 +90,17 @@ export function installSettingsMock(options: MockOptions): void {
           if (owner) owner.value = "";
           row.value = sequence ? sequence.slice(0, -1) + sequence.slice(-1).toLowerCase() : "";
           return copy();
+        }
+        case "screenclip_status":
+          return { ...screenClip };
+        case "screenclip_toggle": {
+          const unregistered = screenClip.registered_by_phramer;
+          const outcome = options.screenClipOutcome ?? "succeeded";
+          if (outcome === "succeeded") {
+            screenClip.registered = !unregistered;
+            screenClip.registered_by_phramer = !unregistered;
+          }
+          return { outcome, unregistered, status: { ...screenClip } };
         }
         case "settings_print_screen":
           state.snipping_claims_print_screen = !args.phramer;

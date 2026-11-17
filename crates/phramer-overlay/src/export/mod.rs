@@ -48,6 +48,12 @@ pub trait Handoff {
     fn copy_text(&mut self, text: &str) -> Result<(), OverlayError>;
     /// The file itself, as Explorer copies one (`CF_HDROP`).
     fn copy_file(&mut self, path: &Path) -> Result<(), OverlayError>;
+    /// The save dialog with `savePathFixed` off: where the capture goes,
+    /// `suggested` first; `None` when cancelled. Without a dialog the
+    /// capture goes where suggested.
+    fn choose_save_path(&mut self, suggested: &Path) -> Option<PathBuf> {
+        Some(suggested.to_owned())
+    }
 }
 
 /// One line of feedback; `path` makes the notification open its folder.
@@ -63,6 +69,9 @@ pub struct Notice {
 pub struct ExportReport {
     /// The last file written, for Show in Folder.
     pub saved: Option<PathBuf>,
+    /// The folder chosen in the save dialog, the save folder from now on
+    /// (`setSavePath`).
+    pub save_folder: Option<PathBuf>,
     pub notices: Vec<Notice>,
     /// What 15.0.0 wrote to its standard output: `--print-geometry`'s line,
     /// then `--raw`'s PNG. The caller relays it to whoever asked.
@@ -159,13 +168,33 @@ fn run_tasks(
 
 /// `saveToFilesystem`: writes the image to `path` (a folder or a file
 /// name), never replacing a file. Returns the file written.
-fn save_to(
+/// `saveToFilesystemGUI` with the dialog: the pattern's file in `folder`
+/// is suggested; the file chosen is written as its extension says (the
+/// dialog already asked before replacing one), and its folder becomes the
+/// save folder.
+fn save_with_dialog(
     image: &CapturedImage,
-    path: &Path,
-    prefix: &str,
+    folder: &Path,
     context: &mut ExportContext<'_>,
     report: &mut ExportReport,
 ) -> Option<PathBuf> {
+    let (suggested, _) = target_in(folder, context);
+    let chosen = context.handoff.choose_save_path(&suggested)?;
+    let extension = chosen
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let (target, format) = match ImageFormat::from_extension(&extension) {
+        Some(format) => (chosen, format),
+        None => (chosen.with_extension("png"), ImageFormat::Png),
+    };
+    let saved = write_image(image, &target, format, "", context, report)?;
+    report.save_folder = saved.parent().map(Path::to_owned);
+    Some(saved)
+}
+
+/// Where a capture saved to `path` (a folder or a file) goes, and as what.
+fn target_in(path: &Path, context: &ExportContext<'_>) -> (PathBuf, ImageFormat) {
     let settings = context.settings;
     let name = context.name.map_or_else(
         || expand_pattern(&settings.filename_pattern(), context.time),
@@ -175,22 +204,44 @@ fn save_to(
         || settings.save_as_file_extension(),
         |format| format.extension().to_owned(),
     );
-    let mut target = screenshot_path(path, &extension, &name);
+    let target = screenshot_path(path, &extension, &name);
     let extension = target
         .extension()
         .map(|extension| extension.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let format = match ImageFormat::from_extension(&extension) {
-        Some(format) => format,
+    match ImageFormat::from_extension(&extension) {
+        Some(format) => (target, format),
         None => {
             // 15.0.0 had every Qt image writer; this build writes PNG, JPEG,
             // BMP, WebP and PDF, so other formats are saved as PNG
             log::warn!("cannot write .{extension} files; saving as PNG");
-            target = screenshot_path(&target, "png", &name);
-            ImageFormat::Png
+            (screenshot_path(&target, "png", &name), ImageFormat::Png)
         }
-    };
-    let quality = u8::try_from(settings.jpeg_quality()).unwrap_or(75);
+    }
+}
+
+fn save_to(
+    image: &CapturedImage,
+    path: &Path,
+    prefix: &str,
+    context: &mut ExportContext<'_>,
+    report: &mut ExportReport,
+) -> Option<PathBuf> {
+    let (target, format) = target_in(path, context);
+    write_image(image, &target, format, prefix, context, report)
+}
+
+/// Encodes `image` into `target`, reporting how it went.
+fn write_image(
+    image: &CapturedImage,
+    target: &Path,
+    format: ImageFormat,
+    prefix: &str,
+    context: &ExportContext<'_>,
+    report: &mut ExportReport,
+) -> Option<PathBuf> {
+    let target = target.to_owned();
+    let quality = u8::try_from(context.settings.jpeg_quality()).unwrap_or(75);
     let lead = if prefix.is_empty() {
         String::new()
     } else {
@@ -232,13 +283,12 @@ fn save_to_default(
         report.error(OverlayError::NoSaveFolder.to_string());
         return;
     };
-    if !context.settings.save_path_fixed() {
-        log::info!(
-            "save dialog: not implemented yet; saving to {}",
-            folder.display()
-        );
-    }
-    let Some(saved) = save_to(image, &folder, "", context, report) else {
+    let saved = if context.settings.save_path_fixed() {
+        save_to(image, &folder, "", context, report)
+    } else {
+        save_with_dialog(image, &folder, context, report)
+    };
+    let Some(saved) = saved else {
         return;
     };
     if context.settings.copy_path_after_save() {

@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { ScreenClipStatus, ScreenClipToggled } from "./screenclip";
 import type { Snapshot, Value } from "./types";
 
 export interface WelcomeState {
@@ -37,6 +38,16 @@ export const backend = {
   /** Lets go of the hotkeys while the recorder listens. */
   pauseHotkeys(paused: boolean): Promise<Snapshot> {
     return invoke<Snapshot>("settings_pause_hotkeys", { paused });
+  },
+  screenClipStatus(): Promise<ScreenClipStatus> {
+    return invoke<ScreenClipStatus>("screenclip_status");
+  },
+  /** Register or Unregister through UAC; resolves once it is answered. */
+  screenClipToggle(): Promise<ScreenClipToggled> {
+    return invoke<ScreenClipToggled>("screenclip_toggle");
+  },
+  screenClipOpenSettings(): Promise<void> {
+    return invoke("screenclip_open_settings");
   },
   printScreen(phramer: boolean): Promise<Snapshot> {
     return invoke<Snapshot>("settings_print_screen", { phramer });

@@ -25,6 +25,10 @@ pub(crate) enum Role {
     /// An `ms-screenclip:` recording link (Win+Shift+R), handed back to
     /// Snipping Tool.
     Recording,
+    /// The elevated copy that lists Phramer as an ms-screenclip handler,
+    /// or unlists it, then exits (`screenclip`).
+    RegisterScreenclip,
+    UnregisterScreenclip,
     /// Anything else: parsed, then handled here or by the daemon. The first
     /// element is the program name.
     Command(Vec<String>),
@@ -40,6 +44,13 @@ pub(crate) fn classify(args: &[String]) -> Role {
     let Some(first) = args.get(1) else {
         return Role::Daemon;
     };
+    // Only as the one and only argument: the elevated copy does nothing else
+    if args.len() == 2 && first == crate::screenclip::REGISTER_ARGUMENT {
+        return Role::RegisterScreenclip;
+    }
+    if args.len() == 2 && first == crate::screenclip::UNREGISTER_ARGUMENT {
+        return Role::UnregisterScreenclip;
+    }
     if first != SCREENCLIP_ARGUMENT {
         return Role::Command(args.to_vec());
     }
@@ -89,7 +100,7 @@ impl Command {
 }
 
 /// A rectangle in physical pixels, `QRect::normalized()`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Rect {
     pub(crate) x: i32,
     pub(crate) y: i32,
@@ -1020,6 +1031,21 @@ mod tests {
         );
         // An empty argument is still an argument
         assert_eq!(classify(&args(&[""])), Role::Command(args(&[""])));
+    }
+
+    #[test]
+    fn the_elevated_registration_copy_takes_exactly_one_argument() {
+        assert_eq!(
+            classify(&args(&["--register-screenclip"])),
+            Role::RegisterScreenclip
+        );
+        assert_eq!(
+            classify(&args(&["--unregister-screenclip"])),
+            Role::UnregisterScreenclip
+        );
+        // Anything more is an ordinary (refused) command line
+        let more = args(&["--register-screenclip", "gui"]);
+        assert_eq!(classify(&more), Role::Command(more.clone()));
     }
 
     #[test]

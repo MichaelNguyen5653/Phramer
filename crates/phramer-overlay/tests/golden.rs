@@ -759,3 +759,31 @@ fn editor_hint_above_the_selection() {
     assert!(state.editor_hint().is_some());
     check("editor_hint", &draw(&state, 0, width, height, &bgra));
 }
+
+#[test]
+fn monitor_picker_names_each_monitor_and_frames_the_highlighted_one() {
+    let (width, height, bgra, windows) = desktop(1.0);
+    let monitors = vec![
+        monitor(width, height, 96),
+        Monitor::new(
+            MonitorId::new("right"),
+            PhysicalRect::new(width as i32, 0, width as i32, height as i32),
+            96,
+            false,
+        ),
+    ];
+    let mut state = OverlayState::new(
+        monitors,
+        0,
+        windows,
+        OverlayConfig {
+            pick_monitor: true,
+            ..base()
+        },
+    )
+    .expect("state");
+    focused(&mut state);
+    assert!(state.is_picking());
+    check("picker_highlighted", &draw(&state, 0, width, height, &bgra));
+    check("picker_other", &draw(&state, 1, width, height, &bgra));
+}

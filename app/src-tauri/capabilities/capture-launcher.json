@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capture-launcher",
+  "description": "The Capture Launcher window: its own title bar, hiding for the capture and closing",
+  "windows": ["capture-launcher"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-hide",
+    "core:window:allow-start-dragging"
+  ]
+}

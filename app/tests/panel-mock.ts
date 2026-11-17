@@ -24,11 +24,16 @@ export interface PanelMockOptions {
   icons?: Record<string, string>;
   /** launcher_launch rejects with this. */
   launchError?: string;
+  /** capture_launcher_init. */
+  monitors?: { name: string; width: number; height: number }[];
+  current?: number;
+  lastRegion?: { x: number; y: number; width: number; height: number } | null;
 }
 
 declare global {
   interface Window {
     __calls: MockCall[];
+    __emit(event: string, payload?: unknown): void;
   }
 }
 
@@ -36,6 +41,13 @@ declare global {
 export function installPanelMock(options: PanelMockOptions): void {
   window.__calls = [];
   let callbacks = 0;
+  const handlers = new Map<number, (event: unknown) => void>();
+  const listeners: { event: string; handler: number }[] = [];
+  window.__emit = (event: string, payload?: unknown) => {
+    for (const listener of listeners.filter((entry) => entry.event === event)) {
+      handlers.get(listener.handler)?.({ event, id: listener.handler, payload });
+    }
+  };
   const wait = () => new Promise((resolve) => setTimeout(resolve, options.delay ?? 0));
   const tile = (color: string) =>
     "data:image/svg+xml;base64," +
@@ -44,7 +56,11 @@ export function installPanelMock(options: PanelMockOptions): void {
     );
   const internals = {
     metadata: { currentWindow: { label: options.label }, currentWebview: { windowLabel: options.label, label: options.label } },
-    transformCallback: () => ++callbacks,
+    transformCallback: (callback: (event: unknown) => void) => {
+      const id = ++callbacks;
+      handlers.set(id, callback);
+      return id;
+    },
     unregisterCallback: () => {},
     convertFileSrc: (path: string) => path,
     async invoke(cmd: string, args: Record<string, unknown>) {
@@ -80,8 +96,17 @@ export function installPanelMock(options: PanelMockOptions): void {
         case "launcher_launch":
           if (options.launchError) throw options.launchError;
           return null;
-        case "plugin:event|listen":
-          return ++callbacks;
+        case "capture_launcher_init":
+          return {
+            monitors: options.monitors ?? [],
+            current: options.current ?? 0,
+            last_region: options.lastRegion ?? null,
+          };
+        case "plugin:event|listen": {
+          const { event, handler } = args as { event: string; handler: number };
+          listeners.push({ event, handler });
+          return handler;
+        }
         default:
           return null;
       }

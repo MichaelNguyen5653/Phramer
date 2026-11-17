@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { Keys, Switch } from "../settings/controls";
 import { Icon } from "../settings/Icon";
+import { ScreenClipTools } from "../settings/ScreenClipTools";
 import type { Backend, WelcomeState } from "../settings/backend";
 
 const STEPS = 3;
@@ -141,6 +142,16 @@ export function Welcome({ initial, backend }: { initial: WelcomeState; backend: 
                   <span className="set-help">Phramer starts in the background, so the hotkey always works.</span>
                 </div>
                 <Switch checked={state.startup_launch} label="Launch at sign-in" disabled={busy} onChange={setStartup} />
+              </div>
+              <div className="welcome-option welcome-option-stacked" data-testid="welcome-screenclip">
+                <div className="set-text">
+                  <span className="set-label">Answer Windows&apos; screen snips</span>
+                  <span className="set-help">
+                    Lists Phramer in Windows Settings as an MS-SCREENCLIP app; choose it there, and apps that ask
+                    Windows for a snip open Phramer. Needs administrator approval.
+                  </span>
+                </div>
+                <ScreenClipTools backend={backend} />
               </div>
             </div>
             {error && (

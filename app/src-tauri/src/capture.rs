@@ -12,7 +12,7 @@
 //! A capture asked for by `phramer-cli` carries a [`Reply`]: what 15.0.0
 //! printed to the console goes back through it, then the exit code.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -25,9 +25,9 @@ use phramer_capture::{
 use phramer_core::config::{CaptureRegionMode, Settings};
 use phramer_overlay::{
     BUNDLED_FONT, CaptureTasks, CapturedImage, DeferredAction, ExportAction, ExportContext,
-    ExportReport, ImageFormat, LocalTime, Notice, OverlayConfig, OverlayError, OverlaySession,
-    PinHandler, PinOptions, PinRequest, SaveTarget, SystemClipboard, Theme, export, run_overlay,
-    spawn_pin,
+    ExportReport, Handoff, ImageFormat, LocalTime, Notice, OverlayConfig, OverlayError,
+    OverlaySession, PinHandler, PinOptions, PinRequest, SaveTarget, SystemClipboard, Theme, export,
+    run_overlay, spawn_pin,
 };
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -84,6 +84,11 @@ pub(crate) struct OverlayPlan {
     pub(crate) placement: Placement,
     pub(crate) initial_selection: InitialSelection,
     pub(crate) tasks: Tasks,
+}
+
+/// The region the last overlay exported, for the Capture Launcher.
+pub(crate) fn last_region() -> Option<LocalRect> {
+    LAST_REGION.lock().ok().and_then(|region| *region)
 }
 
 pub(crate) fn last_saved() -> Option<PathBuf> {
@@ -316,7 +321,7 @@ fn spawn<R: Runtime>(
     }
 }
 
-fn under_cursor(monitors: &[Monitor]) -> usize {
+pub(crate) fn under_cursor(monitors: &[Monitor]) -> usize {
     let cursor = cursor_position().unwrap_or(PhysicalPoint::new(0, 0));
     monitor_at_or_primary(monitors, cursor)
         .and_then(|found| {
@@ -335,12 +340,24 @@ fn region_mode(mode: CaptureRegionMode) -> RegionMode {
     }
 }
 
-/// The monitor to open on and whether to follow the cursor.
+/// How the overlay uses the monitors besides the one it opens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spread {
+    /// That monitor only.
+    One,
+    /// Snip across all monitors: it follows the cursor.
+    Follow,
+    /// The monitor is chosen first (`captureRegionMode` 0).
+    Pick,
+}
+
+/// The monitor to open on (the highlighted one when picking) and how the
+/// others take part.
 fn placement(
     monitors: &[Monitor],
     placement: Placement,
     settings: &Settings,
-) -> Result<(usize, bool), CaptureFailure> {
+) -> Result<(usize, Spread), CaptureFailure> {
     let index_of = |found: &Monitor| {
         monitors
             .iter()
@@ -353,9 +370,9 @@ fn placement(
             if index >= monitors.len() {
                 return Err(CaptureFailure::NoSuchScreen);
             }
-            (index, false)
+            (index, Spread::One)
         }
-        Placement::UnderCursor => (under_cursor(monitors), false),
+        Placement::UnderCursor => (under_cursor(monitors), Spread::One),
         Placement::Settings => {
             let cursor = cursor_position().unwrap_or(PhysicalPoint::new(0, 0));
             match choose_target(
@@ -363,19 +380,14 @@ fn placement(
                 cursor,
                 region_mode(settings.capture_region_mode()),
             ) {
-                Some(CaptureTarget::Single(monitor)) => (index_of(monitor), false),
-                Some(CaptureTarget::Follow { active, .. }) => (index_of(active), true),
+                Some(CaptureTarget::Single(monitor)) => (index_of(monitor), Spread::One),
+                Some(CaptureTarget::Follow { active, .. }) => (index_of(active), Spread::Follow),
                 Some(CaptureTarget::Pick {
                     candidates,
                     highlighted,
                 }) => {
-                    // The monitor picker is not built yet: the highlighted
-                    // one (under the cursor) is the pick
-                    log::info!(
-                        "monitor picker: not implemented yet; using the monitor under the cursor"
-                    );
                     let pick = candidates.get(highlighted).copied();
-                    (pick.map_or(0, index_of), false)
+                    (pick.map_or(0, index_of), Spread::Pick)
                 }
                 None => return Err(CaptureFailure::Capture(CaptureError::NoMonitors)),
             }
@@ -389,20 +401,21 @@ fn has_tasks(tasks: &Tasks) -> bool {
     tasks.copy || tasks.save.is_some() || tasks.print_raw || tasks.pin || tasks.accept_on_select
 }
 
-/// The overlay's configuration for a capture with `tasks`, following the
-/// cursor across monitors when `follow` says so, starting with `initial`.
+/// The overlay's configuration for a capture with `tasks`, spread over the
+/// monitors as `spread` says, starting with `initial`.
 fn overlay_config(
     settings: &Settings,
     tasks: &Tasks,
-    follow: bool,
+    spread: Spread,
     initial: Option<LocalRect>,
 ) -> OverlayConfig {
     let mut config = OverlayConfig::from_settings(settings);
     config.has_tasks = has_tasks(tasks);
     config.accept_on_select = tasks.accept_on_select;
     // A given region belongs to the monitor the overlay opens on; following
-    // the cursor (snip across all monitors) would drop it
-    config.follow_cursor = follow && initial.is_none();
+    // the cursor (snip across all monitors) or picking would drop it
+    config.follow_cursor = spread == Spread::Follow && initial.is_none();
+    config.pick_monitor = spread == Spread::Pick && initial.is_none();
     config.initial_selection = initial;
     config
 }
@@ -487,7 +500,7 @@ fn run_gui<R: Runtime>(
     settings_path: PathBuf,
 ) -> Result<Delivery, CaptureFailure> {
     let monitors = enumerate_monitors()?;
-    let (active, follow) = placement(&monitors, plan.placement, &settings)?;
+    let (active, spread) = placement(&monitors, plan.placement, &settings)?;
 
     let last_region = || LAST_REGION.lock().ok().and_then(|region| *region);
     let initial = match plan.initial_selection {
@@ -498,7 +511,7 @@ fn run_gui<R: Runtime>(
         InitialSelection::None if settings.save_last_region() => last_region(),
         InitialSelection::None => None,
     };
-    let config = overlay_config(&settings, &plan.tasks, follow, initial);
+    let config = overlay_config(&settings, &plan.tasks, spread, initial);
     // Open in Editor is offered only without tasks
     if !config.has_tasks {
         prewarm_editor_when_shown(app);
@@ -613,7 +626,52 @@ pub(crate) fn run_export(
     action: ExportAction,
     tasks: &Tasks,
 ) -> Delivery {
-    run_export_named(settings, image, geometry, action, tasks, None, None)
+    let mut handoff = CaptureHandoff(SystemClipboard);
+    run_export_with(
+        settings,
+        image,
+        geometry,
+        action,
+        tasks,
+        (None, None),
+        &mut handoff,
+    )
+}
+
+/// A capture's handoff: the system clipboard, and `saveToFilesystemGUI`'s
+/// save dialog when `savePathFixed` is off.
+struct CaptureHandoff(SystemClipboard);
+
+impl Handoff for CaptureHandoff {
+    fn copy_image(&mut self, image: &CapturedImage, jpeg: Option<u8>) -> Result<(), OverlayError> {
+        self.0.copy_image(image, jpeg)
+    }
+
+    fn copy_text(&mut self, text: &str) -> Result<(), OverlayError> {
+        self.0.copy_text(text)
+    }
+
+    fn copy_file(&mut self, path: &Path) -> Result<(), OverlayError> {
+        self.0.copy_file(path)
+    }
+
+    fn choose_save_path(&mut self, suggested: &Path) -> Option<PathBuf> {
+        let format = suggested
+            .extension()
+            .and_then(|extension| ImageFormat::from_extension(&extension.to_string_lossy()))
+            .unwrap_or(ImageFormat::Png);
+        let mut dialog = rfd::FileDialog::new().set_title("Save screenshot");
+        if let Some(folder) = suggested.parent() {
+            dialog = dialog.set_directory(folder);
+        }
+        if let Some(name) = suggested.file_name() {
+            dialog = dialog.set_file_name(name.to_string_lossy());
+        }
+        for (label, extensions) in editor::save_filters(format) {
+            dialog = dialog.add_filter(label, extensions);
+        }
+        dialog.save_file()
+    }
 }
 
 /// `run_export`, with `name` (no extension) for a file saved into a folder
@@ -628,12 +686,32 @@ pub(crate) fn run_export_named(
     name: Option<&str>,
     format: Option<ImageFormat>,
 ) -> Delivery {
-    let time = LocalTime::now();
     let mut clipboard = SystemClipboard;
+    run_export_with(
+        settings,
+        image,
+        geometry,
+        action,
+        tasks,
+        (name, format),
+        &mut clipboard,
+    )
+}
+
+fn run_export_with(
+    settings: &Settings,
+    image: &CapturedImage,
+    geometry: PhysicalRect,
+    action: ExportAction,
+    tasks: &Tasks,
+    (name, format): (Option<&str>, Option<ImageFormat>),
+    handoff: &mut dyn Handoff,
+) -> Delivery {
+    let time = LocalTime::now();
     let mut context = ExportContext {
         settings,
         time: &time,
-        handoff: &mut clipboard,
+        handoff,
         name,
         format,
     };
@@ -646,6 +724,20 @@ pub(crate) fn run_export_named(
     ))
 }
 
+/// The save dialog's folder is the save folder from now on (`setSavePath`).
+fn remember_save_folder(settings_path: &Path, folder: &Path) {
+    let saved = Settings::load(settings_path).and_then(|mut current| {
+        current.set_save_path(folder);
+        current.save(settings_path)
+    });
+    if let Err(error) = saved {
+        log::error!(
+            "cannot remember {} as the save folder: {error}",
+            folder.display()
+        );
+    }
+}
+
 /// On the main thread: remembers the saved file, updates the tray menu and
 /// sends the notifications.
 fn deliver<R: Runtime>(app: &AppHandle<R>, delivery: Delivery) {
@@ -654,6 +746,7 @@ fn deliver<R: Runtime>(app: &AppHandle<R>, delivery: Delivery) {
     if !matches!(delivery, Delivery::Editor(_)) && !overlay_open() {
         editor::release_warm(app);
     }
+    crate::capture_launcher_ui::capture_ended(app, matches!(delivery, Delivery::Aborted));
     let current = settings::load(&app.state::<DaemonState>().settings_path);
     match delivery {
         Delivery::Aborted => {
@@ -664,6 +757,9 @@ fn deliver<R: Runtime>(app: &AppHandle<R>, delivery: Delivery) {
         }
         Delivery::Editor(path) => handoff::open_in_editor(app, &path),
         Delivery::Exported(report) => {
+            if let Some(folder) = &report.save_folder {
+                remember_save_folder(&app.state::<DaemonState>().settings_path, folder);
+            }
             if let Some(saved) = report.saved
                 && let Ok(mut last) = LAST_SAVED.lock()
             {
@@ -729,7 +825,7 @@ mod tests {
         );
         let region = LocalRect::new(40, 40, 320, 200);
         // `placement` follows the cursor in this mode
-        let config = overlay_config(&settings, &Tasks::default(), true, Some(region));
+        let config = overlay_config(&settings, &Tasks::default(), Spread::Follow, Some(region));
         let mut state = OverlayState::new(three_monitors(), 1, Vec::new(), config).unwrap();
         state.start();
         let effects = state.handle(
@@ -750,13 +846,32 @@ mod tests {
 
     #[test]
     fn without_a_region_the_overlay_still_follows_the_cursor() {
-        let config = overlay_config(&Settings::default(), &Tasks::default(), true, None);
+        let config = overlay_config(
+            &Settings::default(),
+            &Tasks::default(),
+            Spread::Follow,
+            None,
+        );
         assert!(config.follow_cursor);
         assert!(!config.has_tasks);
         let tasks = Tasks {
             copy: true,
             ..Tasks::default()
         };
-        assert!(overlay_config(&Settings::default(), &tasks, false, None).has_tasks);
+        assert!(overlay_config(&Settings::default(), &tasks, Spread::One, None).has_tasks);
+    }
+
+    #[test]
+    fn select_monitor_mode_opens_the_picker_unless_a_region_is_given() {
+        let settings = Settings::default();
+        let config = overlay_config(&settings, &Tasks::default(), Spread::Pick, None);
+        assert!(config.pick_monitor);
+        assert!(!config.follow_cursor);
+        let state = OverlayState::new(three_monitors(), 0, Vec::new(), config).unwrap();
+        assert!(state.is_picking());
+        // A region belongs to the monitor it was given for
+        let region = Some(LocalRect::new(40, 40, 320, 200));
+        let config = overlay_config(&settings, &Tasks::default(), Spread::Pick, region);
+        assert!(!config.pick_monitor);
     }
 }

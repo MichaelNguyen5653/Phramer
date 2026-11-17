@@ -18,6 +18,7 @@ export default defineConfig(() => ({
         welcome: "welcome.html",
         ocr: "ocr.html",
         launcher: "launcher.html",
+        "capture-launcher": "capture-launcher.html",
       },
     },
   },

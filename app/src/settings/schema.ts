@@ -35,6 +35,7 @@ export type Control =
   | { kind: "palette" }
   | { kind: "toolbar" }
   | { kind: "printscreen" }
+  | { kind: "screenclip" }
   | { kind: "file" };
 
 export interface SettingDef {
@@ -402,6 +403,14 @@ export const SETTINGS: readonly SettingDef[] = [
   },
 
   // --- Advanced --------------------------------------------------------------
+  {
+    key: "screenClip",
+    section: "advanced",
+    label: "Answer Windows' screen snips (MS-SCREENCLIP)",
+    help: "Windows opens ms-screenclip: for its own screen capture, including the Print Screen key. Registering lists Phramer as an MS-SCREENCLIP app in Windows Settings, where you choose it. Registering and unregistering need administrator approval.",
+    keywords: "ms-screenclip print screen snipping tool default app protocol win+shift+s",
+    control: { kind: "screenclip" },
+  },
   {
     key: "settingsFile",
     section: "advanced",

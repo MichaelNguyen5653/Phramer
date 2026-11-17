@@ -9,6 +9,7 @@ import { Keys, NumberField, Percent, Row, Select, Switch } from "./controls";
 import { Icon } from "./Icon";
 import { PatternEditor } from "./PatternEditor";
 import { SECTIONS, type SectionId, type SettingDef } from "./schema";
+import { ScreenClipTools } from "./ScreenClipTools";
 import { ShortcutRecorder } from "./ShortcutRecorder";
 import {
   displaced,
@@ -236,6 +237,8 @@ export function SettingsApp({ initial, backend }: { initial: Snapshot; backend: 
             />
           ),
         };
+      case "screenclip":
+        return { wide: true, node: <ScreenClipTools backend={backend} /> };
       case "file":
         return { wide: true, node: <FileTools snapshot={view} backend={backend} run={run} /> };
     }

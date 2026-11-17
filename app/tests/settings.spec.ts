@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { installSettingsMock } from "./settings-mock";
+import { installSettingsMock, type MockOptions } from "./settings-mock";
 
 const snapshot = JSON.parse(readFileSync(new URL("./fixtures/settings-default.json", import.meta.url), "utf8"));
 const SECTIONS = ["general", "capture", "saving", "appearance", "editing", "shortcuts", "advanced"];
@@ -21,8 +21,8 @@ async function watchShifts(page: Page) {
   });
 }
 
-async function openSettings(page: Page) {
-  await page.addInitScript(installSettingsMock, { snapshot, label: "settings" });
+async function openSettings(page: Page, options: Partial<MockOptions> = {}) {
+  await page.addInitScript(installSettingsMock, { snapshot, label: "settings", ...options });
   await watchShifts(page);
   await page.goto("/settings.html");
   await expect(page.getByTestId("settings")).toBeVisible();
@@ -173,6 +173,31 @@ test.describe("settings", () => {
     expect(await calls(page, "settings_print_screen")).toEqual([]);
   });
 
+  test("MS-SCREENCLIP: Register goes through UAC, then on to Windows Settings", async ({ page }) => {
+    await openSettings(page);
+    await page.getByTestId("nav-advanced").click();
+    const row = page.getByTestId("screenclip");
+    await expect(row.getByRole("status")).toHaveText("Phramer is not registered as MS-SCREENCLIP");
+    await expect(row.getByRole("button", { name: "Windows Settings" })).toHaveCount(0);
+    await row.getByRole("button", { name: "Register" }).click();
+    await expect.poll(async () => (await calls(page, "screenclip_toggle")).length).toBe(1);
+    await expect(row.getByRole("status")).toHaveText(
+      "Phramer is registered as MS-SCREENCLIP. Choose it in Windows Settings to finish.",
+    );
+    await expect(row.getByRole("button", { name: "Unregister" })).toBeVisible();
+    await row.getByRole("button", { name: "Windows Settings" }).click();
+    await expect.poll(async () => (await calls(page, "screenclip_open_settings")).length).toBe(1);
+  });
+
+  test("MS-SCREENCLIP: a failed Register says so and changes nothing", async ({ page }) => {
+    await openSettings(page, { screenClipOutcome: "failed" });
+    await page.getByTestId("nav-advanced").click();
+    const row = page.getByTestId("screenclip");
+    await row.getByRole("button", { name: "Register" }).click();
+    await expect(row.getByRole("alert")).toHaveText("Phramer could not be registered as MS-SCREENCLIP.");
+    await expect(row.getByRole("button", { name: "Register" })).toBeEnabled();
+  });
+
   test("the file name pattern previews as it is typed", async ({ page }) => {
     await openSettings(page);
     await page.getByTestId("nav-saving").click();
@@ -254,6 +279,18 @@ test.describe("welcome", () => {
     await expect(page.getByTestId("welcome")).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.__calls.some((call) => call.cmd === "ui_ready"))).toBe(true);
   }
+
+  test("the welcome offers to answer Windows' screen snips", async ({ page }) => {
+    await openWelcome(page, false);
+    await page.keyboard.press("Enter");
+    const row = page.getByTestId("welcome-screenclip");
+    await expect(row.getByRole("status")).toHaveText("Phramer is not registered as MS-SCREENCLIP");
+    // Never registered without being asked: it needs administrator approval
+    expect(await calls(page, "screenclip_toggle")).toEqual([]);
+    await row.getByRole("button", { name: "Register" }).click();
+    await expect.poll(async () => (await calls(page, "screenclip_toggle")).length).toBe(1);
+    await expect(row.getByRole("button", { name: "Windows Settings" })).toBeVisible();
+  });
 
   test("three steps, light, with choices applied live", async ({ page }) => {
     await openWelcome(page, false);

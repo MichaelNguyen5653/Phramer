@@ -44,6 +44,9 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 # The editor's Save As dialog.
 tauri-plugin-dialog = "2"
+# The capture's save dialog, shown from the capture thread without an app
+# handle (already in the tree through tauri-plugin-dialog).
+rfd = { version = "0.17", default-features = false, features = ["common-controls-v6"] }
 # The editor reads the capture's PNG (already in the tree through the overlay).
 png = "0.18"
 
@@ -62,6 +65,7 @@ phramer-annotate = { path = "../../crates/phramer-annotate" }
 # image "Open with" lists, the programs' icons (GDI) and starting them.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
@@ -72,8 +76,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_IO",
     "Win32_System_Pipes",
+    "Win32_System_LibraryLoader",
     "Win32_System_Registry",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_Controls",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

@@ -112,6 +112,10 @@ pub struct OverlayConfig {
     pub show_editor_hint: bool,
     /// `showQuitPrompt`: Esc asks before closing.
     pub quit_prompt: bool,
+    /// `captureRegionMode` 0: the monitor is chosen first (15.0.0's
+    /// monitor previews). Each monitor names itself; a click, its number,
+    /// or Enter on the highlighted one picks it.
+    pub pick_monitor: bool,
 }
 
 impl OverlayConfig {
@@ -138,6 +142,7 @@ impl OverlayConfig {
             video_mode: settings.video_capture_enabled(),
             show_editor_hint: settings.show_editor_hint(),
             quit_prompt: settings.show_quit_prompt(),
+            pick_monitor: false,
         }
     }
 }
@@ -366,6 +371,9 @@ pub struct OverlayState {
     /// Something was drawn: the editor hint has served its purpose. Never
     /// reset, not even by undo, as in 15.0.0.
     editing_started: bool,
+    /// The monitor is still to be chosen: every monitor has a window, the
+    /// active one is the highlighted choice.
+    picking: bool,
 }
 
 /// Collects effects, one redraw per monitor.
@@ -398,7 +406,8 @@ impl OverlayState {
             .ok_or(OverlayError::NoSuchMonitor(active))?;
         let editor = Editor::with_undo_limit(document_for(monitor), config.tools.undo_limit);
         let tools = annotate::Tools::new(editor, &config.tools, config.has_tasks);
-        let following = config.follow_cursor && monitors.len() > 1;
+        let picking = config.pick_monitor && monitors.len() > 1;
+        let following = (config.follow_cursor || picking) && monitors.len() > 1;
         let monitors_len = monitors.len();
         let selection = match config.initial_selection {
             Some(local) if !following => monitor.rect_to_logical(monitor.rect_to_physical(local)),
@@ -431,6 +440,7 @@ impl OverlayState {
             mode_hover: None,
             labels: Vec::new(),
             editing_started: false,
+            picking,
             config,
         }
         .with_labels())
@@ -457,6 +467,9 @@ impl OverlayState {
             return effects.0;
         }
         self.now = now;
+        if self.picking && self.picker_event(event, &mut effects) {
+            return effects.0;
+        }
         match event {
             Event::PointerMove {
                 monitor,
@@ -540,6 +553,11 @@ impl OverlayState {
     /// first press).
     pub fn is_following(&self) -> bool {
         self.following
+    }
+
+    /// The monitor is still to be chosen (`pick_monitor`).
+    pub fn is_picking(&self) -> bool {
+        self.picking
     }
 
     /// The monitors that have a window: all of them while following, the
@@ -659,6 +677,74 @@ impl OverlayState {
     fn monitor_rect(&self) -> LogicalRect {
         let (width, height) = self.monitors[self.active].logical_size();
         LogicalRect::new(0, 0, width, height)
+    }
+
+    /// An event while the monitor is being chosen; false for those handled
+    /// as usual (time and focus).
+    fn picker_event(&mut self, event: Event, effects: &mut Effects) -> bool {
+        match event {
+            Event::PointerMove { monitor, .. } => {
+                self.claim(monitor, effects);
+            }
+            Event::PointerDown {
+                monitor,
+                button: PointerButton::Left,
+                ..
+            } => {
+                if self.claim(monitor, effects) {
+                    self.pick(effects);
+                }
+            }
+            Event::Key { key, modifiers } => self.picker_key(key, modifiers, effects),
+            Event::Tick | Event::Focus(_) | Event::QuitAnswer { .. } => return false,
+            Event::PointerDown { .. }
+            | Event::PointerUp { .. }
+            | Event::Text(_)
+            | Event::Wheel { .. } => {}
+        }
+        true
+    }
+
+    fn picker_key(&mut self, key: Key, modifiers: Modifiers, effects: &mut Effects) {
+        match key {
+            // `cancelMonitorSelection`: the capture is aborted
+            Key::Escape => self.close(Outcome::Cancelled, effects),
+            Key::Return | Key::Enter | Key::Space => self.pick(effects),
+            Key::Left | Key::Up => self.step_pick(-1, effects),
+            Key::Right | Key::Down => self.step_pick(1, effects),
+            Key::Tab => self.step_pick(if modifiers.shift { -1 } else { 1 }, effects),
+            Key::Char(c) => {
+                if let Some(digit) = c.to_digit(10)
+                    && (1..=9).contains(&digit)
+                    && let Some(monitor) = usize::try_from(digit - 1).ok()
+                    && monitor < self.monitors.len()
+                    && self.claim(monitor, effects)
+                {
+                    self.pick(effects);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Moves the highlight `step` monitors along, left to right as the
+    /// previews were laid out, stopping at either end.
+    fn step_pick(&mut self, step: isize, effects: &mut Effects) {
+        let mut order: Vec<usize> = (0..self.monitors.len()).collect();
+        order.sort_by_key(|&index| self.monitors[index].bounds().x);
+        let Some(at) = order.iter().position(|&index| index == self.active) else {
+            return;
+        };
+        let next = at.saturating_add_signed(step).min(order.len() - 1);
+        self.claim(order[next], effects);
+    }
+
+    /// The highlighted monitor is the one: the others' windows go.
+    fn pick(&mut self, effects: &mut Effects) {
+        self.picking = false;
+        self.following = false;
+        effects.push(Effect::ReleaseMonitors);
+        effects.redraw(self.active);
     }
 
     /// Takes an event from another monitor's window. While following with

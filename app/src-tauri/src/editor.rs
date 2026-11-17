@@ -1381,7 +1381,7 @@ fn export(
 
 /// The formats Save As offers, each with its extensions, `format`'s first
 /// (the dialog starts on the first).
-fn save_filters(format: ImageFormat) -> Vec<(&'static str, &'static [&'static str])> {
+pub(crate) fn save_filters(format: ImageFormat) -> Vec<(&'static str, &'static [&'static str])> {
     let all: [(ImageFormat, &'static str, &'static [&'static str]); 5] = [
         (ImageFormat::Png, "PNG image", &["png"]),
         (ImageFormat::Jpeg, "JPEG image", &["jpg", "jpeg"]),

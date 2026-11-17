@@ -60,6 +60,11 @@ pub(crate) fn run(start: Option<Forwarded>) -> i32 {
             editor::editor_save_all_end,
             editor::editor_has_last_saved,
             editor::editor_show_last_saved,
+            crate::capture_launcher_ui::capture_launcher_init,
+            crate::capture_launcher_ui::capture_launcher_take,
+            crate::screenclip::screenclip_status,
+            crate::screenclip::screenclip_toggle,
+            crate::screenclip::screenclip_open_settings,
             settings_ui::ui_ready,
             settings_ui::settings_snapshot,
             settings_ui::settings_set,
@@ -184,6 +189,11 @@ fn receive<R: Runtime>(app: &AppHandle<R>, forwarded: Forwarded) {
         Role::Daemon => return,
         Role::Recording => {
             actions::start_recording_from_link();
+            return;
+        }
+        // Only ever run by the elevated copy itself, never forwarded
+        Role::RegisterScreenclip | Role::UnregisterScreenclip => {
+            log::warn!("ignoring a forwarded ms-screenclip registration");
             return;
         }
         Role::Command(args) => args,

@@ -97,6 +97,21 @@
   box-shadow: none;
 }
 
+/* Text above, the MS-SCREENCLIP status and buttons below */
+.welcome-option-stacked {
+  grid-template-columns: 1fr;
+  gap: var(--space-8);
+}
+
+.welcome-option-stacked .file-tools {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
 .welcome-tips {
   display: flex;
   flex-direction: column;

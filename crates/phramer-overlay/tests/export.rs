@@ -33,6 +33,11 @@ struct Recorded {
     images: Vec<(u32, u32, Option<u8>)>,
     texts: Vec<String>,
     files: Vec<PathBuf>,
+    /// The save dialog's answer: `None` takes the trait's default, `Some(None)`
+    /// cancels.
+    choice: Option<Option<PathBuf>>,
+    /// What the save dialog was opened with.
+    asked: Vec<PathBuf>,
 }
 
 impl Handoff for Recorded {
@@ -49,6 +54,14 @@ impl Handoff for Recorded {
     fn copy_file(&mut self, path: &Path) -> Result<(), OverlayError> {
         self.files.push(path.to_owned());
         Ok(())
+    }
+
+    fn choose_save_path(&mut self, suggested: &Path) -> Option<PathBuf> {
+        self.asked.push(suggested.to_owned());
+        match &self.choice {
+            Some(choice) => choice.clone(),
+            None => Some(suggested.to_owned()),
+        }
     }
 }
 
@@ -178,6 +191,98 @@ fn saves_with_the_pattern_and_numbers_collisions() {
             "2026-11-11_20-26_2.png"
         ]
     );
+}
+
+/// `savePathFixed` off: 15.0.0's `saveToFilesystemGUI` asked where.
+fn asking(folder: &Path) -> Settings {
+    let mut settings = settings_saving_to(folder);
+    settings.set_save_path_fixed(false);
+    settings
+}
+
+#[test]
+fn a_fixed_save_folder_is_used_without_asking() {
+    let folder = TempDir::new("fixed");
+    let mut handoff = Recorded::default();
+    run(
+        &settings_saving_to(&folder.0),
+        &image(4, 4),
+        ExportAction::Save,
+        &CaptureTasks::default(),
+        &mut handoff,
+    );
+    assert!(handoff.asked.is_empty());
+    assert_eq!(folder.files(), ["2026-11-11_20-26.png"]);
+}
+
+#[test]
+fn save_asks_where_and_writes_the_chosen_file_in_its_format() {
+    let folder = TempDir::new("ask");
+    let picked = folder.0.join("picked.jpg");
+    let mut handoff = Recorded {
+        choice: Some(Some(picked.clone())),
+        ..Recorded::default()
+    };
+    let report = run(
+        &asking(&folder.0),
+        &image(4, 4),
+        ExportAction::Save,
+        &CaptureTasks::default(),
+        &mut handoff,
+    );
+    assert_eq!(handoff.asked, [folder.0.join("2026-11-11_20-26.png")]);
+    assert_eq!(folder.files(), ["picked.jpg"]);
+    let bytes = std::fs::read(&picked).unwrap();
+    assert_eq!(&bytes[..2], [0xFF, 0xD8], "a JPEG");
+    assert_eq!(report.saved.as_deref(), Some(picked.as_path()));
+    assert_eq!(
+        report.notices[0].text,
+        format!("Capture saved as {}", picked.display())
+    );
+    // The folder becomes the save folder (`setSavePath`)
+    assert_eq!(report.save_folder.as_deref(), Some(folder.0.as_path()));
+}
+
+#[test]
+fn the_chosen_file_replaces_one_already_there() {
+    let folder = TempDir::new("replace");
+    let picked = folder.0.join("shot.png");
+    std::fs::write(&picked, b"old").unwrap();
+    let mut handoff = Recorded {
+        choice: Some(Some(picked.clone())),
+        ..Recorded::default()
+    };
+    run(
+        &asking(&folder.0),
+        &image(4, 4),
+        ExportAction::Save,
+        &CaptureTasks::default(),
+        &mut handoff,
+    );
+    // The dialog already asked before replacing it
+    assert_eq!(folder.files(), ["shot.png"]);
+    assert_ne!(std::fs::read(&picked).unwrap(), b"old");
+}
+
+#[test]
+fn cancelling_the_save_dialog_saves_and_says_nothing() {
+    let folder = TempDir::new("cancel");
+    let mut handoff = Recorded {
+        choice: Some(None),
+        ..Recorded::default()
+    };
+    let report = run(
+        &asking(&folder.0),
+        &image(4, 4),
+        ExportAction::Save,
+        &CaptureTasks::default(),
+        &mut handoff,
+    );
+    assert_eq!(handoff.asked.len(), 1);
+    assert!(folder.files().is_empty());
+    assert_eq!(report.saved, None);
+    assert_eq!(report.save_folder, None);
+    assert!(report.notices.is_empty(), "{report:?}");
 }
 
 #[test]

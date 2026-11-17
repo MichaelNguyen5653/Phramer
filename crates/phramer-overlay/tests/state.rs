@@ -1141,3 +1141,114 @@ fn esc_with_a_tool_selected_drops_the_tool_before_asking() {
         Some(&Effect::AskQuit)
     );
 }
+
+// --- Monitor picker (`captureRegionMode` 0, `ScreenGrabber::selectMonitorAndCrop`)
+
+fn picking(active: usize) -> Overlay {
+    Overlay::new(
+        mixed(),
+        active,
+        Vec::new(),
+        OverlayConfig {
+            pick_monitor: true,
+            ..config()
+        },
+    )
+}
+
+fn released(effects: &[Effect]) -> bool {
+    effects.contains(&Effect::ReleaseMonitors)
+}
+
+#[test]
+fn the_picker_covers_every_monitor_with_the_cursor_one_highlighted() {
+    let overlay = picking(0);
+    assert!(overlay.state.is_picking());
+    assert_eq!(overlay.state.window_monitors(), vec![0, 1, 2]);
+    assert_eq!(overlay.state.active_monitor(), 0);
+}
+
+#[test]
+fn one_monitor_needs_no_picker() {
+    let overlay = Overlay::new(
+        single(),
+        0,
+        Vec::new(),
+        OverlayConfig {
+            pick_monitor: true,
+            ..config()
+        },
+    );
+    assert!(!overlay.state.is_picking());
+    assert_eq!(overlay.state.window_monitors(), vec![0]);
+}
+
+#[test]
+fn arrows_and_tab_move_the_highlight_left_to_right() {
+    // Left to right: "left" (1, x -1920), "above" (2, x -960), primary (0)
+    let mut overlay = picking(0);
+    overlay.key(Key::Left, Modifiers::NONE);
+    assert_eq!(overlay.state.active_monitor(), 2);
+    overlay.key(Key::Up, Modifiers::NONE);
+    assert_eq!(overlay.state.active_monitor(), 1);
+    // Stops at the end
+    overlay.key(Key::Left, Modifiers::NONE);
+    assert_eq!(overlay.state.active_monitor(), 1);
+    overlay.key(Key::Tab, Modifiers::NONE);
+    assert_eq!(overlay.state.active_monitor(), 2);
+    overlay.key(Key::Tab, Modifiers::SHIFT);
+    assert_eq!(overlay.state.active_monitor(), 1);
+    overlay.key(Key::Right, Modifiers::NONE);
+    overlay.key(Key::Down, Modifiers::NONE);
+    assert_eq!(overlay.state.active_monitor(), 0);
+    assert!(overlay.state.is_picking());
+}
+
+#[test]
+fn enter_or_space_takes_the_highlighted_monitor() {
+    for key in [Key::Return, Key::Enter, Key::Space] {
+        let mut overlay = picking(0);
+        overlay.key(Key::Left, Modifiers::NONE);
+        assert!(released(overlay.key(key, Modifiers::NONE)), "{key:?}");
+        assert!(!overlay.state.is_picking());
+        assert_eq!(overlay.state.active_monitor(), 2);
+        assert_eq!(overlay.state.window_monitors(), vec![2]);
+    }
+}
+
+#[test]
+fn a_number_key_takes_that_monitor() {
+    let mut overlay = picking(0);
+    assert!(released(overlay.key(Key::Char('2'), Modifiers::NONE)));
+    assert_eq!(overlay.state.active_monitor(), 1);
+    assert!(!overlay.state.is_picking());
+
+    // A number with no monitor does nothing
+    let mut overlay = picking(0);
+    overlay.key(Key::Char('7'), Modifiers::NONE);
+    assert!(overlay.state.is_picking());
+}
+
+#[test]
+fn hovering_highlights_and_a_click_takes_the_monitor_without_selecting() {
+    let mut overlay = picking(0);
+    overlay.hover_at(2, p(100, 100));
+    assert_eq!(overlay.state.active_monitor(), 2);
+    assert!(overlay.state.is_picking());
+    let mut effects = overlay.press(1, p(50, 50), PointerButton::Left).to_vec();
+    effects.extend_from_slice(overlay.release(1, p(50, 50), PointerButton::Left));
+    assert!(released(&effects));
+    assert_eq!(overlay.state.active_monitor(), 1);
+    assert_eq!(overlay.state.selection(), None);
+    assert_eq!(overlay.closed_with(), None);
+    // Then the capture goes on as usual there
+    overlay.select(p(100, 100), p(300, 200));
+    assert!(overlay.state.selection().is_some());
+}
+
+#[test]
+fn esc_in_the_picker_cancels_the_capture() {
+    let mut overlay = picking(0);
+    overlay.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(overlay.closed_with(), Some(Outcome::Cancelled));
+}

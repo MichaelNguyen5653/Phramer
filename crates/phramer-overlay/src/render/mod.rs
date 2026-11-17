@@ -294,6 +294,20 @@ impl Painter {
         let Some(screen) = state.monitors().get(monitor) else {
             return Err(OverlayError::NoSuchMonitor(monitor));
         };
+        // Choosing the monitor: each one dimmed, naming itself
+        if state.is_picking() {
+            out.copy_from_slice(&self.dimmed);
+            let mut canvas = PixmapMut::from_bytes(out, width, height)
+                .ok_or(OverlayError::Canvas { width, height })?;
+            let ui = Ui {
+                scale: screen.scale() as f32,
+                width: width as f32,
+                height: height as f32,
+            };
+            let highlighted = monitor == state.active_monitor();
+            ui.picker_label(&mut canvas, font, monitor, highlighted, theme);
+            return Ok(());
+        }
         // Another monitor while following the cursor: dimmed, nothing else
         if monitor != state.active_monitor() {
             out.copy_from_slice(&self.dimmed);
@@ -664,6 +678,66 @@ impl Ui {
             Weight::Regular,
             &solid(bgra_color(FG, 1.0)),
         );
+    }
+
+    /// The monitor picker on one monitor (`MonitorPreview`): its number and
+    /// how to choose it, centred; the highlighted one framed in the accent.
+    fn picker_label(
+        &self,
+        canvas: &mut PixmapMut<'_>,
+        font: &mut Font<'_>,
+        monitor: usize,
+        highlighted: bool,
+        theme: &Theme,
+    ) {
+        let number = monitor + 1;
+        let title = format!("Monitor {number}");
+        let hint = if number <= 9 {
+            format!("Click or press {number} to select")
+        } else {
+            "Click to select".to_owned()
+        };
+        let (title_size, hint_size) = (self.px(2.0 * TEXT_13), self.px(TEXT_13));
+        let (title_metrics, hint_metrics) = (font.metrics(title_size), font.metrics(hint_size));
+        let title_w = font.measure(&title, title_size, Weight::Semibold).ceil();
+        let hint_w = font.measure(&hint, hint_size, Weight::Regular).ceil();
+        let (pad_x, pad_y, gap) = (self.px(SPACE_24), self.px(SPACE_16), self.px(SPACE_4));
+        let w = title_w.max(hint_w) + 2.0 * pad_x;
+        let h = title_metrics.height + gap + hint_metrics.height + 2.0 * pad_y;
+        let x = ((self.width - w) / 2.0).round();
+        let y = ((self.height - h) / 2.0).round();
+        self.panel(canvas, x, y, w, h, self.px(RADIUS_12));
+        font.draw(
+            canvas,
+            &title,
+            x + (w - title_w) / 2.0,
+            y + pad_y + title_metrics.ascent,
+            title_size,
+            Weight::Semibold,
+            &solid(bgra_color(FG, 1.0)),
+        );
+        font.draw(
+            canvas,
+            &hint,
+            x + (w - hint_w) / 2.0,
+            y + pad_y + title_metrics.height + gap + hint_metrics.ascent,
+            hint_size,
+            Weight::Regular,
+            &solid(bgra_color(FG, FG_60)),
+        );
+        if highlighted {
+            let line = self.px(2.0 * HOVER_FRAME);
+            let paint = solid(bgra_color(theme.accent, 1.0));
+            let (width, height) = (self.width, self.height);
+            for (x, y, w, h) in [
+                (0.0, 0.0, width, line),
+                (0.0, height - line, width, line),
+                (0.0, line, line, height - 2.0 * line),
+                (width - line, line, line, height - 2.0 * line),
+            ] {
+                fill_rect(canvas, x, y, w, h, &paint);
+            }
+        }
     }
 
     /// The key list, centred on the monitor: keys as chips on the right of
