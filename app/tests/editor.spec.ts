@@ -204,7 +204,7 @@ test("toolbar keys: in brackets when assigned, nothing when not, live", async ({
   await expect(hint(page, "action-redo")).toHaveText("(Ctrl+Shift+Z)");
   await expect(hint(page, "action-copy_file")).toHaveText("(Ctrl+Shift+C)");
   // Unassigned in [Shortcuts], or no entry at all: no hint and no brackets
-  for (const id of ["tool-shape", "tool-circle_count", "action-pin", "action-crop", "action-save_as", "action-fit"]) {
+  for (const id of ["tool-shape", "tool-circle_count", "action-crop", "action-save_as", "action-fit"]) {
     await expect(hint(page, id)).toHaveCount(0);
     expect(await page.getByTestId(id).textContent()).not.toContain("(");
   }

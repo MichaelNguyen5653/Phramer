@@ -237,8 +237,6 @@ pub struct Export {
 /// built yet. The overlay closes with the region, as for an export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeferredAction {
-    /// Pin the capture on the desktop.
-    Pin,
     /// Read the text in the selection (15.0.0 kept the overlay open).
     Ocr,
     /// Open the capture, with its annotations editable, in the editor.

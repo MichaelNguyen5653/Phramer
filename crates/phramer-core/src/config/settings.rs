@@ -477,6 +477,7 @@ impl Settings {
             Some(Variant::IntList(ids)) => {
                 match ids
                     .iter()
+                    .filter(|&&id| !buttons::is_retired(id))
                     .map(|&id| ButtonType::from_id(id))
                     .collect::<Option<Vec<_>>>()
                 {
@@ -841,6 +842,16 @@ mod tests {
             reread.shortcut("TYPE_COPY").as_deref(),
             Some("Ctrl+Shift+c")
         );
+    }
+
+    #[test]
+    fn a_stored_pin_button_is_dropped_from_the_toolbar() {
+        // Pencil, Pin (17), Copy: written by 15.0.0 or 16 before pins went
+        let settings = Settings::parse(
+            b"[General]\r\nbuttons=@Variant(\\0\\0\\0\\x7f\\0\\0\\0\\vQList<int>\\0\\0\\0\\0\\x3\
+              \\0\\0\\0\\0\\0\\0\\0\\x11\\0\\0\\0\\n)\r\n",
+        );
+        assert_eq!(settings.buttons(), [ButtonType::Pencil, ButtonType::Copy]);
     }
 
     #[test]

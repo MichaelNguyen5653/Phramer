@@ -86,7 +86,7 @@ export function installTauriMock(options: MockOptions = {}): void {
       TYPE_MARKER: "M", TYPE_TEXT: "T", TYPE_PIXELATE: "B", TYPE_INVERT: "I", TYPE_MOVE_OBJECT: "G", TYPE_UNDO: "Ctrl+Z",
       TYPE_REDO: "Ctrl+Shift+Z", TYPE_COPY: "Ctrl+C", TYPE_COPY_FILE: "Ctrl+Shift+C", TYPE_SAVE: "Ctrl+S", TYPE_EXIT: "Ctrl+Q",
       TYPE_OPEN_APP: "Ctrl+O", TYPE_OCR: "O", TYPE_DELETE_CURRENT_TOOL: "Del", TYPE_COMMIT_CURRENT_TOOL: "Ctrl+Return",
-      TYPE_SHAPE: "", TYPE_CIRCLECOUNT: "", TYPE_PIN: "", TYPE_SIZEINCREASE: "", TYPE_SIZEDECREASE: "",
+      TYPE_SHAPE: "", TYPE_CIRCLECOUNT: "", TYPE_SIZEINCREASE: "", TYPE_SIZEDECREASE: "",
     } as Record<string, string>,
     font_family: "",
     export_format: sessionStorage.getItem("mock-export-format") ?? "png",

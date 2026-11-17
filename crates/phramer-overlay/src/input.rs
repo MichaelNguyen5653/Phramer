@@ -311,7 +311,6 @@ const BOUND_ACTIONS: &[(&str, KeyAction)] = &[
     ),
     ("TYPE_OPEN_APP", KeyAction::Button(ButtonType::OpenApp)),
     ("TYPE_OCR", KeyAction::Button(ButtonType::Ocr)),
-    ("TYPE_PIN", KeyAction::Button(ButtonType::Pin)),
     (
         "TYPE_OPEN_IN_EDITOR",
         KeyAction::Button(ButtonType::OpenInEditor),

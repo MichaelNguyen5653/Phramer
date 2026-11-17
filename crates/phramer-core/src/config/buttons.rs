@@ -24,7 +24,6 @@ pub enum ButtonType {
     OpenApp = 14,
     Pixelate = 15,
     Redo = 16,
-    Pin = 17,
     Text = 18,
     CircleCount = 19,
     SizeIncrease = 20,
@@ -40,7 +39,7 @@ pub enum ButtonType {
 
 impl ButtonType {
     /// Every button, in the order of `CaptureToolButton::iterableButtonTypes`.
-    pub(super) const ALL: [Self; 27] = [
+    pub(super) const ALL: [Self; 26] = [
         Self::Pencil,
         Self::Line,
         Self::Arrow,
@@ -63,7 +62,6 @@ impl ButtonType {
         Self::Exit,
         Self::OpenApp,
         Self::Ocr,
-        Self::Pin,
         Self::SizeIncrease,
         Self::SizeDecrease,
         Self::Accept,
@@ -104,13 +102,21 @@ impl ButtonType {
             Self::Accept => 19,
             Self::OpenApp => 20,
             Self::Exit => 21,
-            Self::Pin => 22,
             Self::SizeIncrease => 23,
             Self::SizeDecrease => 24,
             Self::Ocr => 25,
             Self::OpenInEditor => 26,
         }
     }
+}
+
+/// The Pin button's number. Pins were removed in 16; a stored list that
+/// names it still loads, without it, rather than as the default toolbar.
+const RETIRED_PIN: i32 = 17;
+
+/// Whether `id` is a button that no longer exists but may still be stored.
+pub(super) fn is_retired(id: i32) -> bool {
+    id == RETIRED_PIN
 }
 
 /// Orders buttons as the toolbar shows them.
@@ -145,8 +151,8 @@ mod tests {
             assert_eq!(ButtonType::from_id(button.id()), Some(button));
         }
         // 7 was never assigned, 13 is the Imgur uploader (not built), 24 is
-        // Cancel (not a toolbar button).
-        for id in [-1, 7, 13, 24, 30, 99] {
+        // Cancel (not a toolbar button), 17 is the Pin (removed in 16).
+        for id in [-1, 7, 13, 17, 24, 30, 99] {
             assert_eq!(ButtonType::from_id(id), None, "{id}");
         }
     }
@@ -157,7 +163,7 @@ mod tests {
         assert_eq!(
             ids,
             [
-                0, 1, 2, 27, 6, 18, 15, 22, 19, 28, 8, 9, 16, 10, 29, 11, 23, 14, 12, 17, 25, 26
+                0, 1, 2, 27, 6, 18, 15, 22, 19, 28, 8, 9, 16, 10, 29, 11, 23, 14, 12, 25, 26
             ]
         );
     }

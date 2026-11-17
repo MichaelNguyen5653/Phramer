@@ -6,8 +6,8 @@
 //!
 //! As in 15.0.0 the overlay exports exactly once, after its windows are
 //! gone: [`phramer_overlay::run_overlay`] returns the one outcome, and this
-//! module is its only caller. Its other outcomes (Pin, OCR, Open in Editor,
-//! App Launcher) are carried out here too.
+//! module is its only caller. Its other outcomes (OCR, Open in Editor, App
+//! Launcher) are carried out here too.
 //!
 //! A capture asked for by `phramer-cli` carries a [`Reply`]: what 15.0.0
 //! printed to the console goes back through it, then the exit code.
@@ -25,9 +25,8 @@ use phramer_capture::{
 use phramer_core::config::{CaptureRegionMode, Settings};
 use phramer_overlay::{
     BUNDLED_FONT, CaptureTasks, CapturedImage, DeferredAction, ExportAction, ExportContext,
-    ExportReport, Handoff, ImageFormat, LocalTime, Notice, OverlayConfig, OverlayError,
-    OverlaySession, PinHandler, PinOptions, PinRequest, SaveTarget, SystemClipboard, Theme, export,
-    run_overlay, spawn_pin,
+    ExportReport, Handoff, ImageFormat, LocalTime, OverlayConfig, OverlayError, OverlaySession,
+    SaveTarget, SystemClipboard, Theme, export, run_overlay,
 };
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -54,9 +53,6 @@ enum CaptureFailure {
     #[error("Requested screen exceeds screen count")]
     NoSuchScreen,
 }
-
-/// 15.0.0's `exportCapture`'s notice for `screen --pin` and `full --pin`.
-const PINNED: &str = "Full screen screenshot pinned to screen";
 
 /// How a capture ended, for the main thread.
 pub(crate) enum Delivery {
@@ -148,7 +144,6 @@ pub(crate) fn screen<R: Runtime>(
     tasks: Tasks,
     reply: Option<Reply>,
 ) {
-    let handle = app.clone();
     spawn(
         app,
         "capture-screen",
@@ -171,9 +166,12 @@ pub(crate) fn screen<R: Runtime>(
             };
             let image = crop(frame.bgra(), frame.width(), region);
             let geometry = target.rect_to_physical(region);
-            let delivery = run_export(&settings, &image, geometry, ExportAction::Accept, &tasks);
-            Ok(pin_requested(
-                &handle, &settings, &tasks, image, geometry, delivery,
+            Ok(run_export(
+                &settings,
+                &image,
+                geometry,
+                ExportAction::Accept,
+                &tasks,
             ))
         },
     );
@@ -187,7 +185,6 @@ pub(crate) fn full<R: Runtime>(
     tasks: Tasks,
     reply: Option<Reply>,
 ) {
-    let handle = app.clone();
     spawn(app, "capture-full", delay_ms, reply, move |settings, _| {
         let monitors = enumerate_monitors()?;
         let frame = grab_virtual_desktop(&monitors)?;
@@ -197,76 +194,14 @@ pub(crate) fn full<R: Runtime>(
             height: frame.height(),
             bgra: frame.into_bgra(),
         };
-        let delivery = run_export(&settings, &image, geometry, ExportAction::Accept, &tasks);
-        Ok(pin_requested(
-            &handle, &settings, &tasks, image, geometry, delivery,
+        Ok(run_export(
+            &settings,
+            &image,
+            geometry,
+            ExportAction::Accept,
+            &tasks,
         ))
     });
-}
-
-/// `screen --pin`, `full --pin`: pinned after the export, with
-/// `exportCapture`'s notice.
-fn pin_requested<R: Runtime>(
-    app: &AppHandle<R>,
-    settings: &Settings,
-    tasks: &Tasks,
-    image: CapturedImage,
-    geometry: PhysicalRect,
-    delivery: Delivery,
-) -> Delivery {
-    if !tasks.pin {
-        return delivery;
-    }
-    pin(app, settings, image, geometry);
-    let Delivery::Exported(mut report) = delivery else {
-        return delivery;
-    };
-    log::info!("{PINNED}");
-    report.notices.push(Notice {
-        text: PINNED.to_owned(),
-        path: None,
-        error: false,
-    });
-    Delivery::Exported(report)
-}
-
-/// Pins `image` where it was on the desktop. The pin's menu copies, saves
-/// and opens the editor with the settings of the moment.
-pub(crate) fn pin<R: Runtime>(
-    app: &AppHandle<R>,
-    settings: &Settings,
-    image: CapturedImage,
-    geometry: PhysicalRect,
-) {
-    let rgb = |color: phramer_core::config::Color| (color.r, color.g, color.b);
-    let options = PinOptions {
-        accent: rgb(settings.ui_color()),
-        hover_accent: rgb(settings.contrast_ui_color()),
-        smooth: settings.antialiasing_pin_zoom(),
-    };
-    let settings_path = app.state::<DaemonState>().settings_path.clone();
-    let target = app.clone();
-    let handler: PinHandler = Box::new(move |request, image| {
-        let action = match request {
-            PinRequest::Copy => ExportAction::Copy,
-            PinRequest::Save => ExportAction::Save,
-            PinRequest::OpenInEditor => {
-                let delivery = match handoff::save_for_editor(image) {
-                    Ok(path) => Delivery::Editor(path),
-                    Err(report) => Delivery::Exported(report),
-                };
-                hand_to_main(&target, delivery);
-                return;
-            }
-        };
-        let current = settings::load(&settings_path);
-        let delivery = run_export(&current, image, geometry, action, &Tasks::default());
-        hand_to_main(&target, delivery);
-    });
-    match spawn_pin(image, geometry, options, handler) {
-        Ok(()) => log::info!("capture pinned at {geometry:?}"),
-        Err(error) => log::error!("cannot pin the capture: {error}"),
-    }
 }
 
 /// The editor's exports: reported like a capture's (notifications, Show
@@ -398,7 +333,7 @@ fn placement(
 fn has_tasks(tasks: &Tasks) -> bool {
     // `initButtons`: with no task (or only --print-geometry) the overlay
     // offers copy and save; otherwise Enter accepts the request
-    tasks.copy || tasks.save.is_some() || tasks.print_raw || tasks.pin || tasks.accept_on_select
+    tasks.copy || tasks.save.is_some() || tasks.print_raw || tasks.accept_on_select
 }
 
 /// The overlay's configuration for a capture with `tasks`, spread over the
@@ -546,7 +481,6 @@ fn run_gui<R: Runtime>(
             *last = Some(deferred.region);
         }
         return Ok(deferred_action(
-            app,
             &settings,
             deferred.action,
             image.clone(),
@@ -561,17 +495,17 @@ fn run_gui<R: Runtime>(
     if let Ok(mut last) = LAST_REGION.lock() {
         *last = Some(done.region);
     }
-    let delivery = run_export(&settings, &image, geometry, done.action, &plan.tasks);
-    // `gui --pin`: on Enter, after the export, as `exportCapture` ordered it
-    if plan.tasks.pin && done.action == ExportAction::Accept {
-        pin(app, &settings, image, geometry);
-    }
-    Ok(delivery)
+    Ok(run_export(
+        &settings,
+        &image,
+        geometry,
+        done.action,
+        &plan.tasks,
+    ))
 }
 
-/// The overlay's Pin, OCR, Open in Editor and App Launcher buttons.
-fn deferred_action<R: Runtime>(
-    app: &AppHandle<R>,
+/// The overlay's OCR, Open in Editor and App Launcher buttons.
+fn deferred_action(
     settings: &Settings,
     action: DeferredAction,
     image: CapturedImage,
@@ -579,10 +513,6 @@ fn deferred_action<R: Runtime>(
 ) -> Delivery {
     log::info!("{action:?}: {}x{}", image.width, image.height);
     match action {
-        DeferredAction::Pin => {
-            pin(app, settings, image, geometry);
-            Delivery::Exported(ExportReport::default())
-        }
         DeferredAction::Ocr => Delivery::Exported(handoff::read_text_at(&image, Some(geometry))),
         DeferredAction::OpenInEditor => match handoff::save_for_editor(&image) {
             Ok(path) => Delivery::Editor(path),
@@ -615,7 +545,6 @@ fn export_tasks(tasks: &Tasks) -> CaptureTasks {
         }),
         print_geometry: tasks.print_geometry,
         print_raw: tasks.print_raw,
-        pin: tasks.pin,
     }
 }
 

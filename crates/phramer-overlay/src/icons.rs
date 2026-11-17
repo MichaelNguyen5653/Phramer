@@ -46,7 +46,6 @@ pub const ICONS: &[(&str, &str)] = &[
     ("minus", include_str!("../assets/icons/minus.svg")),
     ("move", include_str!("../assets/icons/move.svg")),
     ("pencil", include_str!("../assets/icons/pencil.svg")),
-    ("pin", include_str!("../assets/icons/pin.svg")),
     ("pipette", include_str!("../assets/icons/pipette.svg")),
     ("plus", include_str!("../assets/icons/plus.svg")),
     (

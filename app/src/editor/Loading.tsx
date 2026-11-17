@@ -1,5 +1,5 @@
 // The editor window while its first image and the drawing engine load. A
-// window opened without a pre-warmed one (a pin's Load into editor, for
+// window opened without a pre-warmed one (the tray's Open Editor, for
 // one) shows at once and waits here, so the click is answered within a
 // frame; the title bar works meanwhile, so it can be moved or closed.
 

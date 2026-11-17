@@ -81,7 +81,6 @@ bool_keys! {
     "saveLastRegion" => save_last_region / set_save_last_region,
     "showSidePanelButton" => show_side_panel_button / set_show_side_panel_button,
     "copyPathAfterSave" => copy_path_after_save / set_copy_path_after_save,
-    "antialiasingPinZoom" => antialiasing_pin_zoom / set_antialiasing_pin_zoom,
     "insecurePixelate" => insecure_pixelate / set_insecure_pixelate,
     "reverseArrow" => reverse_arrow / set_reverse_arrow,
     "showMagnifier" => show_magnifier / set_show_magnifier,
@@ -1016,10 +1015,12 @@ mod tests {
                 row.name
             );
         }
-        // And every shortcut 15.0.0 had is listed, once
+        // And every shortcut 15.0.0 had is listed, once, but the Pin's:
+        // pins were removed in 16
         let shortcuts: Vec<&str> = known
             .iter()
             .filter_map(|key| key.strip_prefix("Shortcuts/"))
+            .filter(|name| *name != "TYPE_PIN")
             .collect();
         for name in &shortcuts {
             let count = rows.iter().filter(|row| row.name == *name).count();

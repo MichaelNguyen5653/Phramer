@@ -54,7 +54,7 @@ png = "0.18"
 
 phramer-core = { path = "../../crates/phramer-core" }
 phramer-capture = { path = "../../crates/phramer-capture" }
-# The capture overlay, the export and pins.
+# The capture overlay and the export.
 phramer-overlay = { path = "../../crates/phramer-overlay" }
 # OCR of the overlay's selection.
 phramer-ocr = { path = "../../crates/phramer-ocr" }

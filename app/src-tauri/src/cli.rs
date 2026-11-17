@@ -123,7 +123,6 @@ pub(crate) struct Tasks {
     pub(crate) copy: bool,
     pub(crate) print_raw: bool,
     pub(crate) print_geometry: bool,
-    pub(crate) pin: bool,
     pub(crate) accept_on_select: bool,
     pub(crate) save: Option<SaveTo>,
 }
@@ -235,7 +234,6 @@ const APP_NAME: &str = "phramer";
 enum Opt {
     Path,
     Clipboard,
-    Pin,
     Delay,
     LastRegion,
     Region,
@@ -303,13 +301,6 @@ const CLIPBOARD: OptionSpec = spec(
     &["c", "clipboard"],
     None,
     "Save the capture to the clipboard",
-    Checker::Any,
-);
-const PIN: OptionSpec = spec(
-    Opt::Pin,
-    &["pin"],
-    None,
-    "Pin the capture to the screen",
     Checker::Any,
 );
 const DELAY: OptionSpec = spec(
@@ -485,10 +476,9 @@ impl Node {
                 LAST_REGION,
                 RAW,
                 PRINT_GEOMETRY,
-                PIN,
                 ACCEPT_ON_SELECT,
             ],
-            Node::Screen => &[NUMBER, EDIT, CLIPBOARD, PATH, DELAY, REGION, RAW, PIN],
+            Node::Screen => &[NUMBER, EDIT, CLIPBOARD, PATH, DELAY, REGION, RAW],
             Node::Full => &[PATH, CLIPBOARD, DELAY, RAW],
             Node::Config => &[
                 AUTOSTART,
@@ -809,7 +799,6 @@ fn build(node: Node, found: &Found, cwd: &Path) -> Result<Command, CliError> {
                 copy: found.is_set(Opt::Clipboard),
                 print_raw: found.is_set(Opt::Raw),
                 print_geometry: found.is_set(Opt::PrintGeometry),
-                pin: found.is_set(Opt::Pin),
                 accept_on_select: found.is_set(Opt::AcceptOnSelect),
                 save: path.clone().map(SaveTo::Path),
             };
@@ -818,7 +807,6 @@ fn build(node: Node, found: &Found, cwd: &Path) -> Result<Command, CliError> {
                 && !tasks.print_raw
                 && path.is_none()
                 && !tasks.print_geometry
-                && !tasks.pin
             {
                 tasks.save = Some(SaveTo::Default);
             }
@@ -850,7 +838,6 @@ fn build(node: Node, found: &Found, cwd: &Path) -> Result<Command, CliError> {
             let mut tasks = Tasks {
                 copy: found.is_set(Opt::Clipboard),
                 print_raw: found.is_set(Opt::Raw),
-                pin: found.is_set(Opt::Pin),
                 save: path().map(SaveTo::Path),
                 ..Tasks::default()
             };
@@ -1067,7 +1054,7 @@ mod tests {
             "ms-screenclip:x",
             "--path",
             "C:\\evil",
-            "--pin",
+            "--clipboard",
         ]);
         assert_eq!(classify(&smuggled), Role::Command(args(&["gui"])));
         let recording_split = args(&["--screenclip", "ms-screenclip:", "record"]);
@@ -1173,17 +1160,17 @@ mod tests {
     }
 
     #[test]
-    fn screen_pin() {
-        let Command::Screen(screen) = command(&["screen", "--pin"]) else {
-            panic!("not a screen request");
-        };
-        assert_eq!(
-            screen.tasks,
-            Tasks {
-                pin: true,
-                ..Tasks::default()
-            }
-        );
+    fn pin_was_removed_and_is_an_unknown_option() {
+        for subcommand in ["gui", "screen", "full"] {
+            assert_eq!(
+                error(&[subcommand, "--pin"]),
+                CliError::UnknownOption {
+                    option: "pin".into(),
+                    argument: subcommand.into()
+                },
+                "{subcommand}"
+            );
+        }
     }
 
     #[test]
@@ -1212,13 +1199,6 @@ mod tests {
                 },
             ),
             (
-                vec!["gui", "--pin"],
-                Tasks {
-                    pin: true,
-                    ..Tasks::default()
-                },
-            ),
-            (
                 vec!["gui", "--raw"],
                 Tasks {
                     print_raw: true,
@@ -1243,11 +1223,10 @@ mod tests {
                 },
             ),
             (
-                vec!["gui", "-p", dir.to_str().unwrap_or_default(), "-c", "-r", "--pin"],
+                vec!["gui", "-p", dir.to_str().unwrap_or_default(), "-c", "-r"],
                 Tasks {
                     copy: true,
                     print_raw: true,
-                    pin: true,
                     save: Some(SaveTo::Path(dir.clone())),
                     ..Tasks::default()
                 },
@@ -1276,7 +1255,6 @@ mod tests {
         for list in [
             vec!["full", "--path", "./", "--raw"],
             vec!["screen", "--clipboard", "--raw"],
-            vec!["screen", "--pin", "--raw"],
             vec!["gui", "--clipboard", "--accept-on-select", "--raw"],
             vec!["gui", "--accept-on-select", "--raw"],
         ] {

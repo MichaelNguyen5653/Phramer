@@ -37,7 +37,6 @@ pub struct CaptureTasks {
     pub save: Option<SaveTarget>,
     pub print_geometry: bool,
     pub print_raw: bool,
-    pub pin: bool,
 }
 
 /// Where captures go besides files: the clipboard.
@@ -163,7 +162,6 @@ fn run_tasks(
     if tasks.copy {
         copy_image(image, context, report);
     }
-    // `pin` is the caller's: a pin outlives the export
 }
 
 /// `saveToFilesystem`: writes the image to `path` (a folder or a file

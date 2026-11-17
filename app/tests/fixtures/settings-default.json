@@ -1,7 +1,6 @@
 {
   "defaults": {
     "allowMultipleGuiInstances": false,
-    "antialiasingPinZoom": true,
     "autoCloseIdleDaemon": false,
     "autoOpenInEditor": false,
     "buttons": [
@@ -24,7 +23,6 @@
       23,
       14,
       12,
-      17,
       25,
       26
     ],
@@ -280,14 +278,6 @@
       "group": "Actions",
       "name": "TYPE_OCR",
       "value": "o"
-    },
-    {
-      "default": "",
-      "description": "Pin image on the desktop",
-      "global": false,
-      "group": "Actions",
-      "name": "TYPE_PIN",
-      "value": ""
     },
     {
       "default": "",
@@ -643,12 +633,6 @@
       "name": "OCR"
     },
     {
-      "description": "Pin image on the desktop",
-      "icon": "pin",
-      "id": 17,
-      "name": "Pin Tool"
-    },
-    {
       "description": "Increase the size of the other tools",
       "icon": "plus",
       "id": 20,
@@ -675,7 +659,6 @@
   ],
   "values": {
     "allowMultipleGuiInstances": false,
-    "antialiasingPinZoom": true,
     "autoCloseIdleDaemon": false,
     "autoOpenInEditor": false,
     "buttons": [
@@ -698,7 +681,6 @@
       23,
       14,
       12,
-      17,
       25,
       26
     ],

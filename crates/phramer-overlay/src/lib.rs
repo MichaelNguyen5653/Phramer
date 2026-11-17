@@ -23,7 +23,6 @@ mod error;
 mod export;
 mod icons;
 mod input;
-mod pin;
 mod render;
 mod state;
 #[cfg(windows)]
@@ -38,10 +37,6 @@ pub use export::{
 };
 pub use icons::{ICONS, has_icon};
 pub use input::{Bindings, Key, Modifiers, PointerButton};
-pub use pin::{
-    PIN_MENU, PinEffect, PinEvent, PinKey, PinMenuItem, PinRequest, PinState, render_pin,
-    rotate_left, rotate_right, scale_image,
-};
 pub use render::{FrameView, RgbaImage, Theme, render};
 pub use state::tools::{ButtonInfo, MAX_TOOL_SIZE, TOOLBAR_ORDER, button_info, is_tool};
 pub use state::{
@@ -54,8 +49,8 @@ pub use state::{
 };
 #[cfg(windows)]
 pub use win::{
-    Finished, OverlaySession, PinHandler, PinOptions, SystemClipboard, SystemFace, open_pins,
-    run_overlay, show_in_folder, spawn_pin, system_font_faces, system_font_families,
+    Finished, OverlaySession, SystemClipboard, SystemFace, run_overlay, show_in_folder,
+    system_font_faces, system_font_families,
 };
 
 /// Inter Variable 4.1 (SIL Open Font License 1.1; see

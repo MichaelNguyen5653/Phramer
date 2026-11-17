@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use super::buttons::ButtonType;
+use super::buttons::{self, ButtonType};
 use super::color::Color;
 use super::keyseq;
 use super::settings::{GENERAL_RULES, SHORTCUTS, Settings, checked_extension};
@@ -49,7 +49,9 @@ impl Rule {
             Self::SaveFileExtension => checked_extension(&text).is_some(),
             // Anything that is not a list of numbers reads as an empty list
             Self::ButtonList => match value {
-                Variant::IntList(ids) => ids.iter().all(|&id| ButtonType::from_id(id).is_some()),
+                Variant::IntList(ids) => ids
+                    .iter()
+                    .all(|&id| ButtonType::from_id(id).is_some() || buttons::is_retired(id)),
                 _ => true,
             },
             Self::UserColors(min, max) => value.to_string_list().is_some_and(|names| {
@@ -215,6 +217,18 @@ mod tests {
                 "[General]\nshowHelp=false\nundoLimit= 50 \nuiColor=#ff000080\nuiLanguage=@Invalid()\n\
                  filenamePattern=\n[Shortcuts]\nTYPE_PIN=\nTYPE_SHAPE=\nTYPE_COPY=Ctrl+C\nTYPE_SAVE=ctrl+c\n\
                  [Elsewhere]\nanything=1\n"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_stored_pin_button_is_not_an_error() {
+        // Pencil, Pin (17), Copy
+        assert!(
+            errors(
+                "buttons=@Variant(\\0\\0\\0\\x7f\\0\\0\\0\\vQList<int>\\0\\0\\0\\0\\x3\
+                 \\0\\0\\0\\0\\0\\0\\0\\x11\\0\\0\\0\\n)\n"
             )
             .is_empty()
         );

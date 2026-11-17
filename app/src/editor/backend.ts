@@ -7,7 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { FontFace, Rendered } from "./engine";
 import type { EditorSettings } from "./state";
 
-export type ExportAction = "copy" | "copy_file" | "save" | "save_as" | "pin" | "ocr" | "open_app" | "save_all";
+export type ExportAction = "copy" | "copy_file" | "save" | "save_as" | "ocr" | "open_app" | "save_all";
 
 export interface Notice {
   text: string;

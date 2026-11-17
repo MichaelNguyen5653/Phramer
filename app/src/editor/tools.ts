@@ -29,7 +29,6 @@ export type ActionId =
   | "close"
   | "open_app"
   | "ocr"
-  | "pin"
   | "size_increase"
   | "size_decrease"
   | "crop"
@@ -80,7 +79,6 @@ export const ACTIONS: ButtonInfo<ActionId>[] = [
   { id: "save_as", name: "Save As", description: "Save the image where you choose", icon: "save-all" },
   { id: "open_app", name: "App Launcher", description: "Choose an app to open the image", icon: "external-link", shortcut: "TYPE_OPEN_APP" },
   { id: "ocr", name: "OCR", description: "Extract text from the image", icon: "scan-text", shortcut: "TYPE_OCR" },
-  { id: "pin", name: "Pin Tool", description: "Pin the image on the desktop", icon: "pin", shortcut: "TYPE_PIN" },
   { id: "size_increase", name: "Increase Tool Size", description: "Increase the size of the other tools", icon: "plus", shortcut: "TYPE_SIZEINCREASE" },
   { id: "size_decrease", name: "Decrease Tool Size", description: "Decrease the size of the other tools", icon: "minus", shortcut: "TYPE_SIZEDECREASE" },
   { id: "crop", name: "Crop", description: "Crop the image (annotations are kept in the pixels)", icon: "crop" },

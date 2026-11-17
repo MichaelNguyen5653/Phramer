@@ -156,7 +156,7 @@ describe("toolbar key hints", () => {
     TYPE_COMMIT_CURRENT_TOOL: "Ctrl+Return",
     TYPE_DELETE_CURRENT_TOOL: "Del",
     TYPE_SHAPE: "",
-    TYPE_PIN: "   ",
+    TYPE_INVERT: "   ",
     TYPE_OCR: "Ctrl+K, Ctrl+O",
     TYPE_SAVE: "F5",
     TYPE_COPY: "Alt+PgDown",
@@ -174,7 +174,7 @@ describe("toolbar key hints", () => {
 
   it("show nothing for a key that is not assigned or cannot be used", () => {
     expect(shortcutHint("TYPE_SHAPE", settings)).toBeNull();
-    expect(shortcutHint("TYPE_PIN", settings)).toBeNull();
+    expect(shortcutHint("TYPE_INVERT", settings)).toBeNull();
     expect(shortcutHint("TYPE_CIRCLECOUNT", settings)).toBeNull();
     // A two-chord sequence: the editor cannot press it either
     expect(shortcutHint("TYPE_OCR", settings)).toBeNull();

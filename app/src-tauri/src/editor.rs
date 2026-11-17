@@ -3,9 +3,9 @@
 //! session: an image opened while it is open joins its filmstrip
 //! ([`IMAGE_ADDED_EVENT`]), and the tray's Open Editor opens it empty
 //! ([`open_empty`]). The window's page (`app/editor.html`) draws with the
-//! annotation engine compiled to WebAssembly; what it saves, copies or pins
-//! comes back here and goes the way a capture's export goes
-//! (`capture::run_export`, `capture::pin`).
+//! annotation engine compiled to WebAssembly; what it saves or copies comes
+//! back here and goes the way a capture's export goes
+//! (`capture::run_export`).
 //!
 //! While a capture overlay is open, one hidden window is built ahead
 //! ([`prewarm`]) with its page loaded and waiting for an image, so Open in
@@ -780,7 +780,7 @@ const TOOLS: [(&str, ButtonType); 13] = [
 ];
 
 /// The `[Shortcuts]` entries the editor reacts to and shows on its toolbar.
-const SHORTCUTS: [&str; 26] = [
+const SHORTCUTS: [&str; 25] = [
     "TYPE_PENCIL",
     "TYPE_DRAWER",
     "TYPE_ARROW",
@@ -802,7 +802,6 @@ const SHORTCUTS: [&str; 26] = [
     "TYPE_EXIT",
     "TYPE_OPEN_APP",
     "TYPE_OCR",
-    "TYPE_PIN",
     "TYPE_SIZEINCREASE",
     "TYPE_SIZEDECREASE",
     "TYPE_DELETE_CURRENT_TOOL",
@@ -1184,10 +1183,6 @@ pub(crate) async fn editor_export<R: Runtime>(
                 tasks,
                 (None, Some(format)),
             )
-        }
-        "pin" => {
-            capture::pin(&app, &settings, image, geometry);
-            ExportReport::default()
         }
         "ocr" => handoff::read_text(&settings, &image),
         "open_app" => handoff::open_with(&settings, &image),

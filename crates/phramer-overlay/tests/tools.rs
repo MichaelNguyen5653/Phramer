@@ -211,7 +211,6 @@ fn the_default_toolbar_is_15_0_0s_in_its_order() {
             Exit,
             OpenApp,
             Ocr,
-            Pin,
             OpenInEditor
         ]
     );
@@ -262,7 +261,7 @@ fn buttons_sit_outside_the_selection_and_flip_away_from_screen_edges() {
     );
     let selection = overlay.state.selection().expect("selection");
     let toolbar = overlay.state.toolbar();
-    assert_eq!(toolbar.len(), 21);
+    assert_eq!(toolbar.len(), 20);
     for button in &toolbar {
         // On the monitor, never over the selection
         assert!(
@@ -290,7 +289,7 @@ fn a_whole_monitor_selection_puts_the_buttons_inside() {
     let mut overlay = Overlay::new();
     overlay.key(Key::Char('a'), Modifiers::CTRL);
     let toolbar = overlay.state.toolbar();
-    assert_eq!(toolbar.len(), 21);
+    assert_eq!(toolbar.len(), 20);
     assert!(
         toolbar
             .iter()
@@ -930,7 +929,6 @@ fn esc_drops_the_tool_first_and_closes_after() {
 #[test]
 fn actions_without_a_backend_close_with_a_deferred_outcome() {
     for (button, action) in [
-        (ButtonType::Pin, DeferredAction::Pin),
         (ButtonType::Ocr, DeferredAction::Ocr),
         (ButtonType::OpenInEditor, DeferredAction::OpenInEditor),
         (ButtonType::OpenApp, DeferredAction::OpenWith),

@@ -383,14 +383,6 @@ export const SETTINGS: readonly SettingDef[] = [
     keywords: "blur redact",
     control: { kind: "switch" },
   },
-  {
-    key: "antialiasingPinZoom",
-    section: "editing",
-    label: "Smooth zoomed pins",
-    help: "Smooths a pinned capture when you zoom it. Off keeps the pixels sharp.",
-    keywords: "anti-aliasing pin",
-    control: { kind: "switch" },
-  },
 
   // --- Shortcuts (the list itself is built from the snapshot) -----------------
   {

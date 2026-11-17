@@ -13,7 +13,7 @@ pub const MAX_TOOL_SIZE: u32 = 50;
 /// (`CaptureToolButton::iterableButtonTypes` of the Windows build; the
 /// Imgur uploader is not built). The `buttons` setting only says which of
 /// them are shown.
-pub const TOOLBAR_ORDER: [ButtonType; 27] = [
+pub const TOOLBAR_ORDER: [ButtonType; 26] = [
     ButtonType::Pencil,
     ButtonType::Line,
     ButtonType::Arrow,
@@ -36,7 +36,6 @@ pub const TOOLBAR_ORDER: [ButtonType; 27] = [
     ButtonType::Exit,
     ButtonType::OpenApp,
     ButtonType::Ocr,
-    ButtonType::Pin,
     ButtonType::SizeIncrease,
     ButtonType::SizeDecrease,
     ButtonType::Accept,
@@ -161,7 +160,6 @@ pub fn button_info(button: ButtonType) -> ButtonInfo {
             "scan-text",
             "TYPE_OCR",
         ),
-        ButtonType::Pin => ("Pin Tool", "Pin image on the desktop", "pin", "TYPE_PIN"),
         ButtonType::SizeIncrease => (
             "Increase Tool Size",
             "Increase the size of the other tools",
@@ -228,7 +226,6 @@ pub fn offered(button: ButtonType, has_tasks: bool) -> bool {
                 | ButtonType::Copy
                 | ButtonType::CopyFile
                 | ButtonType::OpenApp
-                | ButtonType::Pin
                 | ButtonType::OpenInEditor
         )
     } else {

@@ -81,7 +81,7 @@ const TOOLBAR_GROUPS: ActionId[][] = [
   ["undo", "redo"],
   ["crop"],
   ["zoom_mode", "zoom_out", "zoom_in", "fit", "actual_size", "grid"],
-  ["copy", "copy_file", "save", "save_as", "pin", "ocr", "open_app"],
+  ["copy", "copy_file", "save", "save_as", "ocr", "open_app"],
 ];
 
 const NOTICE_MS = 3000;
@@ -604,7 +604,6 @@ export function Editor({ engine, image, settings, backend, onReady }: EditorProp
         case "copy_file":
         case "save":
         case "save_as":
-        case "pin":
         case "ocr":
         case "open_app":
           void exportAs(action);
