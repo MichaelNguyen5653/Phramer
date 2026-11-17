@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "phramer"
-version = "16.0.0"
+version = "16.0.1"
 dependencies = [
  "log",
  "phramer-annotate",
@@ -2876,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "phramer-annotate"
-version = "16.0.0"
+version = "16.0.1"
 dependencies = [
  "libm",
  "png",
@@ -2889,7 +2889,7 @@ dependencies = [
 
 [[package]]
 name = "phramer-annotate-wasm"
-version = "16.0.0"
+version = "16.0.1"
 dependencies = [
  "phramer-annotate",
  "png",
@@ -2899,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "phramer-capture"
-version = "16.0.0"
+version = "16.0.1"
 dependencies = [
  "png",
  "thiserror 2.0.21",
@@ -2908,7 +2908,7 @@ dependencies = [
 
 [[package]]
 name = "phramer-core"
-version = "16.0.0"
+version = "16.0.1"
 dependencies = [
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "phramer-ocr"
-version = "16.0.0"
+version = "16.0.1"
 dependencies = [
  "log",
  "phramer-annotate",
@@ -2925,7 +2925,7 @@ dependencies = [
 
 [[package]]
 name = "phramer-overlay"
-version = "16.0.0"
+version = "16.0.1"
 dependencies = [
  "flate2",
  "image-webp",
