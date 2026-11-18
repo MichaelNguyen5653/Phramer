@@ -130,8 +130,38 @@ fn manifest_declares_protocol() -> bool {
 }
 
 fn is_chosen() -> bool {
-    registry::read_value(registry::Root::User, USER_CHOICE, "ProgId")
-        .is_some_and(|prog_id| prog_id.eq_ignore_ascii_case(PROG_ID))
+    let Some(prog_id) = registry::read_value(registry::Root::User, USER_CHOICE, "ProgId") else {
+        return false;
+    };
+    #[cfg(not(feature = "store"))]
+    return prog_id.eq_ignore_ascii_case(PROG_ID);
+    // A package's protocol gets a generated `AppX…` ProgId, which names the
+    // application it opens
+    #[cfg(feature = "store")]
+    return registry::read_value(
+        registry::Root::Classes,
+        &format!(r"{prog_id}\Application"),
+        "AppUserModelID",
+    )
+    .zip(package_app_id())
+    .is_some_and(|(chosen, ours)| chosen.eq_ignore_ascii_case(&ours));
+}
+
+/// This package's application user model ID, `<family name>!Phramer` (the
+/// `Application Id` in the manifest).
+#[cfg(feature = "store")]
+fn package_app_id() -> Option<String> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFamilyName;
+    let mut buffer = [0u16; 128];
+    let mut length = buffer.len() as u32;
+    // SAFETY: `length` holds the buffer's capacity in characters.
+    let status = unsafe { GetCurrentPackageFamilyName(&mut length, buffer.as_mut_ptr()) };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let family = String::from_utf16_lossy(&buffer[..length.saturating_sub(1) as usize]);
+    Some(format!("{family}!{APP_NAME}"))
 }
 
 fn prog_id_command_key(prog_id: &str) -> String {
@@ -375,17 +405,24 @@ pub(crate) fn screenclip_open_settings() {
 }
 
 /// Phramer's page in Settings > Default apps while it is listed, where it is
-/// chosen; the general page otherwise, where another app is.
+/// chosen; the general page otherwise, where another app is. A package is
+/// found by its application user model ID, `!` escaped.
 pub(crate) fn open_default_apps_settings() {
-    let page = if status().registered_by_phramer && !cfg!(feature = "store") {
-        format!("ms-settings:defaultapps?registeredAppMachine={APP_NAME}")
-    } else {
-        "ms-settings:defaultapps".to_owned()
-    };
-    open(&page);
+    #[cfg(not(feature = "store"))]
+    let app = status()
+        .registered_by_phramer
+        .then(|| format!("registeredAppMachine={APP_NAME}"));
+    #[cfg(feature = "store")]
+    let app = package_app_id()
+        .filter(|_| status().registered_by_phramer)
+        .map(|id| format!("registeredAUMID={}", id.replace('!', "%21")));
+    match app {
+        Some(app) => open(&format!("ms-settings:defaultapps?{app}")),
+        None => open("ms-settings:defaultapps"),
+    }
 }
 
-fn open(target: &str) {
+pub(crate) fn open(target: &str) {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };

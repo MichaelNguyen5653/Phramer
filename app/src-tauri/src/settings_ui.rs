@@ -656,6 +656,8 @@ fn settings_path<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
 fn snapshot<R: Runtime>(app: &AppHandle<R>) -> Snapshot {
     let path = settings_path(app);
     let current = settings::load(&path);
+    #[cfg(feature = "store")]
+    let current = startup::with_task_state(current);
     let machine = Machine {
         snipping_claims_print_screen: printscreen::snipping_claims_key(),
         snipping_tool_installed: snipping::is_available(),
@@ -809,21 +811,32 @@ pub(crate) fn settings_pause_hotkeys<R: Runtime>(app: AppHandle<R>, paused: bool
     snapshot(&app)
 }
 
-/// Gives Print Screen to Phramer, or back to Windows' snipping tool.
+/// Gives Print Screen to Phramer, or back to Windows' snipping tool. The
+/// Store edition opens the Windows setting instead: its registry write
+/// would land in the package's private copy, unseen by Windows, and Store
+/// policy 10.2.8 asks for exactly this.
 #[tauri::command]
 pub(crate) fn settings_print_screen<R: Runtime>(
     app: AppHandle<R>,
     phramer: bool,
 ) -> Result<Snapshot, String> {
-    printscreen::set_snipping_claims_key(!phramer)
-        .map_err(|error| format!("The registry could not be changed: {error}"))?;
-    log::info!(
-        "settings: Print Screen for {}",
-        if phramer { "Phramer" } else { "Windows" }
-    );
-    // Registered again: Windows may have refused it while it held the key
-    hotkeys::suspend(&app);
-    hotkeys::apply(&app, &settings::load(&settings_path(&app)));
+    #[cfg(feature = "store")]
+    {
+        let _ = phramer;
+        crate::screenclip::open("ms-settings:easeofaccess-keyboard");
+    }
+    #[cfg(not(feature = "store"))]
+    {
+        printscreen::set_snipping_claims_key(!phramer)
+            .map_err(|error| format!("The registry could not be changed: {error}"))?;
+        log::info!(
+            "settings: Print Screen for {}",
+            if phramer { "Phramer" } else { "Windows" }
+        );
+        // Registered again: Windows may have refused it while it held the key
+        hotkeys::suspend(&app);
+        hotkeys::apply(&app, &settings::load(&settings_path(&app)));
+    }
     Ok(snapshot(&app))
 }
 

@@ -113,6 +113,7 @@ export const SETTINGS: readonly SettingDef[] = [
     label: "Check for updates automatically",
     keywords: "update version",
     control: { kind: "switch" },
+    unavailable: (snapshot) => (snapshot.store_build ? "The Microsoft Store keeps this edition up to date" : null),
   },
   {
     key: "disabledTrayIcon",

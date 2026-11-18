@@ -78,6 +78,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_IO",
     "Win32_System_Pipes",
+    "Win32_System_Recovery",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
@@ -88,8 +89,10 @@ windows-sys = { version = "0.61", features = [
 ] }
 # Snipping Tool's recorder: Launcher with a target package (WinRT), and
 # the app activation manager as the fallback. App Launcher reads Start Menu
-# shortcuts through IShellLinkW (its GetPath needs Storage_FileSystem).
+# shortcuts through IShellLinkW (its GetPath needs Storage_FileSystem). The
+# Store build switches its startup task (ApplicationModel).
 windows = { version = "0.62", features = [
+    "ApplicationModel",
     "Foundation",
     "System",
     "Win32_Storage_FileSystem",
