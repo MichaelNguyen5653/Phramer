@@ -656,6 +656,8 @@ fn settings_path<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
 fn snapshot<R: Runtime>(app: &AppHandle<R>) -> Snapshot {
     let path = settings_path(app);
     let current = settings::load(&path);
+    #[cfg(feature = "store")]
+    let current = startup::with_task_state(current);
     let machine = Machine {
         snipping_claims_print_screen: printscreen::snipping_claims_key(),
         snipping_tool_installed: snipping::is_available(),

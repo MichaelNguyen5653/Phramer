@@ -40,6 +40,11 @@ export function screenClipRow(status: ScreenClipStatus): ScreenClipRow {
     text = "Phramer is not registered as MS-SCREENCLIP";
   } else if (!status.registered) {
     text = "Another copy, or an older build, of Phramer is registered as MS-SCREENCLIP. Unregister, then register again.";
+  } else if (status.store && status.chosen) {
+    // The package declares the handler for as long as it is installed, so
+    // there is nothing to unregister; the choice is undone in Settings
+    text =
+      "Phramer is chosen for MS-SCREENCLIP. To stop it answering, choose Snipping Tool for MS-SCREENCLIP in Windows Settings.";
   } else if (status.chosen) {
     text = "Phramer is registered and chosen for MS-SCREENCLIP";
   } else {

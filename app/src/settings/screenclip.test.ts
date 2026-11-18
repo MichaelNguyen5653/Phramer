@@ -53,6 +53,15 @@ describe("the MS-SCREENCLIP row (15.0.0's updateScreenClipRow)", () => {
     expect(row.button).toBeNull();
     expect(row.settings).toBe(true);
   });
+
+  it("says how to stop a chosen Store edition answering, as it cannot unregister", () => {
+    const row = screenClipRow(status({ store: true, registered: true, registered_by_phramer: true, chosen: true }));
+    expect(row).toEqual({
+      text: "Phramer is chosen for MS-SCREENCLIP. To stop it answering, choose Snipping Tool for MS-SCREENCLIP in Windows Settings.",
+      button: null,
+      settings: true,
+    });
+  });
 });
 
 describe("after Register or Unregister", () => {

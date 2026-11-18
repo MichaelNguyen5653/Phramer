@@ -3,7 +3,9 @@
 //! The GitHub build writes the HKCU `Run` value `Phramer` (the executable
 //! path, unquoted) and an `App Paths\phramer.exe` entry naming its folder.
 //! The Store build (`store` feature) declares a startup task in its package
-//! manifest instead and never touches the registry.
+//! manifest instead, switches it through `Windows.ApplicationModel.StartupTask`
+//! and never touches the registry. The task ships disabled; only the
+//! setting being switched on enables it.
 
 use std::path::Path;
 
@@ -13,6 +15,9 @@ use phramer_core::config::{ConfigError, Settings};
 pub(crate) enum StartupError {
     #[error(transparent)]
     Settings(#[from] ConfigError),
+    #[cfg(feature = "store")]
+    #[error("cannot switch the startup task")]
+    Task(#[source] windows::core::Error),
     #[cfg(not(feature = "store"))]
     #[error("cannot locate the running executable")]
     Executable(#[source] std::io::Error),
@@ -36,7 +41,14 @@ pub(crate) fn set_startup_launch(
 ) -> Result<(), StartupError> {
     #[cfg(feature = "store")]
     {
-        settings.set_startup_launch(enable);
+        let state = task::switch(enable).map_err(StartupError::Task)?;
+        // Turned off in Task Manager or Settings: only the user can turn it
+        // back on, on the page this opens
+        if enable && state == task::State::DisabledByUser {
+            crate::screenclip::open("ms-settings:startupapps");
+        }
+        // What Windows ended up with, not what was clicked
+        store_explicitly(settings, task::is_enabled(state));
         settings.save(settings_path)?;
         Ok(())
     }
@@ -62,9 +74,18 @@ pub(crate) fn apply_default_startup_launch(
     settings: &mut Settings,
     settings_path: &Path,
 ) -> Result<(), StartupError> {
+    // A stored `true` with the task never enabled (16.0.0 and 16.0.1 saved
+    // the setting alone) enables it now. An absent key leaves it off, as the
+    // package ships it. The file is not touched.
     #[cfg(feature = "store")]
     {
-        let _ = (settings, settings_path);
+        let _ = settings_path;
+        if is_startup_launch_stored(settings)
+            && settings.startup_launch()
+            && task::state().map_err(StartupError::Task)? == task::State::Disabled
+        {
+            task::switch(true).map_err(StartupError::Task)?;
+        }
         Ok(())
     }
     #[cfg(not(feature = "store"))]
@@ -87,13 +108,73 @@ pub(crate) fn apply_default_startup_launch(
 /// `QSettings::contains("startupLaunch")` for a readable value: rewriting a
 /// stored `true`/`false` with itself leaves the file bytes unchanged, while
 /// an absent key gets added.
-#[cfg(not(feature = "store"))]
 fn is_startup_launch_stored(settings: &Settings) -> bool {
     let mut probe = settings.clone();
     let value = probe.startup_launch();
     probe.set_startup_launch(!value);
     probe.set_startup_launch(value);
     probe.to_bytes() == settings.to_bytes()
+}
+
+/// `settings` with the startup task's state, for Settings to show: the user
+/// can switch the task in Task Manager, and an absent key reads as on while
+/// the package ships the task off.
+#[cfg(feature = "store")]
+pub(crate) fn with_task_state(mut settings: Settings) -> Settings {
+    match task::state() {
+        Ok(state) => store_explicitly(&mut settings, task::is_enabled(state)),
+        Err(error) => log::warn!("cannot read the startup task: {error}"),
+    }
+    settings
+}
+
+/// Written explicitly: the setter skips a value equal to the default.
+#[cfg(feature = "store")]
+fn store_explicitly(settings: &mut Settings, enable: bool) {
+    settings.set_startup_launch(!enable);
+    settings.set_startup_launch(enable);
+}
+
+/// The package's startup task, `PhramerStartup` in
+/// `packaging/msix/AppxManifest.xml.in`.
+#[cfg(feature = "store")]
+mod task {
+    use windows::ApplicationModel::StartupTask;
+    pub(super) use windows::ApplicationModel::StartupTaskState as State;
+    use windows::core::{Error, HRESULT, HSTRING, Result};
+
+    const TASK_ID: &str = "PhramerStartup";
+
+    pub(super) fn is_enabled(state: State) -> bool {
+        state == State::Enabled || state == State::EnabledByPolicy
+    }
+
+    pub(super) fn state() -> Result<State> {
+        run(|task| task.State())
+    }
+
+    /// Asks for the task on or off; returns what Windows made of it. A
+    /// packaged desktop app gets no consent dialog, so this returns at once.
+    pub(super) fn switch(enable: bool) -> Result<State> {
+        run(move |task| {
+            if enable {
+                task.RequestEnableAsync()?.join()
+            } else {
+                task.Disable()?;
+                task.State()
+            }
+        })
+    }
+
+    /// Blocking on WinRT is not allowed on the GUI thread's single-threaded
+    /// apartment, so the call runs on a thread of no apartment of its own,
+    /// which joins the process's multithreaded one.
+    fn run(call: impl FnOnce(StartupTask) -> Result<State> + Send + 'static) -> Result<State> {
+        crate::snipping::ensure_apartment();
+        std::thread::spawn(move || call(StartupTask::GetAsync(&HSTRING::from(TASK_ID))?.join()?))
+            .join()
+            .unwrap_or_else(|_| Err(Error::from(HRESULT(0x8000_4005_u32 as i32))))
+    }
 }
 
 #[cfg(not(feature = "store"))]

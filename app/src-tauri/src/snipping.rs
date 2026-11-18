@@ -23,7 +23,7 @@ const RECORDING_URI: &str = "ms-screenclip:capture?mode=default&type=recording&s
 /// Keeps the process's multithreaded apartment up for good: WinRT calls
 /// from threads of no apartment of their own run there, and `windows`
 /// caches factories that must not outlive it.
-fn ensure_apartment() {
+pub(crate) fn ensure_apartment() {
     static MTA: Once = Once::new();
     MTA.call_once(|| {
         // SAFETY: no arguments; the usage it takes is never released.
