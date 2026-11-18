@@ -16,6 +16,7 @@ import {
   hotkeyProblem,
   isDefault,
   printScreenProblem,
+  storePrintScreenNotice,
   search,
   settingsIn,
   withShortcut,
@@ -233,7 +234,13 @@ export function SettingsApp({ initial, backend }: { initial: Snapshot; backend: 
             <Switch
               checked={!view.snipping_claims_print_screen}
               label={def.label}
-              onChange={(checked) => run(def.key, () => backend.printScreen(checked))}
+              onChange={(checked) =>
+                run(
+                  def.key,
+                  () => backend.printScreen(checked),
+                  view.store_build ? () => message(def.key, null, storePrintScreenNotice(checked)) : undefined,
+                )
+              }
             />
           ),
         };

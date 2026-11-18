@@ -18,6 +18,8 @@ pub(crate) fn snipping_claims_key() -> bool {
 }
 
 /// Gives Print Screen to Phramer (`claim == false`) or back to Windows.
+/// Never in the Store edition, which sends the user to Windows' setting.
+#[cfg_attr(feature = "store", allow(dead_code))]
 pub(crate) fn set_snipping_claims_key(claim: bool) -> io::Result<()> {
     registry::write_dword(KEY, VALUE, u32::from(claim))
 }
@@ -54,6 +56,7 @@ mod registry {
         (status == ERROR_SUCCESS).then_some(data)
     }
 
+    #[cfg_attr(feature = "store", allow(dead_code))]
     pub(super) fn write_dword(key: &str, value: &str, data: u32) -> io::Result<()> {
         let (key, value) = (wide(key), wide(value));
         let size = u32::try_from(size_of::<u32>()).unwrap_or(4);

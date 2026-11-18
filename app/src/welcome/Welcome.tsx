@@ -8,6 +8,7 @@ import { Keys, Switch } from "../settings/controls";
 import { Icon } from "../settings/Icon";
 import { ScreenClipTools } from "../settings/ScreenClipTools";
 import type { Backend, WelcomeState } from "../settings/backend";
+import { storePrintScreenNotice } from "../settings/state";
 
 const STEPS = 3;
 
@@ -15,6 +16,7 @@ export function Welcome({ initial, backend }: { initial: WelcomeState; backend: 
   const [state, setState] = useState(initial);
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const last = step === STEPS - 1;
   const mayLeave = !state.mandatory || last;
@@ -56,6 +58,7 @@ export function Welcome({ initial, backend }: { initial: WelcomeState; backend: 
 
   const change = async (job: () => Promise<void>) => {
     setError(null);
+    setNote(null);
     setBusy(true);
     try {
       await job();
@@ -71,6 +74,7 @@ export function Welcome({ initial, backend }: { initial: WelcomeState; backend: 
     void change(async () => {
       const snapshot = await backend.printScreen(phramer);
       setState((current) => ({ ...current, print_screen: !snapshot.snipping_claims_print_screen }));
+      if (state.store_build) setNote(storePrintScreenNotice(phramer));
     });
   };
 
@@ -157,6 +161,11 @@ export function Welcome({ initial, backend }: { initial: WelcomeState; backend: 
             {error && (
               <p className="set-message error" role="alert">
                 {error}
+              </p>
+            )}
+            {note && (
+              <p className="set-message" role="note">
+                {note}
               </p>
             )}
           </>

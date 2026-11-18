@@ -125,6 +125,26 @@ pub(crate) fn run(start: Option<Forwarded>) -> i32 {
     code
 }
 
+/// The Store closes a running app to update it and, with this, starts it
+/// again afterwards (15.0.0's Store edition did the same). Not after a
+/// crash, hang or reboot: the startup task covers sign-in.
+#[cfg(feature = "store")]
+fn register_store_update_restart() {
+    use windows_sys::Win32::System::Recovery::{
+        RESTART_NO_CRASH, RESTART_NO_HANG, RESTART_NO_REBOOT, RegisterApplicationRestart,
+    };
+    // SAFETY: a null command line restarts the app with no arguments.
+    let result = unsafe {
+        RegisterApplicationRestart(
+            std::ptr::null(),
+            RESTART_NO_CRASH | RESTART_NO_HANG | RESTART_NO_REBOOT,
+        )
+    };
+    if result != 0 {
+        log::warn!("cannot register for restart after a Store update (0x{result:08x})");
+    }
+}
+
 fn setup(app: &mut App, settings_path: PathBuf, start: Option<Forwarded>) {
     let handle = app.handle().clone();
     let mut current = settings::load(&settings_path);
@@ -132,6 +152,8 @@ fn setup(app: &mut App, settings_path: PathBuf, start: Option<Forwarded>) {
         log::error!("cannot apply the default launch at sign-in: {error}");
     }
     log::info!("settings: {}", settings_path.display());
+    #[cfg(feature = "store")]
+    register_store_update_restart();
     app.manage(DaemonState {
         settings_path: settings_path.clone(),
     });
@@ -185,8 +207,20 @@ fn receive<R: Runtime>(app: &AppHandle<R>, forwarded: Forwarded) {
     // Connected at once, so `phramer-cli` knows the command arrived
     let reply = reply::take_reply(&mut args).and_then(|name| Reply::connect(&name));
     let args = match cli::classify(&args) {
-        // A second plain start: 15.0.0's second daemon quit silently
-        Role::Daemon => return,
+        // A second plain start: 15.0.0's second daemon quit silently, but
+        // its Store edition showed the launcher, as Start offers no other
+        // way into a running tray app
+        Role::Daemon => {
+            #[cfg(feature = "store")]
+            {
+                let target = app.clone();
+                if let Err(error) = app.run_on_main_thread(move || actions::open_launcher(&target))
+                {
+                    log::error!("cannot open the launcher: {error}");
+                }
+            }
+            return;
+        }
         Role::Recording => {
             actions::start_recording_from_link();
             return;

@@ -68,6 +68,11 @@ export function hotkeyProblem(snapshot: Snapshot, row: ShortcutRow): string | nu
 }
 
 /** Print Screen is Phramer's, but Windows has not let go of it yet. */
+/** The Store edition opens Windows' own setting rather than change it. */
+export function storePrintScreenNotice(phramer: boolean): string {
+  return `In the Windows Settings page that opened, switch ${phramer ? "off" : "on"} "Use the Print screen key to open screen capture", then restart Phramer.`;
+}
+
 export function printScreenProblem(snapshot: Snapshot): string | null {
   if (snapshot.snipping_claims_print_screen) return null;
   const failed = snapshot.hotkey_failures.some((text) => canonical(text) === "print");

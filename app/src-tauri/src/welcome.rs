@@ -149,6 +149,8 @@ fn state_of(settings: &Settings, mandatory: bool, print_screen: bool) -> Welcome
 #[tauri::command]
 pub(crate) fn welcome_state<R: Runtime>(app: AppHandle<R>) -> WelcomeState {
     let current = settings::load(&app.state::<DaemonState>().settings_path);
+    #[cfg(feature = "store")]
+    let current = crate::startup::with_task_state(current);
     let mandatory = app.state::<Welcome>().mandatory.load(Ordering::Relaxed);
     state_of(&current, mandatory, !printscreen::snipping_claims_key())
 }
